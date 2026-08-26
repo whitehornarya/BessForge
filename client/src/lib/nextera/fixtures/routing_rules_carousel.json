@@ -1,0 +1,143 @@
+{
+  "meta": {
+    "name": "carousel_nextera",
+    "version": "1.0.0",
+    "generated": "2026-08-23",
+    "sources": [
+      "CAR-D-B001-2 (90% Feeder Route Map, 1in=30ft)",
+      "CAR-D-B005-0 (90% Conduit & Trench Plan, 1in=50ft)",
+      "Directive 2026-08-20 (A. Rogers)",
+      "PVForge M18 conductor ledger"
+    ],
+    "authority": "Anthony Rogers, Director of Innovation, ECI/EPCS"
+  },
+  "mv": {
+    "bundle_offset_ft": {
+      "v": 9.1,
+      "status": "MEASURED",
+      "src": "B001 4 adjacent pairs, spread 0.09 ft"
+    },
+    "chamfer_deg": {
+      "v": 45.0,
+      "status": "MEASURED",
+      "src": "B001 modal turn angle"
+    },
+    "entry_end_rule": {
+      "v": "non-aug end; aug at EOL",
+      "status": "MEASURED+DIRECTIVE",
+      "src": "B001 8/8 rows + directive"
+    },
+    "fence_crossing": {
+      "v": "single, perpendicular +-10 deg",
+      "status": "MEASURED",
+      "src": "B001 solids <=4.7 deg dev"
+    },
+    "trench_crossing": {
+      "v": "perpendicular at discrete detailed points",
+      "status": "MEASURED",
+      "src": "B005 drawn details 25/30 ft from aisle-corridor meets (v0.5)"
+    },
+    "row_termination": {
+      "v": "last built PCS",
+      "status": "MEASURED+DIRECTIVE",
+      "src": "B001 + directive"
+    }
+  },
+  "geometry": {
+    "row_pitch_ft": {
+      "v": 35.32,
+      "status": "MEASURED",
+      "src": "DWG mining, confirmed B001 slot grid"
+    },
+    "row_gap_in_island_ft": {
+      "v": 119.3,
+      "status": "MEASURED",
+      "src": "B001 row y-lines"
+    },
+    "inter_island_row_gap_ft": {
+      "v": 43.9,
+      "status": "MEASURED",
+      "src": "B001 row y-lines"
+    },
+    "aisle_at_interslot_midpoint": {
+      "v": true,
+      "status": "MEASURED",
+      "src": "B001/B005 aisles 198.5/619.2 == grid midpoints"
+    },
+    "pcs_default": {
+      "v": 7,
+      "status": "DIRECTIVE",
+      "src": "2026-08-20"
+    },
+    "pcs_max_eol": {
+      "v": 9,
+      "status": "DIRECTIVE+MEASURED",
+      "src": "directive + Myers register + B001"
+    }
+  },
+  "subfeeder": {
+    "fiber6_row_offset_ft": {
+      "v": 2.65,
+      "status": "MEASURED",
+      "src": "B005 row-peak residual, both sides"
+    },
+    "dc_stub_depth_ft": {
+      "v": 58.4,
+      "status": "MEASURED",
+      "src": "B005 p95 vs 59.65 ft half-island"
+    },
+    "auxdist_alignment": {
+      "v": "island-center twin lines; never MV",
+      "status": "MEASURED",
+      "src": "B005 peaks at island centers"
+    },
+    "catl_ring_w_ft": {
+      "v": 15.8,
+      "status": "MEASURED",
+      "src": "B005 26 groups == built slot columns"
+    },
+    "catl_ring_inset_ft": {
+      "v": 4.1,
+      "status": "MEASURED",
+      "src": "B005 ring h 111.1 on 119.3 rows"
+    },
+    "fiber144_topology": {
+      "v": "riser trunk to FJB per island",
+      "status": "MEASURED",
+      "src": "B005 7,282 ft solid orange"
+    }
+  },
+  "roads": {
+    "road_edge_pair_ft": {
+      "v": [14.5, 25.0],
+      "status": "MEASURED",
+      "src": "B005 gray pair spacings"
+    }
+  },
+  "assumed": {
+    "conductors_kcmil_amps": {
+      "v": [[1500, 642], [1000, 539], [750, 401], [500, 253]],
+      "status": "ASSUMED",
+      "src": "PVForge M18 ledger; pending project conductor table"
+    },
+    "duct_bank_derate": {
+      "v": 0.88,
+      "status": "ASSUMED",
+      "src": "placeholder; pending NEC 310.15 basis"
+    },
+    "lane_capacities": {
+      "v": {
+        "riser": 12,
+        "perimeter": 8,
+        "inter_island": 8,
+        "pcs_row": 2,
+        "aux_center": 2,
+        "dist_center": 4,
+        "trench": 4,
+        "aisle": 4
+      },
+      "status": "ASSUMED",
+      "src": "pending B006-1/B006-2/B007-1 trench sections"
+    }
+  }
+}

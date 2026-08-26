@@ -1,0 +1,30 @@
+{
+  "source": "bessforge_routing_v0.6 reviewed package",
+  "drawing": "CAR-D-B005-0.pdf",
+  "units": "ft",
+  "geometry": {
+    "parallel_feeder_pitch": 9.1,
+    "transition_angle_deg": 45.0,
+    "built_pcs_per_row": 7,
+    "eol_pcs_per_row": 9
+  },
+  "topology": {
+    "one_feeder_per_pcs_row": true,
+    "entry_end": "opposite_augmentation_reserve",
+    "internal_route": "one_straight_trunk_with_perpendicular_pcs_drops",
+    "termination": "last_built_pcs",
+    "future_pcs": "reference_only",
+    "fjb_role": "fiber_only",
+    "mv_destination": "pcs_row_to_substation"
+  },
+  "reviewed_zero_crossing_feeders": [
+    "F-WS-T",
+    "F-WS-B",
+    "F-WN-T",
+    "F-WN-B",
+    "F-ES-T",
+    "F-ES-B",
+    "F-EN-T",
+    "F-EN-B"
+  ]
+}
