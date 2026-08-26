@@ -1,0 +1,51 @@
+{
+  "schema": "eci-source-verification/v1",
+  "product": "BESSForge",
+  "version": "1.0.1",
+  "result": "PASS",
+  "inputs": {
+    "rootPackageSha256": "dd8f3a91e45d9fa26983efbb46dee4432bc42c994a5cb201de15758da71d6fff",
+    "rootLockSha256": "d153a9c122b50bee956562681da4d1eb21b1228c21bbe9145b643076443a41fc",
+    "electronPackageSha256": "f0ddf4a4446c1253e1afda950de84dea5f26448553e8fbe63a4ac9e1d834bf3a",
+    "electronLockSha256": "d0f727f4481e348e47954a93f8dec7e5142ce82ab3f9dbec63f6f5aac38d272b"
+  },
+  "checks": [
+    {
+      "id": "root-lock-install",
+      "result": "PASS"
+    },
+    {
+      "id": "typecheck",
+      "result": "PASS"
+    },
+    {
+      "id": "lint",
+      "result": "PASS"
+    },
+    {
+      "id": "sanitized-core-tests",
+      "result": "PASS"
+    },
+    {
+      "id": "production-static-build",
+      "result": "PASS"
+    },
+    {
+      "id": "electron-lock-install",
+      "result": "PASS"
+    }
+  ],
+  "assertions": {
+    "stagedAllowlistedSource": true,
+    "lockfileOnlyInstalls": true,
+    "assetIndependentServiceTests": [
+      "api-base",
+      "offline-sitepack",
+      "proxy-hardening"
+    ],
+    "productionStaticBuild": true,
+    "nativeInstallersBuilt": false,
+    "recursiveCompleteReleaseInvoked": false,
+    "generatedOutputsRemoved": true
+  }
+}

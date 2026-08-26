@@ -1,0 +1,8 @@
+{
+  "schema": "eci-build-provenance/v1",
+  "product": "BESSForge",
+  "version": "1.0.1",
+  "license": "UNLICENSED",
+  "sourceFingerprint": "c7bcbc2e4c717406441fff91ee37cdc3c081f5c31e987bfe9b0eda7c5172296f",
+  "sourceFingerprintDefinition": "SHA-256 over sorted allowlisted UTF-8 paths, NUL, byte length, NUL, and file bytes"
+}

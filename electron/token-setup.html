@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Configure Cesium</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: #10161d; color: #edf4f8; }
+      main { padding: 36px 40px; }
+      .eyebrow { color: #61c7b7; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+      h1 { margin: 8px 0 12px; font-size: 28px; }
+      p { color: #b8c5ce; line-height: 1.55; margin: 0 0 16px; }
+      label { display: block; margin: 24px 0 8px; font-size: 13px; font-weight: 700; }
+      input { width: 100%; padding: 12px 14px; border: 1px solid #40515e; border-radius: 7px; background: #0a1015; color: white; font: inherit; }
+      input:focus { outline: 2px solid #42a894; border-color: transparent; }
+      .note { margin-top: 10px; font-size: 12px; color: #8fa0ac; }
+      .status { min-height: 22px; margin-top: 12px; color: #ffb0a8; font-size: 13px; }
+      .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+      button { border: 0; border-radius: 7px; padding: 11px 16px; font: inherit; font-weight: 700; cursor: pointer; }
+      #skip { background: #27343e; color: #d8e2e8; }
+      #save { background: #43b39e; color: #07120f; }
+      button:disabled { cursor: wait; opacity: .6; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">One-time local setup</div>
+      <h1>Enable Cesium imagery</h1>
+      <p>
+        Enter the Cesium ion token for this Windows user. BESSForge encrypts it
+        with Windows secure storage and passes it only to the bundled local API.
+        It is never written into the browser app or exported projects.
+      </p>
+      <label for="token">Cesium ion token</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false" autofocus />
+      <div class="note">Internet access is required when downloading new satellite imagery.</div>
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+      <div class="actions">
+        <button id="skip" type="button">Continue without imagery</button>
+        <button id="save" type="button">Save and enable Cesium</button>
+      </div>
+    </main>
+    <script src="./token-setup.js"></script>
+  </body>
+</html>

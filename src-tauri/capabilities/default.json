@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window: native save dialogs + writing the chosen file. The dialog plugin adds each user-picked path to the fs scope, so no broad filesystem access is granted.",
+  "windows": ["main"],
+  "permissions": [
+    "core:window:default",
+    "core:webview:default",
+    "dialog:allow-save",
+    "fs:allow-write-file"
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "name": "bessforge-desktop-electron",
+  "productName": "BESSForge",
+  "version": "1.0.1",
+  "private": true,
+  "description": "BESSForge — ECI BESS 10% Design Tool (Electron desktop shell)",
+  "author": "ECI Electrical Consultants, Inc.",
+  "license": "UNLICENSED",
+  "main": "main.cjs",
+  "scripts": {
+    "prepare:app": "node copy-app.cjs",
+    "start": "npm run prepare:app && electron .",
+    "dist": "npm run prepare:app && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "44.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.eci.bessforge",
+    "productName": "BESSForge",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "token-preload.cjs",
+      "token-setup.html",
+      "token-setup.js",
+      "app/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/desktop-api.cjs",
+        "to": "desktop-api.cjs"
+      },
+      {
+        "from": "../BUILD-PROVENANCE.json",
+        "to": "BUILD-PROVENANCE.json"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "BESSForge-Electron-Setup-${version}.${ext}",
+      "shortcutName": "BESSForge"
+    }
+  }
+}
