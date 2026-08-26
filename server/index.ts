@@ -49,11 +49,10 @@ app.use((req, res, next) => {
   const loopbackOnly = process.env.BESSFORGE_LOOPBACK_ONLY === "1";
   const port = parseInt(process.env.PORT || (loopbackOnly ? "53117" : "5000"), 10);
   const host = loopbackOnly ? "127.0.0.1" : "0.0.0.0";
-  server.listen({
-    port,
-    host,
-    reusePort: true,
-  }, () => {
+  // SO_REUSEPORT is unsupported on Windows (ENOTSUP); keep it on POSIX only.
+  const listenOptions: { port: number; host: string; reusePort?: boolean } = { port, host };
+  if (process.platform !== "win32") listenOptions.reusePort = true;
+  server.listen(listenOptions, () => {
     log(`serving on ${host}:${port}`);
   });
 })();
