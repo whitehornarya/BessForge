@@ -549,8 +549,9 @@ function runRoutingGatesInner(design: SiteDesign, ctx: RoutingGateContext): Rout
 
   // --- G-RT-3: MV home runs stay out of every container cluster ------------
   // The island-wide container bbox covers the battery rows AND the center
-  // aux corridor between them: an MV feeder may ride the PCS-row lanes just
-  // outside it, but never the island interior.
+  // aux corridor between them. MV feeders may ride the PCS-row centerline
+  // (through the inverter pads) and the lane just outside the cluster, but
+  // must never enter the battery-container interior.
   guarded(3, () => {
     if (!hasIslands) return;
     const details: string[] = [];

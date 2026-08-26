@@ -11,7 +11,7 @@
   "topology": {
     "one_feeder_per_pcs_row": true,
     "entry_end": "opposite_augmentation_reserve",
-    "internal_route": "one_straight_trunk_with_perpendicular_pcs_drops",
+    "internal_route": "one_straight_pcs_centerline_trunk_with_perpendicular_pcs_drops",
     "termination": "last_built_pcs",
     "future_pcs": "reference_only",
     "fjb_role": "fiber_only",

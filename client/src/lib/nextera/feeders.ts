@@ -1101,9 +1101,10 @@ export function generateFeeders(
   // Static layout routing owns each PCS's local aux-face MV drop and
   // collector. Dynamic feeder circuits own the onward chain/home run to the
   // selected take-off. Join those two canonical layers at the collector end
-  // of mv-drop-<PCS id>. This is the single geometry seam that makes each
-  // feeder's electrical hop sections reuse the proven straight row bus and
-  // perpendicular drops instead of drawing center-to-center zigzags.
+  // of mv-drop-<PCS id> (pad centerline). This is the single geometry seam
+  // that makes each feeder's electrical hop sections reuse the proven
+  // straight row trunk and perpendicular drops instead of center-to-center
+  // zigzags that ignore the cable layer.
   const mvRowNodeById = new Map<string, { anchor: Pt; equipmentDelta: Pt }>();
   const rotatedIslandByInv = new Map<string, NonNullable<SiteDesign['islands']>[number]>();
   for (const island of design.islands ?? []) {
@@ -1163,15 +1164,18 @@ export function generateFeeders(
       //
       // There are two real cached-geometry cases which must continue to
       // follow a live PCS edit: traced/rotated drops, and the canonical
-      // ordinary four-foot world-Y drop emitted by cableRouting.  Only those
-      // geometries provide enough provenance to recover the equipment pose
-      // at which the cable was generated.
+      // ordinary face → pad-centerline drop emitted by cableRouting.  Only
+      // those geometries provide enough provenance to recover the equipment
+      // pose at which the cable was generated.
       const dx = p.x - tap.x;
       const dy = p.y - tap.y;
+      // Ordinary auto drops are a 2-pt face → pad-centerline stub (length ≈
+      // width/2). Legacy projects may still carry the old 4 ft outward stub.
       const canonicalOrdinaryDrop =
         run.pts.length === 2 &&
         Math.abs(dx) < 1e-9 &&
-        Math.abs(Math.abs(dy) - 4) < 1e-9;
+        (Math.abs(Math.abs(dy) - e.width / 2) < 1e-6 ||
+          Math.abs(Math.abs(dy) - 4) < 1e-9);
       const followsEquipment =
         run.pts.length >= 3 ||
         rotatedIslandByInv.has(id) ||
@@ -3397,7 +3401,10 @@ export function generateFeeders(
             rejected[gi].add(
               `row trunk section ${si + 1} is not one straight span (${seg.pts.length - 1} legs)`);
           }
-          const obs = autoObs(obstaclesExcept(a?.id, b?.id));
+          const obs = autoObs(obstaclesExcept(
+            ...(p.rowGrammar
+              ? p.chain.map(e => e.id)
+              : [a?.id, b?.id])));
           const equipmentConflict =
             feederCrossesObstacle(seg.pts, obs, seg.pts[0], seg.pts[seg.pts.length - 1]);
           const trenchConflicts = bandCoRunViolations(seg.pts, crossBands);
