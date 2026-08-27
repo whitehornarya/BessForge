@@ -280,7 +280,7 @@ app.whenReady().then(() => {
       `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; ` +
         `script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; ` +
         `img-src 'self' file: data: blob: https:; font-src 'self' file: data:; ` +
-        `worker-src 'self' blob:; connect-src 'self' https: http://127.0.0.1:* http://localhost:* http://[::1]:*`,
+        `worker-src 'self' blob:; connect-src 'self' blob: https: http://127.0.0.1:* http://localhost:* http://[::1]:*`,
     ];
     responseHeaders['Permissions-Policy'] = [
       'camera=(), microphone=(), geolocation=(), usb=(), serial=(), bluetooth=()',

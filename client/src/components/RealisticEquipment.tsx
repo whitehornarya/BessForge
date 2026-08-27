@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useGLTF } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -9,7 +9,11 @@ import { assetUrl } from '../lib/assetUrl';
 import { useDesignStore } from '../lib/stores/useDesignStore';
 import { recoloredGeTexture, neutralizedGeMrTexture } from '../lib/pcsRecolor';
 import { feederTintByInverterId } from '../lib/nextera/feederColors';
-import { patchMaterialWithFeederTint, makeFeederTintAttribute } from '../lib/feederTint';
+import {
+  cloneMaterialWithoutFeederTint,
+  patchMaterialWithFeederTint,
+  makeFeederTintAttribute,
+} from '../lib/feederTint';
 
 // Realistic manufacturer 3D models for the 3D preview toggle. Each uploaded
 // model is normalized once (world transforms baked, centered at origin,
@@ -289,15 +293,25 @@ function ModelInstances({ url, items, tints, ghost, lift = 0, bodyColor = null }
       return url === GE_PCS_MODEL_URL ? [...base] : base;
     }
     return base.map(p => {
-      const geometry = p.geometry.clone();
-      geometry.deleteAttribute('aFeederTint');
-      const material = p.material.clone();
+      const material = cloneMaterialWithoutFeederTint(p.material);
       material.transparent = true;
       material.opacity = 0.35;
       material.depthWrite = false;
-      return { geometry, material, locals: p.locals };
+      // This genuinely unpatched ghost material ignores aFeederTint, so the
+      // base geometry is safe to share even when real and future instance
+      // counts differ. Copying every GLB geometry for future instances doubled
+      // GPU memory on large realistic yards and could reset the context.
+      return { geometry: p.geometry, material, locals: p.locals };
     });
   }, [scene, ghost, url, bodyColor]);
+  useEffect(() => {
+    if (!ghost) return;
+    // The shared geometry belongs to the lifetime GLTF cache; only the
+    // display-only faded materials above are owned by this ghost consumer.
+    return () => {
+      for (const part of parts) part.material.dispose();
+    };
+  }, [ghost, parts]);
   const refs = useRef<(THREE.InstancedMesh | null)[]>([]);
 
   const equipMatrices = useMemo(() => {
@@ -376,6 +390,11 @@ function ModelInstances({ url, items, tints, ghost, lift = 0, bodyColor = null }
           key={`${url}-${pi}-${items.length}`}
           ref={el => (refs.current[pi] = el)}
           args={[part.geometry, part.material, items.length * part.locals.length]}
+          // normalizedParts caches these resources for the page lifetime.
+          // R3F otherwise auto-disposes them when Realistic is toggled or a
+          // view subtree changes, leaving the next cache consumer with dead
+          // texture/geometry resources.
+          dispose={null}
           castShadow={!ghost}
           receiveShadow={!ghost}
         />
@@ -455,10 +474,18 @@ export default function RealisticEquipment({ equipment, ghost }: { equipment: Pl
     const tintById = feederTintByInverterId(feeders.filter(f => !hiddenFeeders.has(f.idx)));
     return byKind.inverter.map(eq => tintById.get(eq.id) ?? null);
   }, [byKind.inverter, feeders, showFeederColors, hiddenFeeders]);
+  // Do not mount a useGLTF consumer for model kinds absent from this design.
+  // Previously all seven manufacturer GLBs (including their decoded textures)
+  // loaded whenever Realistic was enabled, even if most item arrays were
+  // empty. Besides wasting memory, the load spike could reset weaker GPUs.
+  const activeKinds = useMemo(
+    () => (Object.keys(MODEL_URLS) as RealisticKind[]).filter(kind => byKind[kind].length > 0),
+    [byKind],
+  );
 
   return (
     <group>
-      {(Object.keys(MODEL_URLS) as RealisticKind[]).map(kind => (
+      {activeKinds.map(kind => (
         <ModelInstances
           key={kind}
           url={kind === 'inverter' ? pcsUrl : MODEL_URLS[kind]}

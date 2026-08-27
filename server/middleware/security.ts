@@ -34,8 +34,10 @@ export function securityHeaders(): RequestHandler {
       `script-src 'self' blob: 'unsafe-inline'${development ? " 'unsafe-eval'" : ""}`,
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
-      // Troika resolves fallback glyph fonts from its jsDelivr-hosted index.
-      `connect-src 'self' https://cdn.jsdelivr.net${development ? " ws: wss:" : ""}`,
+      // GLTFLoader's ImageBitmap path fetches embedded model textures through
+      // same-page blob URLs; Troika resolves fallback glyph fonts from its
+      // jsDelivr-hosted index.
+      `connect-src 'self' blob: https://cdn.jsdelivr.net${development ? " ws: wss:" : ""}`,
       "font-src 'self' data:",
       "worker-src 'self' blob:",
       "object-src 'none'",

@@ -23,6 +23,10 @@
     "test:services": "tsx --tsconfig scripts/tsconfig.test.json scripts/api-base.test.ts && tsx --tsconfig scripts/tsconfig.test.json scripts/offline-sitepack.test.ts && tsx --tsconfig scripts/tsconfig.test.json scripts/proxy-hardening.test.ts",
     "test:sanitized-core": "npm run test:services && tsx --tsconfig scripts/tsconfig.test.json scripts/elevation.test.ts && tsx --tsconfig scripts/tsconfig.test.json scripts/enlarged-print.test.ts",
     "test:release": "npm run test:services && tsx --tsconfig scripts/tsconfig.test.json scripts/elevation.test.ts && tsx --tsconfig scripts/tsconfig.test.json scripts/enlarged-print.test.ts",
+    "test:cad-visual": "node scripts/cad-visual.test.mjs",
+    "test:context-recovery": "node scripts/context-recovery.test.mjs",
+    "test:desktop-csp": "node scripts/desktop-csp.test.mjs",
+    "test:ghost-visual": "tsx --tsconfig scripts/tsconfig.test.json scripts/ghost-visual.test.mjs",
     "audit:security": "npm audit --audit-level=moderate",
     "audit:release": "node scripts/audit-release.mjs . --report dist/source-audit-report.json"
   },

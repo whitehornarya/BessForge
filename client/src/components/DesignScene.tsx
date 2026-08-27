@@ -5349,7 +5349,10 @@ function DesignContent({ design, editMode, realistic, is3D, cad, onDraggingChang
   // lease is held, the far-LOD box swap is suppressed (the sensor keeps its
   // raw hysteresis state so the viewport snaps back correctly afterwards).
   const forceNear = useDesignStore(s => s.forceRealisticNearCount > 0);
-  const realisticFarEff = realisticFar && !forceNear;
+  // CAD explicitly promises realistic models. Its wide drawing camera can
+  // exceed the normal 3D LOD threshold, but CAD has no simple-equipment
+  // fallback, so treating it as "far" made the models disappear completely.
+  const realisticFarEff = realisticFar && !forceNear && !cad;
   // Commit handshake: report AFTER React committed the GLB group visibility
   // so capture flows wait on real scene state instead of a timer.
   const setRealisticDetailApplied = useDesignStore(s => s.setRealisticDetailApplied);
@@ -5881,8 +5884,9 @@ function DesignContent({ design, editMode, realistic, is3D, cad, onDraggingChang
       {realistic && !groundingXrayActive && (
         <Suspense fallback={null}>
           <RealisticLodSensor design={design} far={realisticFar} onChange={setRealisticFar} />
-          {/* Far LOD hides (but keeps mounted) the models so zooming back
-              in never re-parses the GLBs or re-uploads GPU buffers. */}
+          {/* Far LOD hides (but keeps mounted) the models in 3D so zooming
+              back in never re-parses the GLBs or re-uploads GPU buffers.
+              CAD bypasses this LOD because it has no simple-box fallback. */}
           <group visible={!realisticFarEff}>
             <RealisticEquipment
               equipment={
@@ -6671,9 +6675,8 @@ export default function DesignScene() {
   const [glRetry, setGlRetry] = useState(0);
   // recoveredMount: set exactly when a scheduled recovery remount fires and
   // consumed by the next Canvas onCreated. Keying the toast off this flag
-  // (instead of the raw attempt counter) means an ordinary view switch that
-  // remounts the canvas within the 10s "stable" window after a genuine
-  // recovery can never show a spurious "3D view recovered" toast.
+  // (instead of the raw attempt counter) means only an actual recovery
+  // remount can show the toast.
   const recovery = useRef({ attempts: 0, pending: false, recoveredMount: false, timer: 0 as any, stableTimer: 0 as any });
   const savedPose = useRef<SavedCameraPose | null>(null);
   const poseRestorePending = useRef(false);
@@ -7824,7 +7827,6 @@ export default function DesignScene() {
       <CanvasErrorBoundary key={glRetry} onError={attemptRecovery}>
       <Canvas
         shadows
-        key={viewMode}
         frameloop="demand"
         // While recording a tour, render at up to UHD so the 4K composite
         // captures real detail instead of an upscaled window buffer. The
@@ -7844,8 +7846,8 @@ export default function DesignScene() {
           if (r.recoveredMount) {
             // This mount was explicitly triggered by a recovery attempt —
             // tell the drafter with a small toast, never a modal wall.
-            // Consumed here so an ordinary view-switch remount (which also
-            // runs onCreated) can never re-toast off a stale attempt count.
+            // Consumed here so unrelated renders can never re-toast off a
+            // stale attempt count.
             r.recoveredMount = false;
             toast.success('3D view recovered');
           }
@@ -7860,11 +7862,9 @@ export default function DesignScene() {
           // rebuild the canvas silently.
           let lostTimer: ReturnType<typeof setTimeout> | undefined;
           gl.domElement.addEventListener('webglcontextlost', (e) => {
-            // A canvas no longer in the document lost its context because WE
-            // tore it down (view-mode switch remounts the Canvas via
-            // key={viewMode}; R3F/three release the context on unmount).
-            // That is intentional teardown, not a GPU failure — never
-            // schedule recovery for it.
+            // A canvas no longer in the document was intentionally torn down
+            // by a real recovery/unmount. View switches reuse one live Canvas
+            // so cached GLBs survive 3D ↔ CAD ↔ 2D without context churn.
             if (!gl.domElement.isConnected) {
               clearTimeout(lostTimer);
               return;
@@ -8540,6 +8540,9 @@ export default function DesignScene() {
           </button>
           {viewMode !== '2d' && (
           <button
+            type="button"
+            data-testid="realistic-models-toggle"
+            aria-pressed={realisticModels}
             onClick={() => setRealisticModels(!realisticModels)}
             disabled={!design}
             title="Show uploaded manufacturer 3D models (PCS, BESS container, fire panel) instead of simple boxes — 3D and CAD views; layout and DXF are unaffected"

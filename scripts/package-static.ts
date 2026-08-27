@@ -10,7 +10,7 @@
 // downloaded once from the pinned official GitHub release and cached under
 // .cache/. Run with: npm run package:static
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'fs';
 import { createHash } from 'crypto';
 import { runInNewContext } from 'vm';
 import { fileURLToPath } from 'url';
@@ -107,7 +107,7 @@ http://{$BESS_ADDRESS:localhost:8080} {
                 X-Frame-Options SAMEORIGIN
                 Referrer-Policy strict-origin-when-cross-origin
                 Permissions-Policy "camera=(), microphone=(), geolocation=(), usb=()"
-                Content-Security-Policy "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' https: http://127.0.0.1:* http://localhost:* http://[::1]:*"
+                Content-Security-Policy "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: https: http://127.0.0.1:* http://localhost:* http://[::1]:*"
         }
 
         # MIME types Caddy does not know out of the box.
@@ -282,6 +282,10 @@ async function main() {
   if (!existsSync(path.join(APP_DIR, 'index.html'))) {
     throw new Error(`Static build not found at ${APP_DIR}. Run: npm run build:static`);
   }
+  // The preview-only direct-download links in client/public/downloads point
+  // back into dist/. Vite follows them while copying public assets, which
+  // would recursively nest old release binaries in this static release.
+  rmSync(path.join(APP_DIR, 'downloads'), { recursive: true, force: true });
   const appFilesOnDisk = [...walk(APP_DIR)];
   const appBytes = appFilesOnDisk.reduce((sum, file) => sum + statSync(file).size, 0);
   if (appFilesOnDisk.length < 60 || appBytes < 40 * 1024 * 1024) {
