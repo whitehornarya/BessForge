@@ -1954,7 +1954,18 @@ export const normalizeTracedEquipmentAdds = (
     for (const inverter of pcs) {
       const owned = byOwner.get(inverter) ?? [];
       if (!owned.length) continue;
-      const thetaDeg = snap90(inverter.pose.rotationDeg);
+      // Rectangle fit is mod-180° ambiguous. Keep the drawing long axis
+      // (0 vs 90) and pick 0 vs 180 (or 90 vs 270) from which WORLD side the
+      // containers sit — same rule as placeMirroredPair (north/west row
+      // unflipped, south/east row a true 180°). Overlay labels hide the
+      // wrong yaw; DC routing and the GLB do not.
+      const axisDeg = snap90(inverter.pose.rotationDeg) % 180;
+      const meanDx = owned.reduce((s, a) => s + (a.pose.cx - inverter.pose.cx), 0) / owned.length;
+      const meanDy = owned.reduce((s, a) => s + (a.pose.cy - inverter.pose.cy), 0) / owned.length;
+      const axisRad = axisDeg * Math.PI / 180;
+      const axisLocalY = -meanDx * Math.sin(axisRad) + meanDy * Math.cos(axisRad);
+      const thetaDeg = ((axisLocalY >= 0 ? axisDeg + 180 : axisDeg) % 360 + 360) % 360;
+      inverter.pose.rotationDeg = thetaDeg;
       const theta = thetaDeg * Math.PI / 180;
       const c = Math.cos(theta), s = Math.sin(theta);
       const local = (a: TraceEquipAdd) => {

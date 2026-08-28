@@ -1307,7 +1307,10 @@ export function generateCableRouting(
     const same = (a: Pt, bb: Pt) => Math.abs(a.x - bb.x) < 0.05 && Math.abs(a.y - bb.y) < 0.05;
     const cs = Math.cos(inv.rotation), sn = Math.sin(inv.rotation);
     const halfL = inv.length / 2, halfW = inv.width / 2;
-    const m = cs >= 0 ? 1 : -1; // DC compartment end, same sign as mirrorOf()
+    // Local-frame DC end is always body-left (sheet-3). World 180°/270° yaw
+    // is applied by toWorld — folding mirrorOf(inv.rotation) into m here
+    // double-flips exits onto the local bottom-right.
+    const m = 1;
     const toLocal = (p: Pt): Pt => {
       const dx = p.x - inv.x, dy = p.y - inv.y;
       return { x: dx * cs + dy * sn, y: -dx * sn + dy * cs };
@@ -1372,6 +1375,9 @@ export function generateCableRouting(
       items.every(it => Math.abs(it.cl.y) - it.hy >= halfW + 3);
     const issuedQty3 = new Map<string, { pos: Pt[]; neg: Pt[] }>();
     if (standardQty3) {
+      // De-rotated clone MUST stay rotation 0 so planQty3Block's m stays
+      // +1 (body-left). Passing the world yaw would apply mirrorOf twice
+      // once here and again in toWorld.
       const localInv: PlacedEquipment = {
         ...inv, x: 0, y: 0, rotation: 0,
       };
