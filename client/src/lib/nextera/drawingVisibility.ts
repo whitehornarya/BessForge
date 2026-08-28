@@ -25,7 +25,8 @@ export interface DrawingVisibilityProfile {
 export const DEFAULT_DRAWING_VISIBILITY: Readonly<DrawingVisibilityProfile> =
   Object.freeze({
     version: DRAWING_VISIBILITY_VERSION,
-    fiber: true,
+    // TEMP: hide fiber runs while debugging yard routing / clutter.
+    fiber: false,
     pcsToBess: true,
     dimensions: true,
     labels: true,
