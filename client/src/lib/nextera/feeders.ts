@@ -16,6 +16,10 @@
 
 import { Pt, SiteDesign, PlacedEquipment, AuxFeederCircuit, TakeoffDirection, takeoffVector } from './types';
 import { rerouteOrthogonal, offsetOrthogonal, Rect } from './cableRouting';
+import {
+  nearestRoadCenter, offsetRoadPolyline, orthogonalizeRoadPolyline,
+  roadPathBetween, roadRegionFromNetwork,
+} from './roadPath';
 import { exclusionRects } from './areaZones';
 import { assignFeederNames, auxFeederNameOf, feederDisplayName } from './feederNaming';
 import {
@@ -1131,7 +1135,7 @@ export function generateFeeders(
     // Drawing-traced PCS drops carry tap -> outward stub -> collector. Their
     // connection face is rotation-aware; ordinary row drops retain the
     // historical world-axis tap.
-    if (dropPts.length >= 3) {
+    if (dropPts.length >= 3 || isTracedYard) {
       const mirror = Math.cos(e.rotation) >= 0 ? 1 : -1;
       const face = -(e.doorEnd ?? -1) * e.width / 2;
       const lx = mirror * (e.length / 2 - 1.2);
@@ -1175,7 +1179,8 @@ export function generateFeeders(
       const followsEquipment =
         run.pts.length >= 3 ||
         rotatedIslandByInv.has(id) ||
-        canonicalOrdinaryDrop;
+        canonicalOrdinaryDrop ||
+        isTracedYard;
       const sourceOrigin = {
         x: tap.x - offset.x,
         y: tap.y - offset.y,
@@ -1808,13 +1813,15 @@ export function generateFeeders(
     hopKeyUsers.set(k, [...(hopKeyUsers.get(k) ?? []), p.gi]);
   }));
   const hopShiftOf = new Array<number>(feederCount).fill(0);
-  for (const gis of Array.from(hopKeyUsers.values())) {
-    if (gis.length < 2) continue;
-    const sharers = [...gis].sort((a, b) =>
-      (alongExit(pre[b]) - alongExit(pre[a])) || a - b);
-    sharers.forEach((gi, r) => {
-      hopShiftOf[gi] = Math.max(hopShiftOf[gi], r * HOP_STAGGER_FT);
-    });
+  if (!isTracedYard) {
+    for (const gis of Array.from(hopKeyUsers.values())) {
+      if (gis.length < 2) continue;
+      const sharers = [...gis].sort((a, b) =>
+        (alongExit(pre[b]) - alongExit(pre[a])) || a - b);
+      sharers.forEach((gi, r) => {
+        hopShiftOf[gi] = Math.max(hopShiftOf[gi], r * HOP_STAGGER_FT);
+      });
+    }
   }
 
   const rawOrder = [...pre].sort((a, b) =>
@@ -2044,7 +2051,10 @@ export function generateFeeders(
     // the collinear hop trenches of both circuits read as one shared trench.
     for (let j = 0; j < chain.length - 1; j++) {
       const a = chain[j], b = chain[j + 1];
-      const hopObs = autoObs(obstaclesExcept(a.id, b.id));
+      const hopExempt = isTracedYard
+        ? chain.map(c => c.id)
+        : [a.id, b.id];
+      const hopObs = autoObs(obstaclesExcept(...hopExempt));
       const A = feederNodeOf(a), B = feederNodeOf(b);
       // Recognized rows land on their canonical mv-collector through the
       // mv-drop-* endpoints. That collector is the one straight row trunk;
@@ -2173,11 +2183,55 @@ export function generateFeeders(
       : [{ x: waypoint.x, y: substation.y }, substation];
     // Ideal corridor route: run out of the yard, climb onto the lane
     // outside the fence, ride the lane to the approach, jog in.
+    const SCAN_ROAD_OFFSET_FT = 0.75;
+    const buildScanRoadHome = (): Pt[] | null => {
+      if (!isTracedYard) return null;
+      const region = roadRegionFromNetwork(design.roadNetwork);
+      if (!region.length) return null;
+      const attach = nearestRoadCenter(region, start, 200);
+      if (!attach) return null;
+      const roadTarget = nearestRoadCenter(region, waypoint, 250)
+        ?? nearestRoadCenter(region, substation, 250);
+      if (!roadTarget) return null;
+      const tryStub = (pts: Pt[]) =>
+        !feederCrossesObstacle(pts, homeObstaclesAuto, start, attach) ? pts : null;
+      const stub =
+        tryStub(dedupePts([start, attach])) ??
+        tryStub(dedupePts([start, { x: attach.x, y: start.y }, attach])) ??
+        tryStub(dedupePts([start, { x: start.x, y: attach.y }, attach])) ??
+        tryStub(routeSegmentTrenchAware(start, attach, homeObstaclesAuto));
+      if (!stub) return null;
+      const far = Math.hypot(attach.x - roadTarget.x, attach.y - roadTarget.y);
+      let ride: Pt[] = [attach, roadTarget];
+      if (far > 1) {
+        const raw = roadPathBetween(region, attach, roadTarget, 6);
+        if (!raw || raw.length < 2) return null;
+        ride = orthogonalizeRoadPolyline(raw);
+      }
+      const offset = (gi - (feederCount - 1) / 2) * SCAN_ROAD_OFFSET_FT;
+      if (Math.abs(offset) > 0.01 && ride.length >= 2) {
+        const shifted = offsetRoadPolyline(ride, offset);
+        shifted[0] = ride[0];
+        shifted[shifted.length - 1] = ride[ride.length - 1];
+        if (!feederCrossesObstacle(
+          shifted, homeObstaclesAuto, shifted[0], shifted[shifted.length - 1])) {
+          ride = shifted;
+        }
+      }
+      const cand = stripBacktracks(dedupePts([...stub, ...ride.slice(1), waypoint, ...entry]));
+      if (!feederCrossesObstacle(cand, homeObstaclesAuto, start, substation)) return cand;
+      const alt = stripBacktracks(dedupePts([...stub, ...ride.slice(1), ...entry]));
+      return feederCrossesObstacle(alt, homeObstaclesAuto, start, substation) ? null : alt;
+    };
     const ideal = dedupePts([start, dropJog, runStart, exitPt, laneJoin, waypoint, ...entry]);
-    let homePts = ideal;
-    if (feederCrossesObstacle(ideal, homeObstaclesAuto, start, substation) ||
+    const scanHome = buildScanRoadHome();
+    const usedScanRoad = !!(scanHome &&
+      !feederCrossesObstacle(scanHome, homeObstaclesAuto, start, substation) &&
+      crossesPrior(scanHome) === 0);
+    let homePts = usedScanRoad ? scanHome! : ideal;
+    if (!usedScanRoad && (feederCrossesObstacle(ideal, homeObstaclesAuto, start, substation) ||
         bandCoRunViolations(ideal, crossBands) > 0 ||
-        crossesPrior(ideal) > 0) {
+        crossesPrior(ideal) > 0)) {
       // Only the in-yard run can hit equipment: grid-reroute just that leg
       // and keep the corridor legs (all outside the fence) intact.
       // Prefer reaching the feeder's OWN run line first and riding it to the
@@ -3397,7 +3451,10 @@ export function generateFeeders(
             rejected[gi].add(
               `row trunk section ${si + 1} is not one straight span (${seg.pts.length - 1} legs)`);
           }
-          const obs = autoObs(obstaclesExcept(a?.id, b?.id));
+          const hopExempt = isTracedYard
+            ? p.chain.map(c => c.id)
+            : [a?.id, b?.id];
+          const obs = autoObs(obstaclesExcept(...hopExempt));
           const equipmentConflict =
             feederCrossesObstacle(seg.pts, obs, seg.pts[0], seg.pts[seg.pts.length - 1]);
           const trenchConflicts = bandCoRunViolations(seg.pts, crossBands);

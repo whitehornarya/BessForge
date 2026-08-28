@@ -119,6 +119,8 @@ import {
   feederCorridorRejectReason,
   FEEDER_TRENCH_SPACING_FT,
 } from '../client/src/lib/nextera/feeders';
+import { emptyAreaDesign } from '../client/src/lib/nextera/siteAreas';
+import { rectRoadNetwork } from '../client/src/lib/nextera/roadPath';
 import {
   assignFeederNames, breakerOfName, auxFeederNameOf, feederDisplayName,
   FEEDER_BREAKER_BASE,
@@ -256,7 +258,105 @@ async function loadBigIronAreas(): Promise<ReturnType<typeof parseKmlAreas>> {
   return parseKmlAreas(kmlText, 'BIG IRON BESS', phaseIndices);
 }
 
+function runScanFeederPathingTests() {
+  console.log('\n[scan-feeder] under-PCS hops + road home run');
+  const scanPcs = Array.from({ length: 14 }, (_, i) => ({
+    id: `inv-scan-${i}`,
+    kind: 'inverter' as const,
+    label: `SCAN PCS ${i + 1}`,
+    x: i * 45,
+    y: 80,
+    rotation: 0,
+    length: 40,
+    width: 12,
+    traceSourcePose: {
+      x: i * 45, y: 80, rotationDeg: 0, lengthFt: 40, widthFt: 12,
+    },
+  }));
+  const scanFence: Pt[] = [
+    { x: -80, y: -80 }, { x: 760, y: -80 },
+    { x: 760, y: 160 }, { x: -80, y: 160 },
+  ];
+  const scanRoad = rectRoadNetwork(-60, -28, 740, 28);
+  const scanSub = { x: 700, y: 0 };
+  const scanDrops = generateCableRouting(scanPcs as never, [], scanFence);
+  const scanDesign = {
+    ...emptyAreaDesign({
+      name: 'scan-feeder-fixture',
+      polygon: scanFence,
+      origin: { lat: 0, lon: 0 },
+      areaAcres: 1,
+    }),
+    fence: scanFence,
+    equipment: scanPcs,
+    cables: scanDrops.cables,
+    roadNetwork: scanRoad,
+    tracedPcsUnits: scanPcs.length,
+  };
+  const scanFeeders = generateFeeders(scanDesign, scanSub, 4);
+  const west = scanFeeders.find(f => f.inverterIds.includes('inv-scan-0'));
+  const east = scanFeeders.find(f => f.inverterIds.includes('inv-scan-13'));
+  const padOf = (id: string) => scanPcs.find(e => e.id === id)!;
+  const rectOf = (id: string) => equipmentRect(padOf(id), 1);
+  const ptInRect = (p: Pt, r: { x1: number; x2: number; y1: number; y2: number }) =>
+    p.x > r.x1 && p.x < r.x2 && p.y > r.y1 && p.y < r.y2;
+  const hopsEnter = (f: FeederCircuit, ids: string[]) => {
+    const hops = f.segments.slice(0, -1);
+    return ids.some(id => {
+      const r = rectOf(id);
+      return hops.some(seg => seg.pts.some(p => ptInRect(p, r)));
+    });
+  };
+  check('scan feeders: 14-PCS row splits into two circuits',
+    scanFeeders.length === 2 && !!west && !!east &&
+    west.inverterIds.length === 7 && east.inverterIds.length === 7,
+    scanFeeders.map(f => f.inverterIds.length).join(','));
+  check('scan hops: each drop lands on the pad centerline (not a 4 ft parallel bus)',
+    scanPcs.every(e => {
+      const drop = scanDrops.cables.find(c => c.id === `mv-drop-${e.id}`);
+      const join = drop?.pts[drop.pts.length - 1];
+      return !!join && Math.abs(join.y - e.y) < 0.25;
+    }));
+  check('scan hops: west feeder stays under its own pads and not the east slice',
+    !!west && west.routeValid === true &&
+    !hopsEnter(west, east!.inverterIds) &&
+    west.segments.slice(0, -1).every(seg =>
+      seg.pts.length === 2 && seg.pts.every(p => Math.abs(p.y - 80) < 0.5)),
+    west?.routeDiagnostics?.join('; '));
+  check('scan hops: east feeder stays under its own pads and not the west slice',
+    !!east && east.routeValid === true &&
+    !hopsEnter(east, west!.inverterIds) &&
+    east.segments.slice(0, -1).every(seg =>
+      seg.pts.length === 2 && seg.pts.every(p => Math.abs(p.y - 80) < 0.5)),
+    east?.routeDiagnostics?.join('; '));
+  const westHome = west?.segments[west.segments.length - 1]?.pts ?? [];
+  const eastHome = east?.segments[east.segments.length - 1]?.pts ?? [];
+  const homeOnRoad = (pts: Pt[]) => pts.slice(1).some(p =>
+    p.y > -28 && p.y < 28 && p.x > -60 && p.x < 740);
+  const homeUnderForeign = (home: Pt[], foreignIds: string[]) =>
+    home.slice(2).some(p => foreignIds.some(id => ptInRect(p, rectOf(id))));
+  check('scan home run: peels onto the road mid-strip instead of riding the PCS row',
+    westHome.length >= 2 && eastHome.length >= 2 &&
+    homeOnRoad(westHome) && homeOnRoad(eastHome) &&
+    westHome.some(p => Math.abs(p.y) < 16) &&
+    eastHome.some(p => Math.abs(p.y) < 16),
+    `west y=${westHome.map(p => p.y.toFixed(1)).join(',')} east y=${eastHome.map(p => p.y.toFixed(1)).join(',')}`);
+  check('scan home run: does not continue under the other feeder\'s PCS',
+    !!west && !!east &&
+    !homeUnderForeign(westHome, east.inverterIds) &&
+    !homeUnderForeign(eastHome, west.inverterIds));
+
+  const autoPcs = scanPcs.map(({ traceSourcePose: _pose, ...e }) => e);
+  const autoDrops = generateCableRouting(autoPcs as never, [], scanFence);
+  const autoJoinY = autoDrops.cables.find(c => c.id === 'mv-drop-inv-scan-0')
+    ?.pts.at(-1)?.y;
+  check('auto yards keep the parallel MV collector (not scan pad-center joins)',
+    autoJoinY != null && Math.abs(autoJoinY - 80) > 2,
+    `join y=${autoJoinY}`);
+}
+
 async function main() {
+  runScanFeederPathingTests();
   const HONDO_KMZ = path.resolve(
     'attached_assets/Hondo_100MW_with_Parcel_-_Final_1784325593748.kmz'
   );

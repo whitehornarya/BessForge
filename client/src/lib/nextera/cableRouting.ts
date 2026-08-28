@@ -2583,11 +2583,14 @@ export function generateCableRouting(
         // collector, while a cross-row assignment fails the feeder route gate.
         physicalRow.sort((a, b) =>
           along(a.out) - along(b.out) || a.inv.id.localeCompare(b.inv.id));
+        // Join on the pad centerline (mean of PCS origins along the
+        // across-axis) so the feeder daisy-chain can ride under connected
+        // units instead of a parallel 4 ft collector.
         const coord = physicalRow.reduce(
-          (sum, t) => sum + across(t.out), 0) / physicalRow.length;
+          (sum, t) => sum + across({ x: t.inv.x, y: t.inv.y }), 0) / physicalRow.length;
         physicalRow.forEach(t => {
-          const join = world(along(t.out), coord);
-          addRun(`mv-drop-${t.inv.id}`, 'MV', [t.tap, t.out, join]);
+          const join = world(along(t.tap), coord);
+          addRun(`mv-drop-${t.inv.id}`, 'MV', [t.tap, join]);
         });
       });
     }

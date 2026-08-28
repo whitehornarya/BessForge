@@ -6,11 +6,14 @@ import polygonClipping from 'polygon-clipping';
 import { BessConfiguration, CLEARANCES, LG_JF2, HITACHI_AUX_XFMR, IPS_SWITCHGEAR, AUX_SWITCH_PANEL, FIBER_PATCH_PANEL, FIRE_CONTROL_PANEL, FEEDER_JUNCTION_BOX, COMMS_CABINET, withContainersPerPcs } from './catalog';
 import { generateCableRouting, type DcRoutingMode } from './cableRouting';
 import { MAX_INVERTERS_PER_FEEDER } from './feeders';
+import { pointOnRoadFast, roadPathBetween, roadRegionFromNetwork } from './roadPath';
 import { SiteBoundary, SiteDesign, PlacedEquipment, EquipmentKind, AugmentationZone, ReservedZone, ReserveSummary, RoadSegment, RoadEdgeSeg, RoadNetwork, RoadCut, RowEditGeom, Pt, SurfacingMode, SurfacingPlan, SurfacingRegion, IslandInfo } from './types';
 import { insetPolygon, rectInsidePolygon, rotatedRectInsidePolygon, pointInPolygon, distanceToPolygonEdge } from './kmz';
 import { tracedApronKeepsPavement } from './referenceTrace';
 import { applyReferenceLabels } from './labels';
 import { polygonArea } from './kmz';
+
+export { pointOnRoadFast, roadPathBetween, roadRegionFromNetwork };
 
 export interface BlockFootprint {
   width: number;     // ft, along x
@@ -6439,24 +6442,6 @@ export function ringToEdgePath(ring: Pt[]): RoadEdgeSeg[] {
   return segs;
 }
 
-// The drivable road region as a boolean multi-polygon, recovered from the
-// rendered network. Shared by the edit tools (hit-testing, span geometry) and
-// the tests so "is this point on a road?" has exactly one definition.
-export function roadRegionFromNetwork(
-  network: { outer: RoadEdgeSeg[]; islands: RoadEdgeSeg[][] } | null | undefined
-): PCRing[][] {
-  if (!network || !network.outer.length) return [];
-  try {
-    const outer = edgeSegsToRing(network.outer);
-    if (outer.length < 3) return [];
-    const loops = network.islands.map(i => edgeSegsToRing(i)).filter(r => r.length >= 3);
-    return polygonClipping.xor(
-      [outer.map(p => [p.x, p.y] as [number, number])] as any,
-      ...loops.map(l => [l.map(p => [p.x, p.y] as [number, number])] as any)
-    ) as PCRing[][];
-  } catch { return []; }
-}
-
 // Is this point on drivable road surface?
 export function pointOnRoad(region: PCRing[][], p: Pt): boolean {
   try {
@@ -6579,34 +6564,6 @@ export function ringSpanCutAt(region: PCRing[][], p: Pt, alongFt = 26): Pt[] | n
 // with it. Everything below instead follows the road SURFACE, so a cut is
 // always road-shaped no matter how the road bends.
 // ---------------------------------------------------------------------------
-
-// Even-odd point test straight against the region rings. pointOnRoad() runs a
-// boolean intersection per call, which is far too slow to drive a grid search
-// (hundreds of thousands of probes); this is the same predicate in O(edges).
-function ringContainsPt(ring: PCRing, p: Pt): boolean {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
-    if ((yi > p.y) !== (yj > p.y)) {
-      const xint = xi + ((p.y - yi) / (yj - yi)) * (xj - xi);
-      if (p.x < xint) inside = !inside;
-    }
-  }
-  return inside;
-}
-
-export function pointOnRoadFast(region: PCRing[][], p: Pt): boolean {
-  if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return false;
-  for (const poly of region) {
-    if (!poly.length || !ringContainsPt(poly[0], p)) continue;
-    let inHole = false;
-    for (let i = 1; i < poly.length; i++) {
-      if (ringContainsPt(poly[i], p)) { inHole = true; break; }
-    }
-    if (!inHole) return true;
-  }
-  return false;
-}
 
 // Half-width of the road at `p` measured across `dir`, using the fast probe.
 export function roadHalfWidthAtFast(region: PCRing[][], p: Pt, dir: Pt, maxFt = 120): number {
@@ -6766,187 +6723,6 @@ export function roadRunAt(region: PCRing[][], p: Pt, maxFt = 20000): Pt[] | null
     });
   }
   return path;
-}
-
-// Occupancy grid of the road surface, filled by scanline so building it costs
-// O(rows x edges) rather than a point test per cell.
-type RoadGrid = {
-  cell: number; minX: number; minY: number; nx: number; ny: number;
-  road: Uint8Array; clear: Int32Array;
-};
-
-function buildRoadGrid(region: PCRing[][], cell: number): RoadGrid | null {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  const edges: { x0: number; y0: number; x1: number; y1: number }[] = [];
-  for (const poly of region) {
-    for (const ring of poly) {
-      for (let i = 0; i < ring.length; i++) {
-        const a = ring[i], b = ring[(i + 1) % ring.length];
-        edges.push({ x0: a[0], y0: a[1], x1: b[0], y1: b[1] });
-        if (a[0] < minX) minX = a[0]; if (a[0] > maxX) maxX = a[0];
-        if (a[1] < minY) minY = a[1]; if (a[1] > maxY) maxY = a[1];
-      }
-    }
-  }
-  if (!edges.length || !Number.isFinite(minX)) return null;
-  minX -= cell; minY -= cell; maxX += cell; maxY += cell;
-  const nx = Math.ceil((maxX - minX) / cell), ny = Math.ceil((maxY - minY) / cell);
-  if (nx < 2 || ny < 2 || nx * ny > 4_000_000) return null;
-  const road = new Uint8Array(nx * ny);
-  const xs: number[] = [];
-  for (let j = 0; j < ny; j++) {
-    const y = minY + (j + 0.5) * cell;
-    xs.length = 0;
-    for (const e of edges) {
-      if ((e.y0 > y) !== (e.y1 > y)) {
-        xs.push(e.x0 + ((y - e.y0) / (e.y1 - e.y0)) * (e.x1 - e.x0));
-      }
-    }
-    if (xs.length < 2) continue;
-    xs.sort((a, b) => a - b);
-    for (let k = 0; k + 1 < xs.length; k += 2) {
-      const i0 = Math.max(0, Math.ceil((xs[k] - minX) / cell - 0.5));
-      const i1 = Math.min(nx - 1, Math.floor((xs[k + 1] - minX) / cell - 0.5));
-      for (let i = i0; i <= i1; i++) road[j * nx + i] = 1;
-    }
-  }
-  // Clearance in cells (multi-source BFS out from non-road), so the route can
-  // be biased toward the middle of the pavement instead of hugging an edge.
-  const clear = new Int32Array(nx * ny).fill(-1);
-  const q = new Int32Array(nx * ny);
-  let qh = 0, qt = 0;
-  for (let i = 0; i < road.length; i++) if (!road[i]) { clear[i] = 0; q[qt++] = i; }
-  while (qh < qt) {
-    const c = q[qh++]; const cx = c % nx, cy = (c / nx) | 0;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      if (!dx && !dy) continue;
-      const ax = cx + dx, ay = cy + dy;
-      if (ax < 0 || ay < 0 || ax >= nx || ay >= ny) continue;
-      const ai = ay * nx + ax;
-      if (clear[ai] !== -1) continue;
-      clear[ai] = clear[c] + 1; q[qt++] = ai;
-    }
-  }
-  return { cell, minX, minY, nx, ny, road, clear };
-}
-
-// Route from `a` to `b` THROUGH the road surface. This is what makes a
-// point-to-point deletion behave: pick two points anywhere on a road and the
-// cut follows the pavement between them, around corners and junctions,
-// instead of cutting the straight line across whatever lies between.
-// Returns null when the two points are not connected by road.
-export function roadPathBetween(
-  region: PCRing[][],
-  a: Pt,
-  b: Pt,
-  cellFt = 6
-): Pt[] | null {
-  if (!region.length) return null;
-  const g = buildRoadGrid(region, cellFt);
-  if (!g) return null;
-  const { nx, ny, cell, minX, minY, road, clear } = g;
-  const idxOf = (p: Pt): number => {
-    let i = Math.round((p.x - minX) / cell - 0.5);
-    let j = Math.round((p.y - minY) / cell - 0.5);
-    i = Math.max(0, Math.min(nx - 1, i)); j = Math.max(0, Math.min(ny - 1, j));
-    if (road[j * nx + i]) return j * nx + i;
-    // Snap to the nearest road cell: a pick can land a foot off the surface.
-    for (let r = 1; r <= 6; r++) {
-      let bestI = -1, bestD = Infinity;
-      for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
-        const ai = i + di, aj = j + dj;
-        if (ai < 0 || aj < 0 || ai >= nx || aj >= ny) continue;
-        const k = aj * nx + ai;
-        if (!road[k]) continue;
-        const d = di * di + dj * dj;
-        if (d < bestD) { bestD = d; bestI = k; }
-      }
-      if (bestI >= 0) return bestI;
-    }
-    return -1;
-  };
-  const s = idxOf(a), t = idxOf(b);
-  if (s < 0 || t < 0) return null;
-  if (s === t) return null;
-
-  // Dijkstra with a centre bias, so the route runs down the middle of the
-  // pavement and the corridor it produces is symmetric about the road.
-  const N = nx * ny;
-  const dist = new Float64Array(N).fill(Infinity);
-  const prev = new Int32Array(N).fill(-1);
-  const visited = new Uint8Array(N);
-  // Bucket queue keyed on rounded cost keeps this dependency-free and fast.
-  const heap: { i: number; d: number }[] = [{ i: s, d: 0 }];
-  dist[s] = 0;
-  const push = (i: number, d: number) => {
-    heap.push({ i, d });
-    let c = heap.length - 1;
-    while (c > 0) {
-      const p = (c - 1) >> 1;
-      if (heap[p].d <= heap[c].d) break;
-      const tmp = heap[p]; heap[p] = heap[c]; heap[c] = tmp; c = p;
-    }
-  };
-  const pop = (): { i: number; d: number } | null => {
-    if (!heap.length) return null;
-    const top = heap[0], last = heap.pop()!;
-    if (heap.length) {
-      heap[0] = last;
-      let c = 0;
-      for (;;) {
-        const l = c * 2 + 1, r = l + 1;
-        let m = c;
-        if (l < heap.length && heap[l].d < heap[m].d) m = l;
-        if (r < heap.length && heap[r].d < heap[m].d) m = r;
-        if (m === c) break;
-        const tmp = heap[m]; heap[m] = heap[c]; heap[c] = tmp; c = m;
-      }
-    }
-    return top;
-  };
-  while (heap.length) {
-    const cur = pop()!;
-    if (visited[cur.i]) continue;
-    visited[cur.i] = 1;
-    if (cur.i === t) break;
-    const cx = cur.i % nx, cy = (cur.i / nx) | 0;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      if (!dx && !dy) continue;
-      const ax = cx + dx, ay = cy + dy;
-      if (ax < 0 || ay < 0 || ax >= nx || ay >= ny) continue;
-      const ai = ay * nx + ax;
-      if (!road[ai] || visited[ai]) continue;
-      const step = (dx && dy) ? Math.SQRT2 : 1;
-      const bias = 1 + 2 / (1 + clear[ai]);
-      const nd = cur.d + step * bias;
-      if (nd < dist[ai]) { dist[ai] = nd; prev[ai] = cur.i; push(ai, nd); }
-    }
-  }
-  if (!visited[t] || prev[t] < 0) return null;
-  const cells: number[] = [];
-  for (let c = t; c !== -1; c = prev[c]) { cells.push(c); if (c === s) break; }
-  cells.reverse();
-  const toPt = (c: number): Pt => ({
-    x: minX + ((c % nx) + 0.5) * cell,
-    y: minY + (((c / nx) | 0) + 0.5) * cell,
-  });
-  // Keep the true endpoints; decimate the middle to corner points only, so the
-  // corridor is built from a handful of quads rather than one per cell.
-  const raw = cells.map(toPt);
-  const path: Pt[] = [a];
-  let lastDir: Pt | null = null;
-  for (let i = 1; i + 1 < raw.length; i++) {
-    const p0 = path[path.length - 1], p1 = raw[i];
-    const dx = p1.x - p0.x, dy = p1.y - p0.y;
-    const L = Math.hypot(dx, dy);
-    if (L < cell) continue;
-    const d = { x: dx / L, y: dy / L };
-    if (!lastDir || (d.x * lastDir.x + d.y * lastDir.y) < 0.985 || L > 60) {
-      path.push(p1); lastDir = d;
-    }
-  }
-  path.push(b);
-  return path.length >= 2 ? path : null;
 }
 
 // Does this traced road contribute NO pavement to the rendered road region?
