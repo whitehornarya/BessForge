@@ -247,6 +247,7 @@ function ReferenceAutoFill() {
   const analyzeReferenceTrace = useDesignStore(s => s.analyzeReferenceTrace);
   const setTraceUnknownTag = useDesignStore(s => s.setTraceUnknownTag);
   const applyReferenceTraceWithProgress = useDesignStore(s => s.applyReferenceTraceWithProgress);
+  const setBusyOverlay = useDesignStore(s => s.setBusyOverlay);
   const cancelReferenceTrace = useDesignStore(s => s.cancelReferenceTrace);
   const [applyProgress, setApplyProgress] = useState<{ frac: number; label: string } | null>(null);
   const gearPlacement = useDesignStore(s => s.gearPlacement);
@@ -351,9 +352,13 @@ function ReferenceAutoFill() {
               onClick={() => {
                 void (async () => {
                   setApplyProgress({ frac: 0, label: 'Starting' });
+                  setBusyOverlay({ label: 'Applying auto-fill…', frac: 0 });
                   try {
                     const ok = await applyReferenceTraceWithProgress(
-                      (frac, label) => setApplyProgress({ frac, label }),
+                      (frac, label) => {
+                        setApplyProgress({ frac, label });
+                        setBusyOverlay({ label, frac });
+                      },
                       { equipment: inclEquip, roads: inclRoads });
                     if (!ok) toast.error(useDesignStore.getState().lastRejection ?? 'Nothing to apply.');
                     else {
@@ -363,6 +368,7 @@ function ReferenceAutoFill() {
                     }
                   } finally {
                     setApplyProgress(null);
+                    setBusyOverlay(null);
                   }
                 })();
               }}
@@ -872,7 +878,7 @@ export default function DesignControlPanel() {
   // areas list can show a busy state instead of appearing frozen.
   const [switchingAreaId, setSwitchingAreaId] = useState<string | null>(null);
   const {
-    boundary, boundaryPicker, chooseBoundary, chooseAllBoundaries, siteAreas, activeAreaId, setActiveArea, cancelBoundaryPicker, design, areaZones, configId, targetMW, targetMWh, hotClimate, containersPerPcs, roadMode, autoRoadWrap, ringMode, perimeterBand, fencePlacement, laydownPct, augmentPct, futurePhaseUnits, surfacingMode, surfacingDepthIn, deadSpaceTrim, dcRouting, textureSetId, gePcsColor, showGateModel, showFence3D, showFeederColors, showSatellite, satelliteStatus, satelliteError, terrain, terrainStatus, terrainError, showTerrain, labelDistanceScaling, showSlopeHeatmap, maxGradePct, showContours, contourIntervalFt, showGradingLimits, gradingSlopeRatio, exportContoursDxf, exportCutFillShading, showGrounding, groundingXray, groundingRodSpacingFt, exportGroundingDxf, exportTrenchSectionsDxf, exportSurfacingMesh, titleBlock, lgiaInputs, isLoading, error,
+    boundary, boundaryPicker, chooseBoundary, chooseAllBoundariesWithProgress, siteAreas, activeAreaId, setActiveArea, cancelBoundaryPicker, design, areaZones, configId, targetMW, targetMWh, hotClimate, containersPerPcs, roadMode, autoRoadWrap, ringMode, perimeterBand, fencePlacement, laydownPct, augmentPct, futurePhaseUnits, surfacingMode, surfacingDepthIn, deadSpaceTrim, dcRouting, textureSetId, gePcsColor, showGateModel, showFence3D, showFeederColors, showSatellite, satelliteStatus, satelliteError, terrain, terrainStatus, terrainError, showTerrain, labelDistanceScaling, showSlopeHeatmap, maxGradePct, showContours, contourIntervalFt, showGradingLimits, gradingSlopeRatio, exportContoursDxf, exportCutFillShading, showGrounding, groundingXray, groundingRodSpacingFt, exportGroundingDxf, exportTrenchSectionsDxf, exportSurfacingMesh, titleBlock, lgiaInputs, isLoading, busyOverlay, setBusyOverlay, error,
     loadKmz, loadSample, setConfigId, setTargetMW, setTargetMWh, setHotClimate, setContainersPerPcs, setRoadMode, setAutoRoadWrap, setRingMode, setPerimeterBand, setFencePlacement, setLaydownPct, setAugmentPct, setFuturePhaseUnits, setIslandAugUnits, setIslandAugEnd, adjustIslandBlocks, setSurfacingMode, setSurfacingDepthIn, setDeadSpaceTrim, setDcRouting, setTextureSetId, setGePcsColor, setShowGateModel, setShowFence3D, setShowFeederColors, setShowSatellite, loadSatellite, setShowTerrain, setLabelDistanceScaling, setShowSlopeHeatmap, setMaxGradePct, setShowContours, setContourIntervalFt, setShowGradingLimits, setGradingSlopeRatio, setExportContoursDxf, setExportCutFillShading, setShowGrounding, setGroundingXray, setGroundingRodSpacingFt, setExportGroundingDxf, setExportTrenchSectionsDxf, setExportSurfacingMesh, requestInspectTrench, requestOverview, setTitleBlock, setLgiaInputs, clearSite,
     eciLegend, setEciLegend,
     substation, placingSubstation, feeders, feederAssignments, feederMaterial,
@@ -3037,18 +3043,28 @@ export default function DesignControlPanel() {
                   other, instead of designing a single footprint in
                   isolation. */}
               <button
+                disabled={!!busyOverlay}
                 onClick={() => {
-                  chooseAllBoundaries();
-                  const err = useDesignStore.getState().error;
-                  if (err) toast.error(err);
-                  else {
-                    const n = useDesignStore.getState().siteAreas.length;
-                    toast.success(`Whole site loaded — ${n} areas`);
-                  }
+                  void (async () => {
+                    setBusyOverlay({ label: 'Loading all site areas…', frac: 0 });
+                    try {
+                      await chooseAllBoundariesWithProgress((frac, label) => {
+                        setBusyOverlay({ label, frac });
+                      });
+                      const err = useDesignStore.getState().error;
+                      if (err) toast.error(err);
+                      else {
+                        const n = useDesignStore.getState().siteAreas.length;
+                        toast.success(`Whole site loaded — ${n} areas`);
+                      }
+                    } finally {
+                      setBusyOverlay(null);
+                    }
+                  })();
                 }}
-                className="w-full mb-2 py-2 rounded bg-cyan-600 hover:bg-cyan-500 text-xs font-semibold text-white transition-colors"
+                className="w-full mb-2 py-2 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-xs font-semibold text-white transition-colors"
               >
-                Show all {boundaryPicker.options.length} areas as one site
+                {busyOverlay ? 'Loading…' : `Show all ${boundaryPicker.options.length} areas as one site`}
               </button>
               <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1.5">
                 or design a single area

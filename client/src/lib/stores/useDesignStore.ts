@@ -3699,6 +3699,8 @@ interface DesignState {
   /** True while the offline renderer is stepping frames (boosts render dpr). */
   offlineRenderActive: boolean;
   isLoading: boolean;
+  // Full-viewport busy overlay (Show-all / scan Apply) — label + optional progress.
+  busyOverlay: { label: string; frac?: number } | null;
   // True while the design worker is recomputing the layout off the main
   // thread (drives the subtle busy indicator in the preview).
   computing: boolean;
@@ -3766,11 +3768,18 @@ interface DesignState {
   // Import EVERY outline in the picker as one multi-area site (all footprints
   // in one shared frame, one layout each) instead of picking a single parcel.
   chooseAllBoundaries: () => void;
+  // Same as chooseAllBoundaries, but regenerates each area with paint yields
+  // so a busy overlay can report progress (Show-all loading screen).
+  chooseAllBoundariesWithProgress: (
+    onProgress: (frac: number, label: string) => void,
+  ) => Promise<void>;
+  setBusyOverlay: (next: { label: string; frac?: number } | null) => void;
   // Switch which area the drafter edits; mirrors that area into boundary/design.
   setActiveArea: (id: string) => void;
   // Lay out every area of a multi-area site. `only` regenerates a single area
   // and leaves every already-laid-out neighbour exactly as it is.
-  regenerateAreas: (opts?: { only?: string }) => void;
+  // `skipFeederRecompute` defers MV routing (used when phasing one area at a time).
+  regenerateAreas: (opts?: { only?: string; skipFeederRecompute?: boolean }) => void;
   cancelBoundaryPicker: () => void;
   setConfigId: (id: string) => void;
   setTargetMW: (mw: number) => void;
@@ -4718,6 +4727,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   titleBlock: defaultTitleBlock(),
   lgiaInputs: { ...DEFAULT_LGIA_INPUTS },
   isLoading: false,
+  busyOverlay: null,
   computing: false,
   error: null,
   inspectTrenchRequest: 0,
@@ -4882,9 +4892,21 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   // the active editing target and is mirrored into boundary/design, which is
   // what every existing single-area code path already reads.
   chooseAllBoundaries: () => {
+    void get().chooseAllBoundariesWithProgress(() => {});
+  },
+
+  chooseAllBoundariesWithProgress: async (onProgress) => {
     const picker = get().boundaryPicker;
     if (!picker) return;
+    const paint = () => new Promise<void>(r => {
+      const raf = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number;
+      raf(() => raf(() => r()));
+    });
     try {
+      onProgress(0.02, 'Reading site outlines…');
+      await paint();
       const boundaries = parseKmlAreas(
         picker.kmlText,
         picker.sourceName,
@@ -4895,22 +4917,36 @@ export const useDesignStore = create<DesignState>((set, get) => ({
         name: b.name,
         kind: inferAreaKind(b.name),
         design: null,
-      boundary: b,
+        boundary: b,
       }));
       const active = areas.find(a => a.kind === 'bess') ?? areas[0];
-      // Everything else the KMZ draws (roads, DC yards, equipment outlines,
-      // easements, monuments, CAD text) captured in the SAME shared frame the
-      // areas were projected into, so it registers with them exactly.
       const drawing = parseKmlDrawing(picker.kmlText, picker.sourceName, boundaries[0].origin);
-      // applyBoundary resets imagery/history/title block for the new site and
-      // regenerates the active area; regenerateAreas then fills in the rest.
+      onProgress(0.08, 'Preparing the active area…');
+      await paint();
+      // applyBoundary resets imagery/history/title block and regenerates the
+      // active area; keep satellite clear+reload for correct map registration.
       set({ siteAreas: areas, activeAreaId: active.id });
       const b = { ...active.boundary, name: picker.sourceName };
       get().applyBoundary(b);
       ++drawingEpoch;
       set({ drawing, drawingLayerVis: defaultDrawingLayerVis(drawing), showDrawing: true });
       void saveDrawing(drawing);
-      get().regenerateAreas();
+      // Surgical: build each area with yields so the busy overlay stays live.
+      // Active area was already laid out by applyBoundary → regenerate(); still
+      // run only-passes for every id so neighbour yards and heals stay consistent.
+      const ids = get().siteAreas.map(a => a.id);
+      const n = Math.max(1, ids.length);
+      for (let i = 0; i < ids.length; i++) {
+        const area = get().siteAreas.find(a => a.id === ids[i]);
+        const name = area?.name ?? `area ${i + 1}`;
+        onProgress(0.1 + 0.8 * (i / n), `Building “${name}” (${i + 1} of ${n})…`);
+        await paint();
+        get().regenerateAreas({ only: ids[i], skipFeederRecompute: true });
+      }
+      onProgress(0.95, 'Routing feeders…');
+      await paint();
+      if (get().siteAreas.length >= 2) get().recomputeAllAreaFeeders();
+      onProgress(1, 'Done');
     } catch (e: any) {
       set({
         error: e?.message || 'Failed to load the site areas',
@@ -4921,10 +4957,12 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     }
   },
 
+  setBusyOverlay: (next) => set({ busyOverlay: next }),
+
   // Lay out every area of a multi-area site. Substation footprints get a
   // fence and lot line but no BESS blocks; a single infeasible area records
   // its own error instead of failing the whole site.
-  regenerateAreas: (opts?: { only?: string }) => {
+  regenerateAreas: (opts?: { only?: string; skipFeederRecompute?: boolean }) => {
     const s = get();
     const { activeAreaId, configId, targetMW, targetMWh } = s;
     // Start from the committed list so an in-progress edit on the active area
@@ -4982,9 +5020,10 @@ export const useDesignStore = create<DesignState>((set, get) => ({
                 .filter(p => (p as { source?: string }).source === 'trace')))
         : undefined;
     const next = siteAreas.map(area => {
-      // Targeted regeneration: every other area keeps the layout it already
-      // has, so editing one footprint cannot disturb its neighbours.
-      if (opts?.only && area.id !== opts.only && area.design) return area;
+      // Targeted regeneration: leave every other area untouched (including
+      // ones that still have design: null — the async Show-all path builds
+      // those in their own only-pass).
+      if (opts?.only && area.id !== opts.only) return area;
       const ed = areaEditsToState(area.edits);
       // Substation footprints get civil works — fence, perimeter road and a
       // gate — plus one collector feeder position per BESS area they collect.
@@ -5113,7 +5152,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     // routed here — otherwise every area keeps the routes from the PREVIOUS
     // layout (or none at all), and compliance/permit exports describe
     // trenches that no longer exist.
-    if (next.length >= 2) get().recomputeAllAreaFeeders();
+    if (next.length >= 2 && !opts?.skipFeederRecompute) get().recomputeAllAreaFeeders();
   },
 
   setActiveArea: (id: string) => {
