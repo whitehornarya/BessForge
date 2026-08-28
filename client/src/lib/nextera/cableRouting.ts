@@ -82,8 +82,8 @@ export function pcsCompartments(inv: PlacedEquipment): PcsCompartment[] {
   ];
 }
 
-// Yard bus offsets from each inverter row (ft). MV rides the PCS pad
-// centerline (face → center drop); LVAC/fiber stay outside the skid.
+// Vertical clearances of the yard buses above each inverter row (ft)
+const MV_BUS_OFF = 4;     // above inverter top, clears the aug-zone edge (+3)
 const LVAC_BUS_OFF = 5.5;
 const FIBER_BUS_OFF = 7;
 const TRENCH_WIDTH = 6;
@@ -2083,8 +2083,7 @@ export function generateCableRouting(
           .map(e => islToLocalEq(isl, e));
         if (!row.length) continue;
         const invTop = row[0].y + row[0].width / 2;
-        // MV trunk on the local PCS centerline (through the pad).
-        const mvY = row[0].y;
+        const mvY = invTop + MV_BUS_OFF;
         const fiberY = invTop + FIBER_BUS_OFF;
         const mvXs = row.map(i => i.x + mirrorOf(i) * (i.length / 2 - 1.2));
         const fbXs = row.map(i => i.x + mirrorOf(i) * (i.length / 2 - 4.0));
@@ -2330,7 +2329,7 @@ export function generateCableRouting(
   // Clamp the spine's bottom end inside the fence (concave parcels can put
   // the naive extent below the fence line at the spine x).
   {
-    const yCap = bottomRow[0].y;
+    const yCap = bottomRow[0].y + bottomRow[0].width / 2 + MV_BUS_OFF;
     let guard = 0;
     while (
       yBottom < yCap && guard < 300 &&
@@ -2374,10 +2373,8 @@ export function generateCableRouting(
   );
   // MV and fiber both terminate at the PCS aux/MV face. Horizontal layouts
   // retain their legacy world-axis points below; traced vertical columns must
-  // rotate that same local-frame face and stub with the drawn PCS.
-  // MV stubs go face → pad centerline (negative half-width busOffset);
-  // fiber stubs remain outward. The traced-only membership guard above keeps
-  // auto output byte-identical for non-traced yards.
+  // rotate that same local-frame face and outward stub with the drawn PCS.
+  // The traced-only membership guard above keeps auto output byte-identical.
   const pcsAuxTap = (inv: PlacedEquipment, endOffset: number, busOffset: number): [Pt, Pt] => {
     const m = mirrorOf(inv);
     const f = inv.doorEnd ?? -1;
@@ -2392,8 +2389,7 @@ export function generateCableRouting(
   };
   invRows.forEach((row, r) => {
     const invTop = row[0].y + row[0].width / 2;
-    // MV feeder trunk bisects the PCS pads; drops run face → centerline.
-    const mvY = row[0].y;
+    const mvY = invTop + MV_BUS_OFF;
     const lvacY = invTop + LVAC_BUS_OFF;
     const fiberY = invTop + FIBER_BUS_OFF;
     // Traced columns carry their 480V on corridors running ALONG each column
@@ -2523,8 +2519,7 @@ export function generateCableRouting(
         !b.inv.augmented &&
         !b.inv.future)
       .map(b => {
-        // Negative half-width stub: connection face → pad centerline.
-        const [tap, out] = pcsAuxTap(b.inv, 1.2, -(b.inv.width / 2));
+        const [tap, out] = pcsAuxTap(b.inv, 1.2, MV_BUS_OFF);
         const normalized = ((b.inv.rotation % Math.PI) + Math.PI) % Math.PI;
         // Group only numerically identical row orientations (microradian
         // tolerance), but keep the full-precision representative angle for
@@ -3204,7 +3199,7 @@ export function generateCableRouting(
   }
 
   // ---- spine verticals ---------------------------------------------------------
-  const topMvY = topRow[0].y;
+  const topMvY = topRow[0].y + topRow[0].width / 2 + MV_BUS_OFF;
   const topLvacY = topRow[0].y + topRow[0].width / 2 + LVAC_BUS_OFF;
 
   // On concave parcels the spine x can sit in a notch outside the fence at
