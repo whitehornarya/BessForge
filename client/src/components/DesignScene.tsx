@@ -6205,25 +6205,33 @@ function OrthoPoseCamera() {
 
 // Keyboard pan for orbit / plan views. WASD always pans; arrow keys pan only
 // when placement / selection nudge is not claiming them.
+// Hard clamps for OrbitControls / dolly (wide enough for whole-site framing).
 const ORTHO_ZOOM_MIN = 0.01;
 const ORTHO_ZOOM_MAX = 50;
 const PERSPECTIVE_DIST_MIN = 50;
 const PERSPECTIVE_DIST_MAX = 40000;
+// Practical range for the zoom-bar % readout (most of the slider is usable).
+const BAR_ORTHO_MIN = 0.05;
+const BAR_ORTHO_MAX = 20;
+const BAR_DIST_MIN = 80;
+const BAR_DIST_MAX = 12000;
+// Multiplicative step matching OrbitControls-style wheel dolly (~15% per click).
+const ZOOM_DOLLY_FACTOR = 0.85;
 
 function cameraZoomNorm(camera: THREE.Camera, controls: { target: THREE.Vector3 } | null): number {
   const ortho = camera as THREE.OrthographicCamera;
   if (ortho.isOrthographicCamera) {
-    const z = Math.min(ORTHO_ZOOM_MAX, Math.max(ORTHO_ZOOM_MIN, ortho.zoom || ORTHO_ZOOM_MIN));
-    return (Math.log(z) - Math.log(ORTHO_ZOOM_MIN)) / (Math.log(ORTHO_ZOOM_MAX) - Math.log(ORTHO_ZOOM_MIN));
+    const z = Math.min(BAR_ORTHO_MAX, Math.max(BAR_ORTHO_MIN, ortho.zoom || BAR_ORTHO_MIN));
+    return (Math.log(z) - Math.log(BAR_ORTHO_MIN)) / (Math.log(BAR_ORTHO_MAX) - Math.log(BAR_ORTHO_MIN));
   }
   if (!controls) return 0.5;
   const dist = Math.min(
-    PERSPECTIVE_DIST_MAX,
-    Math.max(PERSPECTIVE_DIST_MIN, camera.position.distanceTo(controls.target) || PERSPECTIVE_DIST_MIN),
+    BAR_DIST_MAX,
+    Math.max(BAR_DIST_MIN, camera.position.distanceTo(controls.target) || BAR_DIST_MIN),
   );
   // Closer = more zoomed in.
-  return 1 - (Math.log(dist) - Math.log(PERSPECTIVE_DIST_MIN)) /
-    (Math.log(PERSPECTIVE_DIST_MAX) - Math.log(PERSPECTIVE_DIST_MIN));
+  return 1 - (Math.log(dist) - Math.log(BAR_DIST_MIN)) /
+    (Math.log(BAR_DIST_MAX) - Math.log(BAR_DIST_MIN));
 }
 
 function applyCameraZoomNorm(
@@ -6235,15 +6243,15 @@ function applyCameraZoomNorm(
   const n = Math.min(1, Math.max(0, norm));
   const ortho = camera as THREE.OrthographicCamera;
   if (ortho.isOrthographicCamera) {
-    ortho.zoom = Math.exp(
-      Math.log(ORTHO_ZOOM_MIN) + n * (Math.log(ORTHO_ZOOM_MAX) - Math.log(ORTHO_ZOOM_MIN)),
-    );
+    ortho.zoom = Math.min(ORTHO_ZOOM_MAX, Math.max(ORTHO_ZOOM_MIN, Math.exp(
+      Math.log(BAR_ORTHO_MIN) + n * (Math.log(BAR_ORTHO_MAX) - Math.log(BAR_ORTHO_MIN)),
+    )));
     ortho.updateProjectionMatrix();
   } else if (controls?.target) {
-    const dist = Math.exp(
-      Math.log(PERSPECTIVE_DIST_MIN) + (1 - n) *
-        (Math.log(PERSPECTIVE_DIST_MAX) - Math.log(PERSPECTIVE_DIST_MIN)),
-    );
+    const dist = Math.min(PERSPECTIVE_DIST_MAX, Math.max(PERSPECTIVE_DIST_MIN, Math.exp(
+      Math.log(BAR_DIST_MIN) + (1 - n) *
+        (Math.log(BAR_DIST_MAX) - Math.log(BAR_DIST_MIN)),
+    )));
     const dir = camera.position.clone().sub(controls.target);
     if (dir.lengthSq() < 1e-8) dir.set(0, 1, 0.9);
     dir.normalize().multiplyScalar(dist);
@@ -6253,52 +6261,59 @@ function applyCameraZoomNorm(
   invalidate();
 }
 
+/** zoomIn: true → closer / higher ortho zoom (wheel-in). */
+function bumpCameraZoom(
+  camera: THREE.Camera,
+  controls: any,
+  zoomIn: boolean,
+  invalidate: () => void,
+) {
+  // Perspective: zoom in shrinks distance. Ortho: zoom in raises camera.zoom.
+  const k = zoomIn ? ZOOM_DOLLY_FACTOR : 1 / ZOOM_DOLLY_FACTOR;
+  const ortho = camera as THREE.OrthographicCamera;
+  if (ortho.isOrthographicCamera) {
+    ortho.zoom = Math.min(ORTHO_ZOOM_MAX, Math.max(ORTHO_ZOOM_MIN, ortho.zoom / k));
+    ortho.updateProjectionMatrix();
+  } else if (controls?.target) {
+    const dist = camera.position.distanceTo(controls.target) || BAR_DIST_MIN;
+    const next = Math.min(PERSPECTIVE_DIST_MAX, Math.max(PERSPECTIVE_DIST_MIN, dist * k));
+    const dir = camera.position.clone().sub(controls.target);
+    if (dir.lengthSq() < 1e-8) dir.set(0, 1, 0.9);
+    dir.normalize().multiplyScalar(next);
+    camera.position.copy(controls.target).add(dir);
+  }
+  controls?.update?.();
+  invalidate();
+}
+
 type CameraZoomNavApi = {
   getNorm: () => number;
   setNorm: (n: number) => void;
-  bump: (delta: number) => void;
+  /** +1 = zoom in, −1 = zoom out (multiplicative). */
+  bump: (dir: 1 | -1) => void;
 };
 
+// Registers dolly API for the HTML zoom bar. Deliberately does NOT push React
+// state into DesignScene — that caused wheel-zoom hitching (every dolly tick
+// re-rendered the whole scene shell). The HUD polls getNorm on its own.
 function CameraZoomBridge({
   apiRef,
-  onNormChange,
 }: {
   apiRef: MutableRefObject<CameraZoomNavApi | null>;
-  onNormChange: (n: number) => void;
 }) {
   const camera = useThree(s => s.camera);
   const controls = useThree(s => s.controls) as any;
   const invalidate = useThree(s => s.invalidate);
-  const last = useRef(-1);
 
   useEffect(() => {
     apiRef.current = {
       getNorm: () => cameraZoomNorm(camera, controls),
-      setNorm: (n) => {
-        applyCameraZoomNorm(camera, controls, n, invalidate);
-        const v = cameraZoomNorm(camera, controls);
-        last.current = v;
-        onNormChange(v);
-      },
-      bump: (delta) => {
-        const next = cameraZoomNorm(camera, controls) + delta;
-        applyCameraZoomNorm(camera, controls, next, invalidate);
-        const v = cameraZoomNorm(camera, controls);
-        last.current = v;
-        onNormChange(v);
-      },
+      setNorm: (n) => applyCameraZoomNorm(camera, controls, n, invalidate),
+      bump: (dir) => bumpCameraZoom(camera, controls, dir > 0, invalidate),
     };
     return () => { apiRef.current = null; };
-  }, [apiRef, camera, controls, invalidate, onNormChange]);
+  }, [apiRef, camera, controls, invalidate]);
 
-  useFrame(() => {
-    if (!controls) return;
-    const v = cameraZoomNorm(camera, controls);
-    if (Math.abs(v - last.current) > 0.002) {
-      last.current = v;
-      onNormChange(v);
-    }
-  });
   return null;
 }
 
@@ -6398,19 +6413,38 @@ function CameraKeyPan({
   return null;
 }
 
+// Own local % state + rAF poll of the canvas API — never setState on DesignScene.
 function ZoomBarHud({
   visible,
-  norm,
-  onNorm,
-  onBump,
+  apiRef,
 }: {
   visible: boolean;
-  norm: number;
-  onNorm: (n: number) => void;
-  onBump: (delta: number) => void;
+  apiRef: MutableRefObject<CameraZoomNavApi | null>;
 }) {
+  const [pct, setPct] = useState(50);
+
+  useEffect(() => {
+    if (!visible) return;
+    let raf = 0;
+    let lastPct = -1;
+    let lastT = 0;
+    const tick = (t: number) => {
+      raf = requestAnimationFrame(tick);
+      if (t - lastT < 50) return; // throttle HUD updates; wheel stays on invalidate only
+      lastT = t;
+      const n = apiRef.current?.getNorm();
+      if (n == null || !Number.isFinite(n)) return;
+      const p = Math.round(Math.min(100, Math.max(0, n * 100)));
+      if (p !== lastPct) {
+        lastPct = p;
+        setPct(p);
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [visible, apiRef]);
+
   if (!visible) return null;
-  const pct = Math.round(Math.min(100, Math.max(0, norm * 100)));
   return (
     <div
       className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 pointer-events-auto bg-slate-900/85 border border-slate-600 rounded shadow px-2 py-1.5"
@@ -6420,7 +6454,11 @@ function ZoomBarHud({
       <button
         type="button"
         aria-label="Zoom out"
-        onClick={() => onBump(-0.06)}
+        onClick={() => {
+          apiRef.current?.bump(-1);
+          const n = apiRef.current?.getNorm();
+          if (n != null) setPct(Math.round(Math.min(100, Math.max(0, n * 100))));
+        }}
         className="w-7 h-7 rounded bg-slate-800 text-slate-100 text-base font-semibold border border-slate-600 hover:bg-slate-700 leading-none"
       >
         −
@@ -6432,13 +6470,21 @@ function ZoomBarHud({
         step={1}
         value={pct}
         aria-label="Zoom level"
-        onChange={e => onNorm(Number(e.target.value) / 100)}
+        onChange={e => {
+          const n = Number(e.target.value) / 100;
+          setPct(Number(e.target.value));
+          apiRef.current?.setNorm(n);
+        }}
         className="w-40 h-2 accent-cyan-500 cursor-pointer"
       />
       <button
         type="button"
         aria-label="Zoom in"
-        onClick={() => onBump(0.06)}
+        onClick={() => {
+          apiRef.current?.bump(1);
+          const n = apiRef.current?.getNorm();
+          if (n != null) setPct(Math.round(Math.min(100, Math.max(0, n * 100))));
+        }}
         className="w-7 h-7 rounded bg-slate-800 text-slate-100 text-base font-semibold border border-slate-600 hover:bg-slate-700 leading-none"
       >
         +
@@ -7089,9 +7135,7 @@ export default function DesignScene() {
   const setWalkMode = useDesignStore(s => s.setWalkMode);
   // Live placement claims arrow keys for nudge; WASD still pans the camera.
   const placementActive = useDesignStore(s => !!s.placement);
-  const [zoomNorm, setZoomNorm] = useState(0.5);
   const zoomApiRef = useRef<CameraZoomNavApi | null>(null);
-  const onZoomNormChange = useCallback((n: number) => setZoomNorm(n), []);
   const showSatellite = useDesignStore(s => s.showSatellite);
   const satelliteStatus = useDesignStore(s => s.satelliteStatus);
   const satelliteError = useDesignStore(s => s.satelliteError);
@@ -8009,9 +8053,7 @@ export default function DesignScene() {
       )}
       <ZoomBarHud
         visible={!walkMode && !tourActive && glFailure === null && glProbeOk}
-        norm={zoomNorm}
-        onNorm={n => zoomApiRef.current?.setNorm(n)}
-        onBump={d => zoomApiRef.current?.bump(d)}
+        apiRef={zoomApiRef}
       />
       {computing && (
         <div className="absolute bottom-3 right-3 z-10 bg-slate-900/85 text-slate-100 text-xs px-3 py-1.5 rounded shadow flex items-center gap-2">
@@ -8201,7 +8243,7 @@ export default function DesignScene() {
           />
         )}
         {!walkMode && !tourActive && (
-          <CameraZoomBridge apiRef={zoomApiRef} onNormChange={onZoomNormChange} />
+          <CameraZoomBridge apiRef={zoomApiRef} />
         )}
         {viewMode === '3d' && !walkMode && !tourActive && SHOW_YARD_AUX_TRENCH && design?.trench && <TrenchFlyCamera trench={design.trench} />}
         {viewMode === '3d' && !walkMode && !tourActive && design && <OverviewFlyCamera bounds={bounds} />}
