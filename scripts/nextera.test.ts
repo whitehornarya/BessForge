@@ -39726,6 +39726,79 @@ sys.exit(0)
     }
   }
 
+  // Scan QTY3 PCS yaw is mod-180° ambiguous; canonicalize 0/180 from the
+  // container world side (placeMirroredPair) so DC leaves local bottom-left.
+  console.log('\n[scan-pcs-dc] traced QTY3 PCS yaw + local-left DC exits');
+  {
+    const { normalizeTracedEquipmentAdds } = await import('../client/src/lib/stores/useDesignStore');
+    const cfg = getConfiguration('ge-aux-400');
+    const add = (
+      kind: 'inverter' | 'bess',
+      cx: number, cy: number, rotationDeg: number,
+    ) => ({
+      kind, augmented: false,
+      pose: { cx, cy, rotationDeg, lengthFt: kind === 'inverter' ? 20 : 23.5, widthFt: kind === 'inverter' ? 8 : 8.4 },
+    });
+    // Drawing fit inverted vs auto: north row snapped to 180, south to 0.
+    const raw = [
+      add('inverter', 0, 200, 180),
+      add('bess', -10, 170, 90), add('bess', 10, 170, 90), add('bess', 0, 185, 0),
+      add('inverter', 0, 0, 0),
+      add('bess', -10, 30, 90), add('bess', 10, 30, 90), add('bess', 0, 15, 0),
+    ];
+    const norm = normalizeTracedEquipmentAdds(raw, cfg, false);
+    const north = norm[0], south = norm[4];
+    check('[scan-pcs-dc] north-row PCS (containers south) canonical yaw is 0',
+      north.kind === 'inverter' && north.pose.rotationDeg === 0,
+      `got ${north.pose.rotationDeg}`);
+    check('[scan-pcs-dc] south-row PCS (containers north) canonical yaw is 180',
+      south.kind === 'inverter' && south.pose.rotationDeg === 180,
+      `got ${south.pose.rotationDeg}`);
+
+    const toEq = (id: string, a: typeof north): PlacedEquipment => {
+      const rad = (a.pose.rotationDeg * Math.PI) / 180;
+      const item: PlacedEquipment = {
+        id, kind: a.kind, label: id,
+        x: a.pose.cx, y: a.pose.cy, rotation: rad,
+        length: a.pose.lengthFt, width: a.pose.widthFt, height: 8,
+      };
+      if (a.kind === 'inverter') item.doorEnd = a.pose.rotationDeg === 180 ? 1 : -1;
+      return item;
+    };
+    const yard = norm.map((a, i) => toEq(`peq-${i}`, a));
+    const fenceDc = [
+      { x: -200, y: -200 }, { x: 200, y: -200 }, { x: 200, y: 400 }, { x: -200, y: 400 }];
+    const routed = generateCableRouting(yard, [], fenceDc);
+    const firstDc = (invId: string) => {
+      const runs = routed.cables.filter(c => c.class === 'DC' && c.pts.length);
+      const inv = yard.find(e => e.id === invId)!;
+      const near = runs.filter(c =>
+        Math.hypot(c.pts[0].x - inv.x, c.pts[0].y - inv.y) < inv.length);
+      return near.map(c => c.pts[0]);
+    };
+    const northEx = firstDc('peq-0');
+    const southEx = firstDc('peq-4');
+    const northFace = north.pose.cy - north.pose.widthFt / 2;
+    const southFace = south.pose.cy + south.pose.widthFt / 2;
+    check('[scan-pcs-dc] north DC exits at local bottom-left (west of PCS, south face)',
+      northEx.length > 0 && northEx.every(p => p.x < north.pose.cx - 2 && Math.abs(p.y - northFace) < 1.5),
+      northEx.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '));
+    check('[scan-pcs-dc] south DC exits at local bottom-left (east of PCS, north face)',
+      southEx.length > 0 && southEx.every(p => p.x > south.pose.cx + 2 && Math.abs(p.y - southFace) < 1.5),
+      southEx.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '));
+
+    const vert = normalizeTracedEquipmentAdds([
+      add('inverter', 0, 0, 90),
+      add('bess', 30, -10, 0), add('bess', 30, 10, 0), add('bess', 15, 0, 90),
+      add('inverter', 80, 0, 90),
+      add('bess', 50, -10, 0), add('bess', 50, 10, 0), add('bess', 65, 0, 90),
+    ], cfg, false);
+    check('[scan-pcs-dc] vertical west-row PCS (containers east) stays 90',
+      vert[0].pose.rotationDeg === 90, `got ${vert[0].pose.rotationDeg}`);
+    check('[scan-pcs-dc] vertical east-row PCS (containers west) is 270',
+      vert[4].pose.rotationDeg === 270, `got ${vert[4].pose.rotationDeg}`);
+  }
+
   // ---- [854] Traced-yard LVAC feeds: corridor first, source on shared spine --
   // Traced aux transformers / switch panels feed the shared yard spine; each
   // container branches from the accepted row/column corridor instead of
