@@ -21,6 +21,7 @@ import { configureGroundTexture } from '../lib/groundTexture';
 import { SatelliteImage, satelliteLocalRect, siteGroundExtent } from '../lib/nextera/satellite';
 import { TrenchChannel, GateModel, FencePanels, FeederTrenchChannels, CableTrenchChannels, feederCutStencil, trenchClipPlanes, TRENCH_DEPTH_FT, IslandAlignmentIndicators } from './YardExtras';
 import { feederCorridorInfo, feederCorridorRejectReason } from '../lib/nextera/feeders';
+import { SHOW_YARD_AUX_TRENCH } from '../lib/nextera/feederKeepouts';
 import { feederDisplayName } from '../lib/nextera/feederNaming';
 import { feederColor, feederTintByInverterId, AUX_FEEDER_COLOR } from '../lib/nextera/feederColors';
 import { patchMaterialWithFeederTint, makeFeederTintAttribute } from '../lib/feederTint';
@@ -2641,7 +2642,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
 
   // Restore the cursor if the edit layer unmounts while an aisle is hovered
   useEffect(() => () => { document.body.style.cursor = ''; }, []);
-  const trench = design.trench;
+  const trench = SHOW_YARD_AUX_TRENCH ? design.trench : null;
   // Interior drive aisles, y-sorted so position i+1 matches the engine's
   // stable 1-based aisle index (aisle k runs between block rows k and k+1).
   // Guarded on the expected count so a future road shape can't mis-map.
@@ -5455,9 +5456,11 @@ function DesignContent({ design, editMode, realistic, is3D, cad, onDraggingChang
     });
   }, [drainageEnabled, drainageInputs, drainageIdf, fgSurface, terrainYard, design]);
   // Trench band clip (cuts the open excavation out of the ground plane)
+  // TEMP: yard aux spine hidden until placement is fixed (SHOW_YARD_AUX_TRENCH).
+  const yardAuxTrench = SHOW_YARD_AUX_TRENCH ? design.trench : null;
   const groundClip = useMemo(
-    () => (is3D && design.trench ? trenchClipPlanes(design.trench).outside : undefined),
-    [design.trench, is3D]
+    () => (is3D && yardAuxTrench ? trenchClipPlanes(yardAuxTrench).outside : undefined),
+    [yardAuxTrench, is3D]
   );
   // Ground plane extent. Multi-area sites span every footprint in the shared
   // projection frame, so the plane must cover them all — sizing from the
@@ -5661,17 +5664,17 @@ function DesignContent({ design, editMode, realistic, is3D, cad, onDraggingChang
 
       {/* Crushed-rock yard surfacing (under the roads); trench cut-through
           only applies in 3D (2D shows the flat blue trench band instead) */}
-      {!cad && design.surfacing && <SurfacingMesh surfacing={design.surfacing} trench={is3D ? design.trench : null} />}
+      {!cad && design.surfacing && <SurfacingMesh surfacing={design.surfacing} trench={is3D ? yardAuxTrench : null} />}
 
       {/* Connected road network (perimeter + aisles, filleted per sheet 10) */}
-      {!cad && design.roadNetwork && <RoadNetworkMesh road={design.roadNetwork} trench={is3D ? design.trench : null} />}
+      {!cad && design.roadNetwork && <RoadNetworkMesh road={design.roadNetwork} trench={is3D ? yardAuxTrench : null} />}
 
       {/* Road width + turning radius callouts, same anchors as the DXF */}
       {!cad && generatedLabelsVisible && drawingVisibility.dimensions && design.roadNetwork && <RoadCalloutLabels road={design.roadNetwork} />}
 
       {/* Entrance road */}
       {!cad && design.roads.map((rd, i) => (
-        <EntranceRoadMesh key={`r${i}`} rd={rd} trench={is3D ? design.trench : null} />
+        <EntranceRoadMesh key={`r${i}`} rd={rd} trench={is3D ? yardAuxTrench : null} />
       ))}
 
       {/* Reserved areas: construction laydown (yellow) + future BESS block
@@ -5799,17 +5802,18 @@ function DesignContent({ design, editMode, realistic, is3D, cad, onDraggingChang
       })()}
 
       {/* 480V aux + fiber trench: translucent blue surface band (plan color
-          code) over a real 3-ft-deep excavated channel with cable conductors */}
-      {!cad && design.trench && (
+          code) over a real 3-ft-deep excavated channel with cable conductors.
+          TEMP: gated by SHOW_YARD_AUX_TRENCH (misplaced scanned spine). */}
+      {!cad && yardAuxTrench && (
         <>
           <mesh
-            position={[design.trench.x, 0.15, -(design.trench.yBottom + design.trench.yTop) / 2]}
+            position={[yardAuxTrench.x, 0.15, -(yardAuxTrench.yBottom + yardAuxTrench.yTop) / 2]}
             rotation={[-Math.PI / 2, 0, 0]}
           >
-            <planeGeometry args={[design.trench.width, design.trench.yTop - design.trench.yBottom]} />
+            <planeGeometry args={[yardAuxTrench.width, yardAuxTrench.yTop - yardAuxTrench.yBottom]} />
             <meshStandardMaterial color="#1f3fbf" transparent opacity={0.25} depthWrite={false} />
           </mesh>
-          {is3D && <TrenchChannel trench={design.trench} />}
+          {is3D && <TrenchChannel trench={yardAuxTrench} />}
         </>
       )}
 
@@ -7930,7 +7934,7 @@ export default function DesignScene() {
           enableRotate={viewMode !== '2d'}
           maxPolarAngle={Math.PI / 2.05}
         />
-        {viewMode === '3d' && !walkMode && !tourActive && design?.trench && <TrenchFlyCamera trench={design.trench} />}
+        {viewMode === '3d' && !walkMode && !tourActive && SHOW_YARD_AUX_TRENCH && design?.trench && <TrenchFlyCamera trench={design.trench} />}
         {viewMode === '3d' && !walkMode && !tourActive && design && <OverviewFlyCamera bounds={bounds} />}
         {viewMode === '3d' && !walkMode && !tourActive && design && siteBoundsSig && (
           <SiteFitCamera sig={siteBoundsSig} bounds={bounds} />

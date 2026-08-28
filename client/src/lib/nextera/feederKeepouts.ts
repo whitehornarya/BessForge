@@ -25,6 +25,10 @@ export const FUTURE_ZONE_KEEPOUT_MARGIN_FT = 2;
 // band for grid reroutes (ft each side of the sanctioned crossing line).
 export const SPINE_CROSS_GAP_FT = 6;
 
+/** TEMP: misplaced scanned aux spine — set true when placement is fixed.
+ *  When false, yard `design.trench` is omitted from cross keepouts and the 3D scene. */
+export const SHOW_YARD_AUX_TRENCH = false;
+
 /** A trench band MV runs may cross perpendicular but never ride along.
  *  `axis` is the direction the trench RUNS ('y' = vertical band). */
 export interface CrossBand { rect: Rect; axis: 'x' | 'y'; }
@@ -173,8 +177,8 @@ export function feederKeepouts(design: SiteDesign): FeederKeepouts {
   }
 
   const t = design.trench;
-  if (t && Number.isFinite(t.x) && Number.isFinite(t.yBottom) && Number.isFinite(t.yTop) &&
-      Number.isFinite(t.width) && t.width > 0 && t.yTop > t.yBottom) {
+  if (SHOW_YARD_AUX_TRENCH && t && Number.isFinite(t.x) && Number.isFinite(t.yBottom) &&
+      Number.isFinite(t.yTop) && Number.isFinite(t.width) && t.width > 0 && t.yTop > t.yBottom) {
     const hw = t.width / 2 + M;
     cross.push({
       rect: { x1: t.x - hw, x2: t.x + hw, y1: t.yBottom, y2: t.yTop },
