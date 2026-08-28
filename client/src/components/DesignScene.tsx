@@ -5285,16 +5285,8 @@ function SiteAreasOverlay({ cad }: { cad?: boolean }) {
           const sub = a.kind === 'substation';
           return (
             <group key={a.id}>
-              {/* Lot line + fence, dimmed relative to the active area */}
+              {/* Lot line, dimmed relative to the active area */}
               <PolyLine pts={a.boundary.polygon} color={PROPERTY_LINE_DIM_HEX} y={0.55} />
-              {a.design && showSeparateFence(a.design) && (
-                <PolyLine
-                  pts={a.design.fence}
-                  color={sub ? '#d08a2c' : '#0a7d92'}
-                  y={0.55}
-                  lineWidth={2}
-                />
-              )}
               {/* Equipment footprints as flat plates: readable at site zoom
                   without paying for full 3D bodies on every area. */}
               {a.design?.equipment.map(eq => (
@@ -5570,12 +5562,9 @@ function DesignContent({ design, editMode, realistic, is3D, cad, onDraggingChang
           design. Reference only — never exported. */}
       <ImportedDrawingLayers />
 
-      {/* KMZ property-line fences present once in purple; inset/manual fences
-          retain their separate cyan line. */}
+      {/* KMZ / parcel property line (purple). The security fence is the
+          3D fence model when enabled — no separate cyan perimeter stroke. */}
       {!cad && <PolyLine pts={design.boundary.polygon} color={PROPERTY_LINE_HEX} y={0.6} />}
-      {!cad && showSeparateFence(design) && (
-        <PolyLine pts={design.fence} color="#00bbdd" y={0.6} lineWidth={3} />
-      )}
 
       {/* Every OTHER footprint of a multi-area site, drawn dimmer than the
           area being edited so the whole project reads as one site. */}
