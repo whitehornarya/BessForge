@@ -3408,10 +3408,13 @@ export function drawOneEquipment(dxf: DxfWriter, eq: PlacedEquipment, config?: B
         // hairline weight, gray shading as delivered (eciYardSymbolPolys —
         // shared with the in-app scene overlay).
         const yard = eciYardSymbolPolys(p);
+        // Hatch fills the outline annulus (outer + holes). Stroke ONLY the
+        // outer ring — stroking hole rings draws a near-rectangular grey box
+        // under the special shape (GLB annuli use a footprint-sized hole).
         const drawGroup = (polys: [number, number][][][], layer: string) => {
           for (const rings of polys) {
             dxf.addHatchLoops(rings, layer, 'SOLID');
-            for (const ring of rings) dxf.addPolyline(ring, layer, true);
+            if (rings[0]) dxf.addPolyline(rings[0], layer, true);
           }
         };
         const symbolProvenance: DisplayOpProvenance = {

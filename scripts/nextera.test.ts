@@ -5377,6 +5377,19 @@ async function main() {
       check(`[906] ${cfg906.id} delivered artwork resolves for every supported equipment kind`,
         wrongResolved906.length === 0, wrongResolved906.map(e => e.kind).join(','));
 
+      // Resolved glyphs must never ALSO emit the addRotatedRect neutral
+      // fallback (that would double-draw a footprint rectangle under the
+      // special outline). PCS/BESS are the fuzzy-PDF canaries.
+      const leakedFallback906 = equipment906
+        .filter(eq => resolved906.has(eq.kind))
+        .filter(eq => writer906.ops.some(op =>
+          op.provenance?.equipmentId === eq.id &&
+          op.provenance.role === 'neutral-equipment-outline' &&
+          op.provenance.symbolResolution === 'neutral-fallback'));
+      check(`[906] ${cfg906.id} resolved symbols never also emit addRotatedRect fallback`,
+        leakedFallback906.length === 0,
+        leakedFallback906.map(e => `${e.kind}:${e.id}`).join(','));
+
       const wrongFallback906 = equipment906
         .filter(eq => !resolved906.has(eq.kind))
         .filter(eq => !writer906.ops.some(op =>
