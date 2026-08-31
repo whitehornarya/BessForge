@@ -3682,14 +3682,12 @@ export function drawReservedZones(dxf: DxfWriter, design: SiteDesign) {
   // so sheets that draw equipment without reserved zones still carry them.
 }
 
-// Crushed-rock surfacing regions: WYSIWYG multi-loop GRAVEL crosshatch 1:1
-// from computed layout polygons (outer ring + equipment/reserved holes),
-// plus thin boundary outlines on the same layer for CAD picking. Drawn
-// before roads/equipment so everything else reads on top.
-// Crushed-rock surfacing regions. The full-area GRAVEL cross-hatch ("X
-// ground mesh") is OFF by default per drafter direction — the only ground
-// mesh on the plot should be the future-augmentation ANSI37 areas. Passing
-// mesh=true restores the legacy full-area hatch byte-identically.
+// Crushed-rock surfacing regions. Outer courtyard boundary is stroked on
+// GRAVEL for CAD picking. Equipment/reserve/entrance-road pad cutouts are
+// holes in the fill only — they are NOT stroked (those light-gray rects
+// read as a second "shell" under delivered equipment symbols). The full-area
+// GRAVEL cross-hatch ("X ground mesh") is OFF by default per drafter
+// direction; mesh=true restores it and still uses holes for even-odd fill.
 export function drawSurfacing(dxf: DxfWriter, design: SiteDesign, mesh = false) {
   if (!design.surfacing) return;
   for (const region of design.surfacing.regions) {
@@ -3697,7 +3695,6 @@ export function drawSurfacing(dxf: DxfWriter, design: SiteDesign, mesh = false) 
     const holes = region.holes.map(h => h.map(p => [p.x, p.y]));
     if (mesh) dxf.addHatchLoops([outer, ...holes], LAYERS.GRAVEL, 'GRAVEL');
     dxf.addPolyline(outer, LAYERS.GRAVEL, true);
-    for (const h of holes) dxf.addPolyline(h, LAYERS.GRAVEL, true);
   }
 }
 
