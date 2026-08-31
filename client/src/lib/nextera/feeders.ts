@@ -14,7 +14,7 @@
 // Simple resistance-based voltage-drop model (NEC Ch.9 Table 8 DC resistance).
 // ALL COORDINATES IN FEET, local site frame.
 
-import { Pt, SiteDesign, PlacedEquipment, AuxFeederCircuit, TakeoffDirection, takeoffVector } from './types';
+import { Pt, SiteDesign, PlacedEquipment, AuxFeederCircuit, TakeoffDirection, takeoffVector, CableRun } from './types';
 import { rerouteOrthogonal, offsetOrthogonal, Rect } from './cableRouting';
 import {
   nearestRoadCenter, offsetRoadPolyline, orthogonalizeRoadPolyline,
@@ -325,6 +325,34 @@ export function equipmentRect(e: PlacedEquipment, margin: number): Rect {
   const hx = (rot ? e.width : e.length) / 2 + margin;
   const hy = (rot ? e.length : e.width) / 2 + margin;
   return { x1: e.x - hx, x2: e.x + hx, y1: e.y - hy, y2: e.y + hy };
+}
+
+// Yard cables that occupy the PCS–container fan (DC pairs and CATL rings)
+// are hard keep-outs for MV home runs. MV class is excluded: those polylines
+// ARE the feeder taps/collector the circuit is joining. LVAC/fiber live in
+// crossing-only trench bands already. Chain hops do not use this set — they
+// are allowed under their own PCS pads.
+const CABLE_KEEPOUT_CLASSES = new Set(['DC', 'CATL']);
+const CABLE_KEEPOUT_HALF_FT = 1.5;
+
+export function cableKeepoutRects(cables: CableRun[] | undefined): Rect[] {
+  if (!cables?.length) return [];
+  const out: Rect[] = [];
+  for (const c of cables) {
+    if (c.ref || !CABLE_KEEPOUT_CLASSES.has(c.class) || !c.pts || c.pts.length < 2) continue;
+    for (let i = 0; i < c.pts.length - 1; i++) {
+      const a = c.pts[i], b = c.pts[i + 1];
+      if (!Number.isFinite(a.x) || !Number.isFinite(a.y) ||
+          !Number.isFinite(b.x) || !Number.isFinite(b.y)) continue;
+      const x1 = Math.min(a.x, b.x) - CABLE_KEEPOUT_HALF_FT;
+      const x2 = Math.max(a.x, b.x) + CABLE_KEEPOUT_HALF_FT;
+      const y1 = Math.min(a.y, b.y) - CABLE_KEEPOUT_HALF_FT;
+      const y2 = Math.max(a.y, b.y) + CABLE_KEEPOUT_HALF_FT;
+      if (x2 - x1 < 1e-6 || y2 - y1 < 1e-6) continue;
+      out.push({ x1, y1, x2, y2 });
+    }
+  }
+  return out;
 }
 
 // Does an orthogonal polyline pass through any obstacle rect? Exact
@@ -1241,6 +1269,7 @@ export function generateFeeders(
       ...foreignObstacles,
     ];
   };
+  const cableObs = cableKeepoutRects(design.cables);
   // Cross-area routing needs room for the detour around every foreign fence,
   // so those corners join the bounds. Empty => single-area bounds unchanged.
   const bounds = routingBounds(design, substation,
@@ -1847,6 +1876,7 @@ export function generateFeeders(
     // shift off it); perpendicular bands stay legal to cross.
     const startPt = feederNodeOf(last);
     const obs = autoObs(obstaclesExcept(last.id)).concat(
+      cableObs,
       parallelCrossRects(crossBands, horizApproach ? 'x' : 'y'),
       gateObsFrom(startPt));
     return (c: number): boolean => {
@@ -2129,7 +2159,7 @@ export function generateFeeders(
     // exit coordinate (northmost exit rides the northmost lane), so home
     // runs nest like a comb instead of crossing.
     const spread = spreadOf(laneRankOf[gi]);
-    const homeObstacles = obstaclesExcept(last.id);
+    const homeObstacles = obstaclesExcept(last.id).concat(cableObs);
     // AUTOMATIC routing adds the trench keep-outs and gate-entrance windows.
     // Drafter-drawn overrides validate against the base set only (WYSIWYG —
     // a trench conflict on a drawn route warns after routing, never rejects).
@@ -2777,7 +2807,7 @@ export function generateFeeders(
       if (seg && badK >= 0) {
         const start = seg.pts[0], end = seg.pts[seg.pts.length - 1];
         const obs = autoObs(obstaclesExcept(c.inverterIds[c.inverterIds.length - 1]))
-          .concat(gateObsFrom(start));
+          .concat(gateObsFrom(start), cableObs);
         // Trench-band discipline must not REGRESS while re-laying: a
         // candidate may never co-run the crossable spine more than the
         // route it replaces already does.
@@ -2954,7 +2984,7 @@ export function generateFeeders(
       if (!seg || seg.pts.length < 4) continue;
       const start = seg.pts[0], end = seg.pts[seg.pts.length - 1];
       const obs = autoObs(obstaclesExcept(c.inverterIds[c.inverterIds.length - 1]))
-        .concat(gateObsFrom(start));
+        .concat(gateObsFrom(start), cableObs);
       const curCoRun = bandCoRunViolations(seg.pts, crossBands);
       const curCross = crossCountVs(seg.pts, gi);
       const accept = (cand: Pt[]): boolean => {
@@ -3130,7 +3160,7 @@ export function generateFeeders(
           });
         }
       }
-      const actualObs = autoObs(obstaclesExcept(pre[gi].launch.id)).concat(gateObsFrom(start));
+      const actualObs = autoObs(obstaclesExcept(pre[gi].launch.id)).concat(gateObsFrom(start), cableObs);
       const targets: { target: Pt; tail: Pt[] }[] = [
         { target: exitPt, tail: [laneJoin, waypoint, ...entry] },
         { target: laneJoin, tail: [waypoint, ...entry] },
@@ -3407,7 +3437,7 @@ export function generateFeeders(
       if (!forced && finalAutoHome?.pts.length >= 4) {
         const start = finalAutoHome.pts[0];
         const end = finalAutoHome.pts[finalAutoHome.pts.length - 1];
-        const obs = autoObs(obstaclesExcept(p.launch.id)).concat(gateObsFrom(start));
+        const obs = autoObs(obstaclesExcept(p.launch.id)).concat(gateObsFrom(start), cableObs);
         const crossingCount = (pts: Pt[]): number => {
           let n = 0;
           for (let oi = 0; oi < circuits.length; oi++) {
@@ -3479,7 +3509,7 @@ export function generateFeeders(
         }
         if (!forced) {
           const start = home.pts[0];
-          const obs = autoObs(obstaclesExcept(p.launch.id)).concat(gateObsFrom(start));
+          const obs = autoObs(obstaclesExcept(p.launch.id)).concat(gateObsFrom(start), cableObs);
           if (customRouteCrossesObstacle(home.pts, obs, start, substation)) {
             rejected[gi].add('home run conflicts with equipment, a reserve, or the site entrance');
           }

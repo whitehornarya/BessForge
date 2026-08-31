@@ -114,6 +114,7 @@ import {
   MV_VOLTAGE,
   MAX_INVERTERS_PER_FEEDER,
   equipmentRect,
+  cableKeepoutRects,
   feederCrossesObstacle,
   feederCorridorInfo,
   feederCorridorRejectReason,
@@ -260,6 +261,11 @@ async function loadBigIronAreas(): Promise<ReturnType<typeof parseKmlAreas>> {
 
 function runScanFeederPathingTests() {
   console.log('\n[scan-feeder] under-PCS hops + road home run');
+  check('cable keepouts: DC/CATL inflate, MV drops are ignored',
+    cableKeepoutRects([{ id: 'dc', class: 'DC', pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }]).length === 1 &&
+    cableKeepoutRects([{ id: 'catl', class: 'CATL', pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }]).length === 1 &&
+    cableKeepoutRects([{ id: 'mv', class: 'MV', pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }]).length === 0 &&
+    cableKeepoutRects([{ id: 'ref', class: 'DC', ref: true, pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }]).length === 0);
   const scanPcs = Array.from({ length: 14 }, (_, i) => ({
     id: `inv-scan-${i}`,
     kind: 'inverter' as const,
@@ -345,6 +351,31 @@ function runScanFeederPathingTests() {
     !!west && !!east &&
     !homeUnderForeign(westHome, east.inverterIds) &&
     !homeUnderForeign(eastHome, west.inverterIds));
+
+  const dcFan = {
+    id: 'dc-fan-keepout',
+    class: 'DC' as const,
+    pts: [{ x: -20, y: 52 }, { x: 620, y: 52 }],
+  };
+  const roadNorth = rectRoadNetwork(-60, 100, 740, 156);
+  const withDc = generateFeeders({
+    ...scanDesign,
+    cables: [...scanDrops.cables, dcFan],
+    roadNetwork: roadNorth,
+  }, { x: 700, y: 128 }, 4);
+  const westDc = withDc.find(f => f.inverterIds.includes('inv-scan-0'));
+  const westDcHome = westDc?.segments[westDc.segments.length - 1]?.pts ?? [];
+  const ridesDcFan = westDcHome.some((p, i) => {
+    if (i === 0) return false;
+    const a = westDcHome[i - 1];
+    const yLo = Math.min(a.y, p.y), yHi = Math.max(a.y, p.y);
+    const xLo = Math.min(a.x, p.x), xHi = Math.max(a.x, p.x);
+    return yLo < 53.5 && yHi > 50.5 && xHi > 0 && xLo < 600;
+  });
+  check('scan home run: does not ride the DC fan between PCS and containers',
+    !!westDc && !ridesDcFan,
+    `valid=${westDc?.routeValid} ` +
+    westDcHome.map(p => `(${p.x.toFixed(0)},${p.y.toFixed(0)})`).join(' '));
 
   const autoPcs = scanPcs.map(({ traceSourcePose: _pose, ...e }) => e);
   const autoDrops = generateCableRouting(autoPcs as never, [], scanFence);
