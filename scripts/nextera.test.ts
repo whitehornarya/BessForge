@@ -3526,6 +3526,71 @@ async function main() {
         check('[feeder-road] auto-island home runs do not cross each other',
           yardCross === 0 && yardFeeders.every(f => f.routeValid !== false),
           `cross=${yardCross} valid=${yardFeeders.map(f => f.routeValid).join(',')}`);
+
+        // Two pads side by side: the east feeder must not ride the west
+        // PCS–battery courtyard (08 through 06).
+        const westPcs = {
+          id: 'inv-6', kind: 'inverter' as const, label: 'PCS06',
+          x: 0, y: 0, rotation: 0, length: 40, width: 10,
+        };
+        const eastPcs = {
+          id: 'inv-8', kind: 'inverter' as const, label: 'PCS08',
+          x: 90, y: 0, rotation: 0, length: 40, width: 10,
+        };
+        const neighborBess = [westPcs, eastPcs].flatMap((p, i) =>
+          [1, 2].map(k => ({
+            id: `bess-${i === 0 ? 6 : 8}-${k}`, kind: 'bess' as const,
+            label: `CON${i === 0 ? 6 : 8}-${k}`,
+            x: p.x + (k === 1 ? -8 : 8), y: 28, rotation: 0, length: 16, width: 8,
+          })));
+        const neighborFence: Pt[] = [
+          { x: -80, y: -80 }, { x: 180, y: -80 },
+          { x: 180, y: 280 }, { x: -80, y: 280 },
+        ];
+        const neighborDesign = {
+          fence: neighborFence,
+          boundary: { polygon: neighborFence },
+          equipment: [westPcs, eastPcs, ...neighborBess],
+          islands: [
+            { n: 6, y: 14, minX: -20, maxX: 20,
+              inverterIds: [westPcs.id], southIds: [westPcs.id], northIds: [] },
+            { n: 8, y: 14, minX: 70, maxX: 110,
+              inverterIds: [eastPcs.id], southIds: [eastPcs.id], northIds: [] },
+          ],
+          cables: [westPcs, eastPcs].map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x + 18.8, y: 5 }, { x: p.x + 18.8, y: 0 }],
+          })),
+          aisles: [
+            { x: -40, y: 80, length: 220, width: 24, rotation: Math.PI / 2 },
+            { x: 45, y: 80, length: 220, width: 24, rotation: Math.PI / 2 },
+            { x: 140, y: 80, length: 220, width: 24, rotation: Math.PI / 2 },
+          ],
+          roads: [],
+          tracedPcsUnits: 0,
+        } as any;
+        const neighborFeeders = generateFeeders(neighborDesign, { x: 45, y: 220 }, 5,
+          { maxPerFeeder: 1 });
+        const westCourt = { x1: -16, y1: 8, x2: 16, y2: 24 };
+        const throughWestCourt = neighborFeeders.reduce((n, f) => {
+          const home = f.segments[f.segments.length - 1];
+          if (!home) return n + 1;
+          for (let i = 0; i < home.pts.length - 1; i++) {
+            const a = home.pts[i], b = home.pts[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const samples = Math.max(2, Math.ceil(len / 4));
+            for (let s = 1; s < samples; s++) {
+              const t = s / samples;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (x > westCourt.x1 && x < westCourt.x2 &&
+                  y > westCourt.y1 && y < westCourt.y2) return n + 1;
+            }
+          }
+          return n;
+        }, 0);
+        check('[feeder-road] east-pad home run does not cut the west PCS courtyard',
+          neighborFeeders.length >= 2 && throughWestCourt === 0,
+          `through=${throughWestCourt} n=${neighborFeeders.length}`);
       }
 
       const crossRowBuilt917 = Array.from({ length: 8 }, (_, i) => {
