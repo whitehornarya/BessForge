@@ -2393,6 +2393,20 @@ export function generateCableRouting(
     });
     return [world(faceLy), world(faceLy - f * busOffset)];
   };
+  // MV attach: aux-face tap → under-skid centerline (ly = 0). Feeders ride
+  // under the PCS rather than on a parallel collector beside the aux face.
+  const pcsUnderTap = (inv: PlacedEquipment, endOffset: number): [Pt, Pt] => {
+    const m = mirrorOf(inv);
+    const f = inv.doorEnd ?? -1;
+    const lx = m * (inv.length / 2 - endOffset);
+    const faceLy = -f * inv.width / 2;
+    const cs = Math.cos(inv.rotation), sn = Math.sin(inv.rotation);
+    const world = (ly: number): Pt => ({
+      x: inv.x + lx * cs - ly * sn,
+      y: inv.y + lx * sn + ly * cs,
+    });
+    return [world(faceLy), world(0)];
+  };
   invRows.forEach((row, r) => {
     const invTop = row[0].y + row[0].width / 2;
     const mvY = invTop + MV_BUS_OFF;
@@ -2491,7 +2505,7 @@ export function generateCableRouting(
             [fiberTap, fiberBusTap, { x: fiberBusTap.x, y: fiberY }]);
         }
       } else if (!tracedInvIds.has(inv.id)) {
-        addRun(`mv-drop-${inv.id}`, 'MV', [{ x: mvX, y: invTop }, { x: mvX, y: mvY }]);
+        addRun(`mv-drop-${inv.id}`, 'MV', [{ x: mvX, y: invTop }, { x: mvX, y: inv.y }]);
         if (!rowVerticalTraced) {
           addRun(`fiber-drop-${inv.id}`, 'FIBER',
             [{ x: fiberX, y: invTop }, { x: fiberX, y: fiberY }]);
@@ -2504,13 +2518,14 @@ export function generateCableRouting(
   });
 
   // Drawing-traced PCS MV starts on the local aux/MV end opposite the DC fan
-  // and joins a collector parallel to the PCS long axis.  This pass replaces
-  // the legacy world-Y row buses only for orphan-owned/traced blocks.
+  // and joins a collector UNDER the PCS centerline (not a parallel offset
+  // beside the aux face). This pass replaces the legacy world-Y row buses
+  // only for orphan-owned/traced blocks.
   {
     type MvTap = {
       inv: PlacedEquipment;
       tap: Pt;
-      out: Pt;
+      under: Pt;
       angleKey: number;
       angleRad: number;
       u: Pt;
@@ -2525,7 +2540,7 @@ export function generateCableRouting(
         !b.inv.augmented &&
         !b.inv.future)
       .map(b => {
-        const [tap, out] = pcsAuxTap(b.inv, 1.2, MV_BUS_OFF);
+        const [tap, under] = pcsUnderTap(b.inv, 1.2);
         const normalized = ((b.inv.rotation % Math.PI) + Math.PI) % Math.PI;
         // Group only numerically identical row orientations (microradian
         // tolerance), but keep the full-precision representative angle for
@@ -2536,7 +2551,7 @@ export function generateCableRouting(
         return {
           inv: b.inv,
           tap,
-          out,
+          under,
           angleKey,
           angleRad: normalized,
           u: { x: Math.cos(θ), y: Math.sin(θ) },
@@ -2559,13 +2574,13 @@ export function generateCableRouting(
       const across = (p: Pt) =>
         (p.x - origin.x) * basis.v.x + (p.y - origin.y) * basis.v.y;
       const sorted = oriented.sort((a, b) =>
-        across(a.out) - across(b.out) ||
-        along(a.out) - along(b.out) ||
+        across(a.under) - across(b.under) ||
+        along(a.under) - along(b.under) ||
         a.inv.id.localeCompare(b.inv.id));
       const lanes: MvTap[][] = [];
       for (const tap of sorted) {
         const last = lanes[lanes.length - 1];
-        const laneCoord = (t: MvTap) => across(t.out);
+        const laneCoord = (t: MvTap) => across(t.under);
         if (last && Math.abs(laneCoord(tap) - laneCoord(last[last.length - 1])) <= 15) last.push(tap);
         else lanes.push([tap]);
       }
@@ -2579,15 +2594,16 @@ export function generateCableRouting(
         // (its chain-hop segments), so max-per-feeder settings and approved
         // manual assignments cannot diverge from a separately chunked bus.
         // All drops on one physical row land on the same full-precision row
-        // axis; any valid contiguous subset therefore forms one straight
-        // collector, while a cross-row assignment fails the feeder route gate.
+        // axis under the skids; any valid contiguous subset therefore forms
+        // one straight collector, while a cross-row assignment fails the
+        // feeder route gate.
         physicalRow.sort((a, b) =>
-          along(a.out) - along(b.out) || a.inv.id.localeCompare(b.inv.id));
+          along(a.under) - along(b.under) || a.inv.id.localeCompare(b.inv.id));
         const coord = physicalRow.reduce(
-          (sum, t) => sum + across(t.out), 0) / physicalRow.length;
+          (sum, t) => sum + across(t.under), 0) / physicalRow.length;
         physicalRow.forEach(t => {
-          const join = world(along(t.out), coord);
-          addRun(`mv-drop-${t.inv.id}`, 'MV', [t.tap, t.out, join]);
+          const join = world(along(t.under), coord);
+          addRun(`mv-drop-${t.inv.id}`, 'MV', [t.tap, t.under, join]);
         });
       });
     }

@@ -343,3 +343,43 @@ export function gappedCrossRects(bands: CrossBand[], anchors: Pt[], gapFt: numbe
   }
   return out;
 }
+
+/** Nearest point on an aisle/road centerline. Used when an MV feeder must
+ *  turn toward the drive aisle instead of crossing DC or another feeder. */
+export function nearestRoadWaypoint(
+  p: Pt,
+  aisles: readonly {
+    x: number; y: number; length: number; width: number; rotation: number;
+  }[] | null | undefined,
+): Pt | null {
+  if (!aisles?.length) return null;
+  let best: Pt | null = null;
+  let bestD = Infinity;
+  for (const a of aisles) {
+    if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.y) ||
+        !Number.isFinite(a.length) || a.length <= 0) continue;
+    const rot = Number.isFinite(a.rotation) ? a.rotation : 0;
+    const cs = Math.cos(rot), sn = Math.sin(rot);
+    const hx = cs * a.length / 2, hy = sn * a.length / 2;
+    const a0 = { x: a.x - hx, y: a.y - hy };
+    const dx = 2 * hx, dy = 2 * hy;
+    const l2 = dx * dx + dy * dy;
+    const t = l2 > 1e-9
+      ? Math.max(0, Math.min(1, ((p.x - a0.x) * dx + (p.y - a0.y) * dy) / l2))
+      : 0;
+    const q = { x: a0.x + t * dx, y: a0.y + t * dy };
+    const d = Math.hypot(p.x - q.x, p.y - q.y);
+    if (d < bestD) { bestD = d; best = q; }
+  }
+  return best && bestD > 0.5 && bestD < 500 ? best : null;
+}
+
+/** Drop keep-out samples whose center sits inside any exemption (PCS skid). */
+export function punchKeepoutRects(rects: Rect[], zones: Rect[]): Rect[] {
+  if (!zones.length) return rects;
+  return rects.filter(r => {
+    const cx = (r.x1 + r.x2) / 2, cy = (r.y1 + r.y2) / 2;
+    return !zones.some(z =>
+      cx >= z.x1 && cx <= z.x2 && cy >= z.y1 && cy <= z.y2);
+  });
+}

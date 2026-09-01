@@ -115,6 +115,7 @@ import {
   MAX_INVERTERS_PER_FEEDER,
   equipmentRect,
   feederCrossesObstacle,
+  polylinesCross,
   feederCorridorInfo,
   feederCorridorRejectReason,
   FEEDER_TRENCH_SPACING_FT,
@@ -3372,6 +3373,160 @@ async function main() {
         assignedCircuits917.length === 3 &&
         assignedCircuits917.every(f => f.inverterIds.length === 4) &&
         ownsStraightCollector917(assignedCircuits917));
+
+      {
+        const underDrops = canonicalDrops915;
+        const underOk = underDrops.length === canonicalFractional915.built.length &&
+          underDrops.every(r => {
+            const id = r.id.slice('mv-drop-'.length);
+            const inv = canonicalRotatedEquipment915.find(e => e.id === id);
+            if (!inv || r.pts.length < 2) return false;
+            const join = r.pts[r.pts.length - 1];
+            const across = (join.x - inv.x) * canonicalFractional915.u.y -
+              (join.y - inv.y) * canonicalFractional915.u.x;
+            return Math.abs(across) < 0.6;
+          });
+        check('[feeder-under] traced MV collector joins sit under the PCS centerline',
+          underOk);
+
+        const fenceDc: Pt[] = [
+          { x: -200, y: -200 }, { x: 400, y: -200 },
+          { x: 400, y: 200 }, { x: -200, y: 200 },
+        ];
+        const pcsA = {
+          id: 'inv-dc-a', kind: 'inverter' as const, label: 'PCS A',
+          x: 0, y: 0, rotation: 0, length: 40, width: 10,
+        };
+        const pcsB = {
+          id: 'inv-dc-b', kind: 'inverter' as const, label: 'PCS B',
+          x: 50, y: 0, rotation: 0, length: 40, width: 10,
+        };
+        const dcFan = [
+          { x: 0, y: -6 }, { x: 0, y: -40 }, { x: 80, y: -40 }, { x: 80, y: 80 },
+        ];
+        const designDc = {
+          fence: fenceDc,
+          boundary: { polygon: fenceDc },
+          equipment: [pcsA, pcsB],
+          cables: [
+            {
+              id: 'mv-drop-inv-dc-a', class: 'MV' as const,
+              pts: [{ x: 18.8, y: 5 }, { x: 18.8, y: 0 }],
+            },
+            {
+              id: 'mv-drop-inv-dc-b', class: 'MV' as const,
+              pts: [{ x: 68.8, y: 5 }, { x: 68.8, y: 0 }],
+            },
+            { id: 'dc-fan-pos', class: 'DC' as const, pts: dcFan, polarity: 'pos' as const },
+          ],
+          aisles: [{ x: 25, y: 40, length: 80, width: 20, rotation: 0 }],
+          roads: [],
+          tracedPcsUnits: 2,
+        } as any;
+        const feedersDc = generateFeeders(designDc, { x: 200, y: 40 }, 5);
+        const homeCrossDc = feedersDc.some(f => {
+          const home = f.segments[f.segments.length - 1];
+          return home && polylinesCross(home.pts, dcFan);
+        });
+        const homesCrossEachOther = feedersDc.length >= 2 &&
+          polylinesCross(
+            feedersDc[0].segments[feedersDc[0].segments.length - 1].pts,
+            feedersDc[1].segments[feedersDc[1].segments.length - 1].pts,
+          );
+        check('[feeder-under] home runs do not cross the PCS–battery DC fan',
+          feedersDc.length >= 1 && !homeCrossDc);
+        check('[feeder-under] home runs do not cross each other',
+          feedersDc.length < 2 || !homesCrossEachOther);
+
+        const yardPcs = [0, 50, 100].map((x, i) => ({
+          id: `inv-${i + 1}`, kind: 'inverter' as const, label: `PCS 06-0${i + 1}`,
+          x, y: 0, rotation: 0, length: 40, width: 10,
+        }));
+        const yardBess = yardPcs.flatMap((p, i) =>
+          [1, 2].map(k => ({
+            id: `bess-${i + 1}-${k}`, kind: 'bess' as const, label: `CON${i + 1}-${k}`,
+            x: p.x + (k === 1 ? -8 : 8), y: 28, rotation: 0, length: 16, width: 8,
+          })));
+        const yardFence: Pt[] = [
+          { x: -120, y: -80 }, { x: 180, y: -80 },
+          { x: 180, y: 280 }, { x: -120, y: 280 },
+        ];
+        const yardDesign = {
+          fence: yardFence,
+          boundary: { polygon: yardFence },
+          equipment: [...yardPcs, ...yardBess],
+          islands: [{
+            n: 6, y: 14, minX: -20, maxX: 120,
+            inverterIds: yardPcs.map(p => p.id),
+            southIds: yardPcs.map(p => p.id),
+            northIds: [],
+          }],
+          cables: yardPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x + 18.8, y: 5 }, { x: p.x + 18.8, y: 0 }],
+          })),
+          aisles: [{ x: -50, y: 80, length: 220, width: 24, rotation: Math.PI / 2 }],
+          roads: [],
+          tracedPcsUnits: 0,
+        } as any;
+        const yardFeeders = generateFeeders(yardDesign, { x: 50, y: 220 }, 5,
+          { maxPerFeeder: 1 });
+        const cluster = { x1: -20, y1: 20, x2: 120, y2: 36 };
+        const throughYard = yardFeeders.reduce((n, f) => {
+          const home = f.segments[f.segments.length - 1];
+          if (!home) return n + 1;
+          for (let i = 0; i < home.pts.length - 1; i++) {
+            const a = home.pts[i], b = home.pts[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const samples = Math.max(2, Math.ceil(len / 6));
+            for (let s = 1; s < samples; s++) {
+              const t = s / samples;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (x > cluster.x1 && x < cluster.x2 && y > cluster.y1 && y < cluster.y2) return n + 1;
+            }
+          }
+          return n;
+        }, 0);
+        const runXs = yardFeeders.map(f => {
+          const home = f.segments[f.segments.length - 1]?.pts ?? [];
+          const north = home.filter(p => p.y > 80);
+          return north.length ? Math.min(...north.map(p => p.x)) : Infinity;
+        });
+        check('[feeder-road] auto-island home runs do not cut the container courtyard',
+          yardFeeders.length >= 1 && throughYard === 0 &&
+          yardFeeders.every(f => f.segments[f.segments.length - 1]?.pts.length >= 2),
+          `through=${throughYard} n=${yardFeeders.length}`);
+        check('[feeder-road] row-end / mid-row exits stay drawn outside the battery yard',
+          yardFeeders.length >= 2 &&
+          yardFeeders.every(f => (f.segments[f.segments.length - 1]?.pts.length ?? 0) >= 2) &&
+          runXs.some(x => Number.isFinite(x) && x < cluster.x1),
+          runXs.map(x => x.toFixed(1)).join(','));
+        const properCrossYard = (a: Pt, b: Pt, c: Pt, d2: Pt) => {
+          const o = (p: Pt, q: Pt, r: Pt) =>
+            Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+          const o1 = o(a, b, c), o2 = o(a, b, d2), o3 = o(c, d2, a), o4 = o(c, d2, b);
+          return o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4;
+        };
+        let yardCross = 0;
+        for (let i = 0; i < yardFeeders.length; i++) {
+          for (let j = i + 1; j < yardFeeders.length; j++) {
+            for (const sa of yardFeeders[i].segments) {
+              for (const sb of yardFeeders[j].segments) {
+                for (let s = 0; s < sa.pts.length - 1; s++) {
+                  for (let t = 0; t < sb.pts.length - 1; t++) {
+                    if (properCrossYard(sa.pts[s], sa.pts[s + 1], sb.pts[t], sb.pts[t + 1])) {
+                      yardCross++;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        check('[feeder-road] auto-island home runs do not cross each other',
+          yardCross === 0 && yardFeeders.every(f => f.routeValid !== false),
+          `cross=${yardCross} valid=${yardFeeders.map(f => f.routeValid).join(',')}`);
+      }
 
       const crossRowBuilt917 = Array.from({ length: 8 }, (_, i) => {
         const row = i < 4 ? 0 : 1;
