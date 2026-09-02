@@ -3821,10 +3821,16 @@ async function main() {
         const n2Design = {
           fence: n2Fence, boundary: { polygon: n2Fence },
           equipment: [...n2Pcs, ...n2Bess],
-          cables: n2Pcs.map(p => ({
-            id: `mv-drop-${p.id}`, class: 'MV' as const,
-            pts: [{ x: p.x - 10, y: -5 }, { x: p.x - 10, y: 0 }],
-          })),
+          cables: [
+            ...n2Pcs.map(p => ({
+              id: `mv-drop-${p.id}`, class: 'MV' as const,
+              pts: [{ x: p.x - 10, y: -5 }, { x: p.x - 10, y: 0 }],
+            })),
+            ...n2Pcs.map(p => ({
+              id: `dc-${p.id}`, class: 'DC' as const,
+              pts: [{ x: p.x, y: 5 }, { x: p.x, y: 18 }],
+            })),
+          ],
           aisles: [
             { x: 40, y: -40, length: 220, width: 24, rotation: 0 },
             { x: -40, y: -80, length: 200, width: 24, rotation: Math.PI / 2 },
@@ -3859,10 +3865,16 @@ async function main() {
         const eColDesign = {
           fence: eColFence, boundary: { polygon: eColFence },
           equipment: [...eColPcs, ...eColBess],
-          cables: eColPcs.map(p => ({
-            id: `mv-drop-${p.id}`, class: 'MV' as const,
-            pts: [{ x: p.x - 5, y: p.y }, { x: p.x, y: p.y }],
-          })),
+          cables: [
+            ...eColPcs.map(p => ({
+              id: `mv-drop-${p.id}`, class: 'MV' as const,
+              pts: [{ x: p.x - 5, y: p.y }, { x: p.x, y: p.y }],
+            })),
+            ...eColPcs.map(p => ({
+              id: `dc-${p.id}`, class: 'DC' as const,
+              pts: [{ x: p.x + 5, y: p.y }, { x: p.x + 18, y: p.y }],
+            })),
+          ],
           aisles: [{ x: -40, y: 32, length: 200, width: 24, rotation: Math.PI / 2 }],
           roads: [], tracedPcsUnits: 3,
         } as any;
@@ -3874,6 +3886,12 @@ async function main() {
         check('[feeder-road] cans-east column does not trench the 14 ft DC gap',
           eColTop.home.length >= 2 && eColThrough === 0 && countCanHits(eColFeeders, eColBess) === 0,
           `through=${eColThrough} dx=${eColTop.dx.toFixed(1)} home=${eColTop.home.slice(0, 5).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+        const eColFan = { x1: 5, y1: 58, x2: 20, y2: 72 };
+        const eColFanHits = eColFeeders.reduce((n, f) =>
+          n + samplesThrough(f.segments[f.segments.length - 1]?.pts ?? [], eColFan), 0);
+        check('[feeder-road] chain-end PCS does not turn through its DC cables',
+          eColFanHits === 0 && eColTop.dx <= 2,
+          `fan=${eColFanHits} dx=${eColTop.dx.toFixed(1)} home=${eColTop.home.slice(0, 6).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
 
         // Area 4 west takeoff: two PCS rows with cans south of each. The
         // south row's home run must leave west into the road before any

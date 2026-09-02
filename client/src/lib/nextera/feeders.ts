@@ -1440,7 +1440,7 @@ export function generateFeeders(
         const yOv = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1);
         const dx = Math.max(0, Math.max(a.x1 - b.x2, b.x1 - a.x2));
         const dy = Math.max(0, Math.max(a.y1 - b.y2, b.y1 - a.y2));
-        const PAST = 12;
+        const PAST = 20;
         if (xOv > 2 && dy > 0 && dy < 28) {
           const y1 = Math.min(a.y2, b.y2);
           const y2 = Math.max(a.y1, b.y1);
@@ -1454,6 +1454,8 @@ export function generateFeeders(
           const x1 = Math.min(a.x2, b.x2);
           const x2 = Math.max(a.x1, b.x1);
           if (x2 > x1 + 1) {
+            // PAST covers the cable fan past the PCS ends (Area 2 09
+            // turning through PCS09-03 into the DC run).
             pushCluster(
               x1, Math.min(a.y1, b.y1) - PAST,
               x2, Math.max(a.y2, b.y2) + PAST);
@@ -1658,13 +1660,16 @@ export function generateFeeders(
   const columnRoadX = (e: PlacedEquipment): number => {
     const pcs = equipmentRect(e, 2);
     const { east, w } = bessVote(e);
-    // West takeoff: the can field is between the skid and the road.
-    // Launching west at PCS Y is the Area 4 cut. Leave the east face
-    // and ride around the north/south of the yard instead.
-    if (approachAxis.horizApproach && approachAxis.dirX < 0) return pcs.x2 + 8;
-    if (approachAxis.horizApproach && approachAxis.dirX > 0) return pcs.x1 - 8;
     if (east > w) return pcs.x1 - 8;
-    return pcs.x2 + 8;
+    if (w > east) return pcs.x2 + 8;
+    const left = pcs.x1 - 8, right = pcs.x2 + 8;
+    const blocked = (x: number) => clusterRects.some(r =>
+      x > r.x1 && x < r.x2 && e.y > r.y1 && e.y < r.y2);
+    if (blocked(right) && !blocked(left)) return left;
+    if (blocked(left) && !blocked(right)) return right;
+    if (approachAxis.horizApproach && approachAxis.dirX < 0) return right;
+    if (approachAxis.horizApproach && approachAxis.dirX > 0) return left;
+    return substation.x >= e.x ? right : left;
   };
   const columnEdgeY = (e: PlacedEquipment): number => {
     const local = columnYardOf(e);
@@ -1758,10 +1763,27 @@ export function generateFeeders(
     const hx = hl * cs + hw * sn, hy = hl * sn + hw * cs;
     return { x1: e.x - hx, y1: e.y - hy, x2: e.x + hx, y2: e.y + hy };
   };
-  const cableKeepOutFrom = (runs: Pt[][], exemptEq: PlacedEquipment[]): Rect[] =>
+  // Only the road-side collector face — punching the whole PCS AABB
+  // deleted the DC courtyard keep-out at the chain-end skid (09 into
+  // PCS09-03 cables, Area 3 08 behind 04).
+  const roadSideLaunchRect = (e: PlacedEquipment): Rect => {
+    const r = equipmentRect(e, 4);
+    const { n, s, east, w } = bessVote(e);
+    if (east + w >= n + s) {
+      if (east > w) return { x1: r.x1 - 12, y1: r.y1, x2: r.x1 + 4, y2: r.y2 };
+      return { x1: r.x2 - 4, y1: r.y1, x2: r.x2 + 12, y2: r.y2 };
+    }
+    if (n > s) return { x1: r.x1, y1: r.y1 - 12, x2: r.x2, y2: r.y1 + 4 };
+    return { x1: r.x1, y1: r.y2 - 4, x2: r.x2, y2: r.y2 + 12 };
+  };
+  const cableKeepOutFrom = (
+    runs: Pt[][],
+    exemptEq: PlacedEquipment[],
+    roadLaunch = false,
+  ): Rect[] =>
     punchKeepoutRects(
       trenchKeepOutRects(runs, 1.25),
-      exemptEq.map(equipmentExemptRect),
+      exemptEq.map(e => roadLaunch ? roadSideLaunchRect(e) : equipmentExemptRect(e)),
     );
   // Drafter route overrides: keys consumed by a live feeder, and the gi's of
   // circuits whose home run is drafter-drawn (the collinear separation pass
@@ -2886,7 +2908,11 @@ export function generateFeeders(
         const horizHop = Math.abs(A.y - B.y) < 0.5;
         const vertHop = Math.abs(A.x - B.x) < 0.5;
         if (horizHop || vertHop) {
-          for (const off of [shift, -shift]) {
+          const { east, w, n, s } = bessVote(a);
+          const away = vertHop
+            ? (east > w ? -1 : 1)
+            : (n > s ? -1 : 1);
+          for (const off of [away * shift, -away * shift]) {
             const cand: Pt[] = horizHop
               ? [pts[0], { x: A.x, y: A.y + off }, { x: B.x, y: B.y + off }, pts[1]]
               : [pts[0], { x: A.x + off, y: A.y }, { x: B.x + off, y: B.y }, pts[1]];
@@ -2928,7 +2954,7 @@ export function generateFeeders(
       gateObsFrom(start),
       clusterRects,
       priorHomeKeep,
-      cableKeepOutFrom([...dcRuns, ...priorHops], [last]));
+      cableKeepOutFrom([...dcRuns, ...priorHops], [last], true));
     // Run line: the feeder exits the yard from its chain end along its own
     // (staggered) run line, perpendicular to the lane stack.
     const runCoord = runCoordOf[gi];
