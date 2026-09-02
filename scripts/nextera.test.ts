@@ -3591,6 +3591,80 @@ async function main() {
         check('[feeder-road] east-pad home run does not cut the west PCS courtyard',
           neighborFeeders.length >= 2 && throughWestCourt === 0,
           `through=${throughWestCourt} n=${neighborFeeders.length}`);
+
+        // Horizontal PCS row (Area 2): the east unit must not comb west
+        // through the rest of the row at PCS height.
+        const rowPcs = [0, 32, 64].map((x, i) => ({
+          id: `inv-row-${i}`, kind: 'inverter' as const, label: `PCS row ${i}`,
+          x, y: 0, rotation: Math.PI, length: 22, width: 8,
+        }));
+        const rowBess = rowPcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-row-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: 26, rotation: Math.PI, length: 16, width: 8,
+        })));
+        const rowFence: Pt[] = [
+          { x: -80, y: -220 }, { x: 160, y: -220 },
+          { x: 160, y: 80 }, { x: -80, y: 80 },
+        ];
+        const rowDesign = {
+          fence: rowFence,
+          boundary: { polygon: rowFence },
+          equipment: [...rowPcs, ...rowBess],
+          cables: rowPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 10, y: -5 }, { x: p.x - 10, y: 0 }],
+          })),
+          aisles: [
+            { x: -40, y: -80, length: 200, width: 24, rotation: Math.PI / 2 },
+            { x: 110, y: -80, length: 200, width: 24, rotation: Math.PI / 2 },
+          ],
+          roads: [],
+          tracedPcsUnits: 3,
+        } as any;
+        const rowFeeders = generateFeeders(rowDesign, { x: 32, y: -180 }, 5,
+          { maxPerFeeder: 1 });
+        const rowCut = { x1: -8, y1: -4, x2: 40, y2: 4 };
+        const eastHome = rowFeeders.find(f =>
+          f.inverterIds.some(id => id === 'inv-row-2'))
+          ?.segments.slice(-1)[0]?.pts ?? [];
+        let throughRow = 0;
+        for (let i = 0; i < eastHome.length - 1; i++) {
+          const a = eastHome[i], b = eastHome[i + 1];
+          const len = Math.hypot(b.x - a.x, b.y - a.y);
+          const samples = Math.max(2, Math.ceil(len / 4));
+          for (let s = 1; s < samples; s++) {
+            const t = s / samples;
+            const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+            if (x > rowCut.x1 && x < rowCut.x2 && y > rowCut.y1 && y < rowCut.y2) {
+              throughRow++;
+            }
+          }
+        }
+        check('[feeder-road] east unit of a horizontal row does not comb through the row',
+          eastHome.length >= 2 && throughRow === 0,
+          `through=${throughRow} n=${rowFeeders.length} home=${eastHome.map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+        const cans = rowBess.map(e => ({
+          x1: e.x - 9, y1: e.y - 5, x2: e.x + 9, y2: e.y + 5,
+        }));
+        let throughCans = 0;
+        for (const f of rowFeeders) {
+          const home = f.segments[f.segments.length - 1]?.pts ?? [];
+          for (let i = 0; i < home.length - 1; i++) {
+            const a = home[i], b = home[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const samples = Math.max(2, Math.ceil(len / 3));
+            for (let s = 1; s < samples; s++) {
+              const t = s / samples;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (cans.some(r => x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2)) {
+                throughCans++;
+              }
+            }
+          }
+        }
+        check('[feeder-road] horizontal-row home runs do not cut container footprints',
+          rowFeeders.length >= 1 && throughCans === 0,
+          `throughCans=${throughCans}`);
       }
 
       const crossRowBuilt917 = Array.from({ length: 8 }, (_, i) => {
