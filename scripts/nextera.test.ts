@@ -115,6 +115,7 @@ import {
   MAX_INVERTERS_PER_FEEDER,
   equipmentRect,
   feederCrossesObstacle,
+  polylinesCross,
   feederCorridorInfo,
   feederCorridorRejectReason,
   FEEDER_TRENCH_SPACING_FT,
@@ -3372,6 +3373,647 @@ async function main() {
         assignedCircuits917.length === 3 &&
         assignedCircuits917.every(f => f.inverterIds.length === 4) &&
         ownsStraightCollector917(assignedCircuits917));
+
+      {
+        const underDrops = canonicalDrops915;
+        const underOk = underDrops.length === canonicalFractional915.built.length &&
+          underDrops.every(r => {
+            const id = r.id.slice('mv-drop-'.length);
+            const inv = canonicalRotatedEquipment915.find(e => e.id === id);
+            if (!inv || r.pts.length < 2) return false;
+            const join = r.pts[r.pts.length - 1];
+            const across = (join.x - inv.x) * canonicalFractional915.u.y -
+              (join.y - inv.y) * canonicalFractional915.u.x;
+            return Math.abs(across) < 0.6;
+          });
+        check('[feeder-under] traced MV collector joins sit under the PCS centerline',
+          underOk);
+
+        const fenceDc: Pt[] = [
+          { x: -200, y: -200 }, { x: 400, y: -200 },
+          { x: 400, y: 200 }, { x: -200, y: 200 },
+        ];
+        const pcsA = {
+          id: 'inv-dc-a', kind: 'inverter' as const, label: 'PCS A',
+          x: 0, y: 0, rotation: 0, length: 40, width: 10,
+        };
+        const pcsB = {
+          id: 'inv-dc-b', kind: 'inverter' as const, label: 'PCS B',
+          x: 50, y: 0, rotation: 0, length: 40, width: 10,
+        };
+        const dcFan = [
+          { x: 0, y: -6 }, { x: 0, y: -40 }, { x: 80, y: -40 }, { x: 80, y: 80 },
+        ];
+        const designDc = {
+          fence: fenceDc,
+          boundary: { polygon: fenceDc },
+          equipment: [pcsA, pcsB],
+          cables: [
+            {
+              id: 'mv-drop-inv-dc-a', class: 'MV' as const,
+              pts: [{ x: 18.8, y: 5 }, { x: 18.8, y: 0 }],
+            },
+            {
+              id: 'mv-drop-inv-dc-b', class: 'MV' as const,
+              pts: [{ x: 68.8, y: 5 }, { x: 68.8, y: 0 }],
+            },
+            { id: 'dc-fan-pos', class: 'DC' as const, pts: dcFan, polarity: 'pos' as const },
+          ],
+          aisles: [{ x: 25, y: 40, length: 80, width: 20, rotation: 0 }],
+          roads: [],
+          tracedPcsUnits: 2,
+        } as any;
+        const feedersDc = generateFeeders(designDc, { x: 200, y: 40 }, 5);
+        const homeCrossDc = feedersDc.some(f => {
+          const home = f.segments[f.segments.length - 1];
+          return home && polylinesCross(home.pts, dcFan);
+        });
+        const homesCrossEachOther = feedersDc.length >= 2 &&
+          polylinesCross(
+            feedersDc[0].segments[feedersDc[0].segments.length - 1].pts,
+            feedersDc[1].segments[feedersDc[1].segments.length - 1].pts,
+          );
+        check('[feeder-under] home runs do not cross the PCS–battery DC fan',
+          feedersDc.length >= 1 && !homeCrossDc);
+        check('[feeder-under] home runs do not cross each other',
+          feedersDc.length < 2 || !homesCrossEachOther);
+
+        const yardPcs = [0, 50, 100].map((x, i) => ({
+          id: `inv-${i + 1}`, kind: 'inverter' as const, label: `PCS 06-0${i + 1}`,
+          x, y: 0, rotation: 0, length: 40, width: 10,
+        }));
+        const yardBess = yardPcs.flatMap((p, i) =>
+          [1, 2].map(k => ({
+            id: `bess-${i + 1}-${k}`, kind: 'bess' as const, label: `CON${i + 1}-${k}`,
+            x: p.x + (k === 1 ? -8 : 8), y: 28, rotation: 0, length: 16, width: 8,
+          })));
+        const yardFence: Pt[] = [
+          { x: -120, y: -80 }, { x: 180, y: -80 },
+          { x: 180, y: 280 }, { x: -120, y: 280 },
+        ];
+        const yardDesign = {
+          fence: yardFence,
+          boundary: { polygon: yardFence },
+          equipment: [...yardPcs, ...yardBess],
+          islands: [{
+            n: 6, y: 14, minX: -20, maxX: 120,
+            inverterIds: yardPcs.map(p => p.id),
+            southIds: yardPcs.map(p => p.id),
+            northIds: [],
+          }],
+          cables: yardPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x + 18.8, y: 5 }, { x: p.x + 18.8, y: 0 }],
+          })),
+          aisles: [{ x: -50, y: 80, length: 220, width: 24, rotation: Math.PI / 2 }],
+          roads: [],
+          tracedPcsUnits: 0,
+        } as any;
+        const yardFeeders = generateFeeders(yardDesign, { x: 50, y: 220 }, 5,
+          { maxPerFeeder: 1 });
+        const cluster = { x1: -20, y1: 20, x2: 120, y2: 36 };
+        const throughYard = yardFeeders.reduce((n, f) => {
+          const home = f.segments[f.segments.length - 1];
+          if (!home) return n + 1;
+          for (let i = 0; i < home.pts.length - 1; i++) {
+            const a = home.pts[i], b = home.pts[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const samples = Math.max(2, Math.ceil(len / 6));
+            for (let s = 1; s < samples; s++) {
+              const t = s / samples;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (x > cluster.x1 && x < cluster.x2 && y > cluster.y1 && y < cluster.y2) return n + 1;
+            }
+          }
+          return n;
+        }, 0);
+        const runXs = yardFeeders.map(f => {
+          const home = f.segments[f.segments.length - 1]?.pts ?? [];
+          const north = home.filter(p => p.y > 80);
+          return north.length ? Math.min(...north.map(p => p.x)) : Infinity;
+        });
+        check('[feeder-road] auto-island home runs do not cut the container courtyard',
+          yardFeeders.length >= 1 && throughYard === 0 &&
+          yardFeeders.every(f => f.segments[f.segments.length - 1]?.pts.length >= 2),
+          `through=${throughYard} n=${yardFeeders.length}`);
+        check('[feeder-road] row-end / mid-row exits stay drawn outside the battery yard',
+          yardFeeders.length >= 2 &&
+          yardFeeders.every(f => (f.segments[f.segments.length - 1]?.pts.length ?? 0) >= 2) &&
+          runXs.some(x => Number.isFinite(x) && x < cluster.x1),
+          runXs.map(x => x.toFixed(1)).join(','));
+        const properCrossYard = (a: Pt, b: Pt, c: Pt, d2: Pt) => {
+          const o = (p: Pt, q: Pt, r: Pt) =>
+            Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+          const o1 = o(a, b, c), o2 = o(a, b, d2), o3 = o(c, d2, a), o4 = o(c, d2, b);
+          return o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4;
+        };
+        let yardCross = 0;
+        for (let i = 0; i < yardFeeders.length; i++) {
+          for (let j = i + 1; j < yardFeeders.length; j++) {
+            for (const sa of yardFeeders[i].segments) {
+              for (const sb of yardFeeders[j].segments) {
+                for (let s = 0; s < sa.pts.length - 1; s++) {
+                  for (let t = 0; t < sb.pts.length - 1; t++) {
+                    if (properCrossYard(sa.pts[s], sa.pts[s + 1], sb.pts[t], sb.pts[t + 1])) {
+                      yardCross++;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        check('[feeder-road] auto-island home runs do not cross each other',
+          yardCross === 0 && yardFeeders.every(f => f.routeValid !== false),
+          `cross=${yardCross} valid=${yardFeeders.map(f => f.routeValid).join(',')}`);
+
+        // Two pads side by side: the east feeder must not ride the west
+        // PCS–battery courtyard (08 through 06).
+        const westPcs = {
+          id: 'inv-6', kind: 'inverter' as const, label: 'PCS06',
+          x: 0, y: 0, rotation: 0, length: 40, width: 10,
+        };
+        const eastPcs = {
+          id: 'inv-8', kind: 'inverter' as const, label: 'PCS08',
+          x: 90, y: 0, rotation: 0, length: 40, width: 10,
+        };
+        const neighborBess = [westPcs, eastPcs].flatMap((p, i) =>
+          [1, 2].map(k => ({
+            id: `bess-${i === 0 ? 6 : 8}-${k}`, kind: 'bess' as const,
+            label: `CON${i === 0 ? 6 : 8}-${k}`,
+            x: p.x + (k === 1 ? -8 : 8), y: 28, rotation: 0, length: 16, width: 8,
+          })));
+        const neighborFence: Pt[] = [
+          { x: -80, y: -80 }, { x: 180, y: -80 },
+          { x: 180, y: 280 }, { x: -80, y: 280 },
+        ];
+        const neighborDesign = {
+          fence: neighborFence,
+          boundary: { polygon: neighborFence },
+          equipment: [westPcs, eastPcs, ...neighborBess],
+          islands: [
+            { n: 6, y: 14, minX: -20, maxX: 20,
+              inverterIds: [westPcs.id], southIds: [westPcs.id], northIds: [] },
+            { n: 8, y: 14, minX: 70, maxX: 110,
+              inverterIds: [eastPcs.id], southIds: [eastPcs.id], northIds: [] },
+          ],
+          cables: [westPcs, eastPcs].map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x + 18.8, y: 5 }, { x: p.x + 18.8, y: 0 }],
+          })),
+          aisles: [
+            { x: -40, y: 80, length: 220, width: 24, rotation: Math.PI / 2 },
+            { x: 45, y: 80, length: 220, width: 24, rotation: Math.PI / 2 },
+            { x: 140, y: 80, length: 220, width: 24, rotation: Math.PI / 2 },
+          ],
+          roads: [],
+          tracedPcsUnits: 0,
+        } as any;
+        const neighborFeeders = generateFeeders(neighborDesign, { x: 45, y: 220 }, 5,
+          { maxPerFeeder: 1 });
+        const westCourt = { x1: -16, y1: 8, x2: 16, y2: 24 };
+        const throughWestCourt = neighborFeeders.reduce((n, f) => {
+          const home = f.segments[f.segments.length - 1];
+          if (!home) return n + 1;
+          for (let i = 0; i < home.pts.length - 1; i++) {
+            const a = home.pts[i], b = home.pts[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const samples = Math.max(2, Math.ceil(len / 4));
+            for (let s = 1; s < samples; s++) {
+              const t = s / samples;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (x > westCourt.x1 && x < westCourt.x2 &&
+                  y > westCourt.y1 && y < westCourt.y2) return n + 1;
+            }
+          }
+          return n;
+        }, 0);
+        check('[feeder-road] east-pad home run does not cut the west PCS courtyard',
+          neighborFeeders.length >= 2 && throughWestCourt === 0,
+          `through=${throughWestCourt} n=${neighborFeeders.length}`);
+
+        // Horizontal PCS row (Area 2): the east unit must not comb west
+        // through the rest of the row at PCS height.
+        const rowPcs = [0, 32, 64].map((x, i) => ({
+          id: `inv-row-${i}`, kind: 'inverter' as const, label: `PCS row ${i}`,
+          x, y: 0, rotation: Math.PI, length: 22, width: 8,
+        }));
+        const rowBess = rowPcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-row-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: 26, rotation: Math.PI, length: 16, width: 8,
+        })));
+        const rowFence: Pt[] = [
+          { x: -80, y: -220 }, { x: 160, y: -220 },
+          { x: 160, y: 80 }, { x: -80, y: 80 },
+        ];
+        const rowDesign = {
+          fence: rowFence,
+          boundary: { polygon: rowFence },
+          equipment: [...rowPcs, ...rowBess],
+          cables: rowPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 10, y: -5 }, { x: p.x - 10, y: 0 }],
+          })),
+          aisles: [
+            { x: -40, y: -80, length: 200, width: 24, rotation: Math.PI / 2 },
+            { x: 110, y: -80, length: 200, width: 24, rotation: Math.PI / 2 },
+          ],
+          roads: [],
+          tracedPcsUnits: 3,
+        } as any;
+        const rowFeeders = generateFeeders(rowDesign, { x: 32, y: -180 }, 5,
+          { maxPerFeeder: 1 });
+        const rowCut = { x1: -8, y1: -4, x2: 40, y2: 4 };
+        const eastHome = rowFeeders.find(f =>
+          f.inverterIds.some(id => id === 'inv-row-2'))
+          ?.segments.slice(-1)[0]?.pts ?? [];
+        let throughRow = 0;
+        for (let i = 0; i < eastHome.length - 1; i++) {
+          const a = eastHome[i], b = eastHome[i + 1];
+          const len = Math.hypot(b.x - a.x, b.y - a.y);
+          const samples = Math.max(2, Math.ceil(len / 4));
+          for (let s = 1; s < samples; s++) {
+            const t = s / samples;
+            const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+            if (x > rowCut.x1 && x < rowCut.x2 && y > rowCut.y1 && y < rowCut.y2) {
+              throughRow++;
+            }
+          }
+        }
+        check('[feeder-road] east unit of a horizontal row does not comb through the row',
+          eastHome.length >= 2 && throughRow === 0,
+          `through=${throughRow} n=${rowFeeders.length} home=${eastHome.map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+        const cans = rowBess.map(e => ({
+          x1: e.x - 9, y1: e.y - 5, x2: e.x + 9, y2: e.y + 5,
+        }));
+        let throughCans = 0;
+        for (const f of rowFeeders) {
+          const home = f.segments[f.segments.length - 1]?.pts ?? [];
+          for (let i = 0; i < home.length - 1; i++) {
+            const a = home[i], b = home[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const samples = Math.max(2, Math.ceil(len / 3));
+            for (let s = 1; s < samples; s++) {
+              const t = s / samples;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (cans.some(r => x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2)) {
+                throughCans++;
+              }
+            }
+          }
+        }
+        check('[feeder-road] horizontal-row home runs do not cut container footprints',
+          rowFeeders.length >= 1 && throughCans === 0,
+          `throughCans=${throughCans}`);
+
+        const countCanHits = (feeders: ReturnType<typeof generateFeeders>, bess: { x: number; y: number }[]) => {
+          const boxes = bess.map(e => ({
+            x1: e.x - 9, y1: e.y - 5, x2: e.x + 9, y2: e.y + 5,
+          }));
+          let n = 0;
+          for (const f of feeders) {
+            const home = f.segments[f.segments.length - 1]?.pts ?? [];
+            for (let i = 0; i < home.length - 1; i++) {
+              const a = home[i], b = home[i + 1];
+              const len = Math.hypot(b.x - a.x, b.y - a.y);
+              const samples = Math.max(2, Math.ceil(len / 3));
+              for (let s = 1; s < samples; s++) {
+                const t = s / samples;
+                const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+                if (boxes.some(r => x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2)) n++;
+              }
+            }
+          }
+          return n;
+        };
+        const firstHop = (feeders: ReturnType<typeof generateFeeders>, id: string) => {
+          const home = feeders.find(f => f.inverterIds.includes(id))
+            ?.segments.slice(-1)[0]?.pts ?? [];
+          return { home, dx: (home[1]?.x ?? 0) - (home[0]?.x ?? 0),
+            dy: (home[1]?.y ?? 0) - (home[0]?.y ?? 0) };
+        };
+
+        // Area 4: vertical stack, cans south of the top skid, takeoff west —
+        // first hop must leave the west PCS end, not drop south through CON.
+        const a4Pcs = [0, 32, 64].map((y, i) => ({
+          id: `inv-a4-${i}`, kind: 'inverter' as const, label: `PCS a4 ${i}`,
+          x: 0, y, rotation: Math.PI / 2, length: 22, width: 8,
+        }));
+        const a4Bess = a4Pcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-a4-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: p.y - 22, rotation: Math.PI / 2,
+          length: 16, width: 8,
+        })));
+        const a4Fence: Pt[] = [
+          { x: -240, y: -80 }, { x: 120, y: -80 },
+          { x: 120, y: 120 }, { x: -240, y: 120 },
+        ];
+        const a4Design = {
+          fence: a4Fence, boundary: { polygon: a4Fence },
+          equipment: [...a4Pcs, ...a4Bess],
+          cables: a4Pcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 5, y: p.y }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: -40, y: 32, length: 200, width: 24, rotation: 0 }],
+          roads: [], tracedPcsUnits: 3,
+        } as any;
+        const a4Feeders = generateFeeders(a4Design, { x: -180, y: 32 }, 5, { maxPerFeeder: 1 });
+        const a4Top = firstHop(a4Feeders, 'inv-a4-0');
+        const a4Cans = countCanHits(a4Feeders, a4Bess);
+        check('[feeder-road] column west takeoff exits the PCS end, not south through cans',
+          a4Top.home.length >= 2 && a4Top.dx < -2 && a4Top.dy * a4Top.dy < a4Top.dx * a4Top.dx &&
+          a4Cans === 0,
+          `dx=${a4Top.dx.toFixed(1)} dy=${a4Top.dy.toFixed(1)} cans=${a4Cans} n=${a4Feeders.length} home=${a4Top.home.slice(0, 4).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+
+        // Area 1: cans west of a column, takeoff south — must not trench west
+        // through the 14 ft courtyard / containers.
+        const a1Pcs = [0, 32, 64].map((y, i) => ({
+          id: `inv-a1-${i}`, kind: 'inverter' as const, label: `PCS a1 ${i}`,
+          x: 0, y, rotation: Math.PI / 2, length: 22, width: 8,
+        }));
+        const a1Bess = a1Pcs.flatMap(p => [1, 2, 3].map(k => ({
+          id: `bess-a1-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x - 22, y: p.y + (k - 2) * 7, rotation: Math.PI / 2,
+          length: 16, width: 8,
+        })));
+        const a1Fence: Pt[] = [
+          { x: -80, y: -240 }, { x: 120, y: -240 },
+          { x: 120, y: 120 }, { x: -80, y: 120 },
+        ];
+        const a1Design = {
+          fence: a1Fence, boundary: { polygon: a1Fence },
+          equipment: [...a1Pcs, ...a1Bess],
+          cables: a1Pcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y - 5 }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: 40, y: -40, length: 200, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 3,
+        } as any;
+        const a1Feeders = generateFeeders(a1Design, { x: 0, y: -180 }, 5, { maxPerFeeder: 1 });
+        const a1Bot = firstHop(a1Feeders, 'inv-a1-0');
+        const a1Cans = countCanHits(a1Feeders, a1Bess);
+        check('[feeder-road] column south takeoff does not cut west courtyard cans',
+          a1Bot.home.length >= 2 && a1Cans === 0 && a1Bot.dx > 2,
+          `dx=${a1Bot.dx.toFixed(1)} dy=${a1Bot.dy.toFixed(1)} cans=${a1Cans} n=${a1Feeders.length} home=${a1Bot.home.slice(0, 4).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+
+        // Green / Area-3 style: cans inland (north), road south of the PCS.
+        const a3Pcs = [0, 32, 64].map((x, i) => ({
+          id: `inv-a3-${i}`, kind: 'inverter' as const, label: `PCS a3 ${i}`,
+          x, y: 0, rotation: Math.PI / 2, length: 22, width: 8,
+        }));
+        const a3Bess = a3Pcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-a3-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: p.y + 22, rotation: Math.PI / 2,
+          length: 16, width: 8,
+        })));
+        const a3Fence: Pt[] = [
+          { x: -80, y: -240 }, { x: 160, y: -240 },
+          { x: 160, y: 80 }, { x: -80, y: 80 },
+        ];
+        const a3Design = {
+          fence: a3Fence, boundary: { polygon: a3Fence },
+          equipment: [...a3Pcs, ...a3Bess],
+          cables: a3Pcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y - 5 }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: 32, y: -40, length: 200, width: 24, rotation: 0 }],
+          roads: [], tracedPcsUnits: 3,
+        } as any;
+        const a3Feeders = generateFeeders(a3Design, { x: 32, y: -180 }, 5, { maxPerFeeder: 1 });
+        const a3Right = firstHop(a3Feeders, 'inv-a3-2');
+        const a3Cans = countCanHits(a3Feeders, a3Bess);
+        check('[feeder-road] inland cans: home run does not cut north through containers',
+          a3Right.home.length >= 2 && a3Cans === 0 && a3Right.dy <= 2,
+          `dx=${a3Right.dx.toFixed(1)} dy=${a3Right.dy.toFixed(1)} cans=${a3Cans} n=${a3Feeders.length} home=${a3Right.home.slice(0, 4).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+
+        const samplesThrough = (home: Pt[], box: { x1: number; y1: number; x2: number; y2: number }) => {
+          let n = 0;
+          for (let i = 0; i < home.length - 1; i++) {
+            const a = home[i], b = home[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const samples = Math.max(2, Math.ceil(len / 3));
+            for (let s = 1; s < samples; s++) {
+              const t = s / samples;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (x > box.x1 && x < box.x2 && y > box.y1 && y < box.y2) n++;
+            }
+          }
+          return n;
+        };
+
+        // Area 2: north-bank feeder must ride the road south of the PCS, not
+        // the 14 ft DC courtyard behind the row (02 through 07 cables).
+        const n2Pcs = [0, 40, 80].map((x, i) => ({
+          id: `inv-n2-${i}`, kind: 'inverter' as const, label: `PCS n2 ${i}`,
+          x, y: 0, rotation: Math.PI, length: 22, width: 8,
+        }));
+        const n2Bess = n2Pcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-n2-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: 22, rotation: Math.PI, length: 16, width: 8,
+        })));
+        const n2Fence: Pt[] = [
+          { x: -80, y: -220 }, { x: 200, y: -220 },
+          { x: 200, y: 80 }, { x: -80, y: 80 },
+        ];
+        const n2Design = {
+          fence: n2Fence, boundary: { polygon: n2Fence },
+          equipment: [...n2Pcs, ...n2Bess],
+          cables: n2Pcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 10, y: -5 }, { x: p.x - 10, y: 0 }],
+          })),
+          aisles: [
+            { x: 40, y: -40, length: 220, width: 24, rotation: 0 },
+            { x: -40, y: -80, length: 200, width: 24, rotation: Math.PI / 2 },
+            { x: 140, y: -80, length: 200, width: 24, rotation: Math.PI / 2 },
+          ],
+          roads: [], tracedPcsUnits: 3,
+        } as any;
+        const n2Feeders = generateFeeders(n2Design, { x: 40, y: -180 }, 5, { maxPerFeeder: 1 });
+        const n2West = firstHop(n2Feeders, 'inv-n2-0');
+        const n2Court = { x1: 24, y1: 6, x2: 96, y2: 18 };
+        const n2Through = n2Feeders.reduce((n, f) =>
+          n + samplesThrough(f.segments[f.segments.length - 1]?.pts ?? [], n2Court), 0);
+        check('[feeder-road] north-bank home run does not ride the DC courtyard',
+          n2West.home.length >= 2 && n2Through === 0 && countCanHits(n2Feeders, n2Bess) === 0,
+          `through=${n2Through} home=${n2West.home.slice(0, 5).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+
+        // Column with cans east: the south unit must not trench the 14 ft
+        // gap / DC fan of the units above it (Area 3/4 02 and 07).
+        const eColPcs = [0, 32, 64].map((y, i) => ({
+          id: `inv-ecol-${i}`, kind: 'inverter' as const, label: `PCS ecol ${i}`,
+          x: 0, y, rotation: Math.PI / 2, length: 22, width: 8,
+        }));
+        const eColBess = eColPcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-ecol-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + 22, y: p.y + (k === 1 ? -6 : 6), rotation: Math.PI / 2,
+          length: 16, width: 8,
+        })));
+        const eColFence: Pt[] = [
+          { x: -200, y: -80 }, { x: 80, y: -80 },
+          { x: 80, y: 120 }, { x: -200, y: 120 },
+        ];
+        const eColDesign = {
+          fence: eColFence, boundary: { polygon: eColFence },
+          equipment: [...eColPcs, ...eColBess],
+          cables: eColPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 5, y: p.y }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: -40, y: 32, length: 200, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 3,
+        } as any;
+        const eColFeeders = generateFeeders(eColDesign, { x: -180, y: 32 }, 5, { maxPerFeeder: 1 });
+        const eColGap = { x1: 6, y1: 20, x2: 18, y2: 72 };
+        const eColThrough = eColFeeders.reduce((n, f) =>
+          n + samplesThrough(f.segments[f.segments.length - 1]?.pts ?? [], eColGap), 0);
+        const eColTop = firstHop(eColFeeders, 'inv-ecol-2');
+        check('[feeder-road] cans-east column does not trench the 14 ft DC gap',
+          eColTop.home.length >= 2 && eColThrough === 0 && countCanHits(eColFeeders, eColBess) === 0,
+          `through=${eColThrough} dx=${eColTop.dx.toFixed(1)} home=${eColTop.home.slice(0, 5).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+
+        // Area 4 west takeoff: two PCS rows with cans south of each. The
+        // south row's home run must leave west into the road before any
+        // northbound — not cut the north row's CON columns (yellow 08).
+        const a4r = (y: number, prefix: string) =>
+          [0, 36, 72].map((x, i) => ({
+            id: `inv-${prefix}-${i}`, kind: 'inverter' as const, label: `PCS ${prefix} ${i}`,
+            x, y, rotation: 0, length: 22, width: 8,
+          }));
+        const a4SouthPcs = a4r(0, 'a4s');
+        const a4NorthPcs = a4r(70, 'a4n');
+        const a4RowPcs = [...a4SouthPcs, ...a4NorthPcs];
+        const a4RowBess = a4RowPcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: p.y - 22, rotation: 0, length: 16, width: 8,
+        })));
+        const a4RowFence: Pt[] = [
+          { x: -240, y: -80 }, { x: 160, y: -80 },
+          { x: 160, y: 160 }, { x: -240, y: 160 },
+        ];
+        const a4RowFeeders = generateFeeders({
+          fence: a4RowFence, boundary: { polygon: a4RowFence },
+          equipment: [...a4RowPcs, ...a4RowBess],
+          cables: a4RowPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 10, y: p.y }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: -40, y: 35, length: 220, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 6,
+        } as any, { x: -180, y: 35 }, 5, { maxPerFeeder: 1 });
+        const northCans = a4RowBess.filter(e => e.y > 20);
+        const a4sHome = firstHop(a4RowFeeders, 'inv-a4s-0');
+        const northCanHits = countCanHits(
+          a4RowFeeders.filter(f => f.inverterIds.some(id => id.startsWith('inv-a4s-'))),
+          northCans);
+        let fieldVert = 0;
+        for (const id of ['inv-a4s-0', 'inv-a4s-1', 'inv-a4s-2']) {
+          const home = firstHop(a4RowFeeders, id).home;
+          for (let i = 0; i < home.length - 1; i++) {
+            const a = home[i], b = home[i + 1];
+            if (Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) > 24 &&
+                a.x > -16 && a.x < 90) fieldVert++;
+          }
+        }
+        check('[feeder-road] west takeoff does not trunk north through the next row cans',
+          a4sHome.home.length >= 2 && northCanHits === 0 && fieldVert === 0,
+          `northCans=${northCanHits} fieldVert=${fieldVert} dx=${a4sHome.dx.toFixed(1)} home=${a4sHome.home.slice(0, 6).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+
+        // Area 3 sandwich: PCS on the north AND south faces of one can
+        // field. A feeder from the south row (takeoff north) must go around
+        // the yard, not through the hole between the two PCS rows.
+        const swN = [0, 40, 80].map((x, i) => ({
+          id: `inv-swn-${i}`, kind: 'inverter' as const, label: `PCS n ${i}`,
+          x, y: 80, rotation: Math.PI, length: 22, width: 8,
+        }));
+        const swS = [0, 40, 80].map((x, i) => ({
+          id: `inv-sws-${i}`, kind: 'inverter' as const, label: `PCS s ${i}`,
+          x, y: 0, rotation: 0, length: 22, width: 8,
+        }));
+        const swBess = [
+          ...swN.flatMap(p => [1, 2].map(k => ({
+            id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+            x: p.x + (k === 1 ? -6 : 6), y: 52, rotation: Math.PI, length: 16, width: 8,
+          }))),
+          ...swS.flatMap(p => [1, 2].map(k => ({
+            id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+            x: p.x + (k === 1 ? -6 : 6), y: 28, rotation: 0, length: 16, width: 8,
+          }))),
+        ];
+        const swFence: Pt[] = [
+          { x: -120, y: -80 }, { x: 200, y: -80 },
+          { x: 200, y: 220 }, { x: -120, y: 220 },
+        ];
+        const swFeeders = generateFeeders({
+          fence: swFence, boundary: { polygon: swFence },
+          equipment: [...swN, ...swS, ...swBess],
+          cables: [...swN, ...swS].map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y + (p.y > 40 ? 5 : -5) }, { x: p.x, y: p.y }],
+          })),
+          aisles: [
+            { x: -40, y: 40, length: 240, width: 24, rotation: Math.PI / 2 },
+            { x: 140, y: 40, length: 240, width: 24, rotation: Math.PI / 2 },
+          ],
+          roads: [], tracedPcsUnits: 6,
+        } as any, { x: 40, y: 180 }, 5, { maxPerFeeder: 1 });
+        const swMid = { x1: -12, y1: 12, x2: 92, y2: 68 };
+        const swThrough = swFeeders.reduce((n, f) => {
+          const home = f.segments[f.segments.length - 1]?.pts ?? [];
+          for (let i = 0; i < home.length - 1; i++) {
+            const a = home[i], b = home[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const samples = Math.max(2, Math.ceil(len / 3));
+            for (let s = 1; s < samples; s++) {
+              const t = s / samples;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (x > swMid.x1 && x < swMid.x2 && y > swMid.y1 && y < swMid.y2) n++;
+            }
+          }
+          return n;
+        }, 0);
+        const swHome = firstHop(swFeeders, 'inv-sws-0');
+        check('[feeder-road] sandwich yard: home run does not thread the can field',
+          swHome.home.length >= 2 && swThrough === 0,
+          `through=${swThrough} n=${swFeeders.length} home=${swHome.home.slice(0, 6).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+
+        // Big Iron Area 3/4: vertical PCS columns, cans ~60 ft west, takeoff
+        // west. First hop must leave north/south of the can field, not west
+        // at PCS Y through CON.
+        const colWPcs = [0, 32, 64, 96].map((y, i) => ({
+          id: `inv-colw-${i}`, kind: 'inverter' as const, label: `PCS colw ${i}`,
+          x: 0, y, rotation: Math.PI / 2, length: 22, width: 8,
+        }));
+        const colWBess = colWPcs.flatMap(p => [1, 2, 3].map(k => ({
+          id: `bess-colw-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x - 63, y: p.y + (k - 2) * 8, rotation: Math.PI / 2,
+          length: 16, width: 8,
+        })));
+        const colWFence: Pt[] = [
+          { x: -240, y: -80 }, { x: 80, y: -80 },
+          { x: 80, y: 200 }, { x: -240, y: 200 },
+        ];
+        const colWFeeders = generateFeeders({
+          fence: colWFence, boundary: { polygon: colWFence },
+          equipment: [...colWPcs, ...colWBess],
+          cables: colWPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 5, y: p.y }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: -40, y: 48, length: 220, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 4,
+        } as any, { x: -180, y: 48 }, 5, { maxPerFeeder: 1, approach: 'W' });
+        const colWMid = { x1: -72, y1: -8, x2: -8, y2: 104 };
+        const colWThrough = colWFeeders.reduce((n, f) =>
+          n + samplesThrough(f.segments[f.segments.length - 1]?.pts ?? [], colWMid), 0);
+        const colWHop = firstHop(colWFeeders, 'inv-colw-1');
+        check('[feeder-road] column cans-west takeoff does not trench the can field',
+          colWHop.home.length >= 2 && colWThrough === 0 && countCanHits(colWFeeders, colWBess) === 0,
+          `through=${colWThrough} cans=${countCanHits(colWFeeders, colWBess)} home=${colWHop.home.slice(0, 6).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+      }
 
       const crossRowBuilt917 = Array.from({ length: 8 }, (_, i) => {
         const row = i < 4 ? 0 : 1;

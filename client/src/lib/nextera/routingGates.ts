@@ -195,6 +195,7 @@ interface NamedPolyline {
   pts: Pt[];
   kind: 'cable' | 'feeder' | 'aux';
   cls?: CableClass;
+  ownerIds?: string[];
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
 }
 
@@ -439,7 +440,8 @@ function runRoutingGatesInner(design: SiteDesign, ctx: RoutingGateContext): Rout
           ? 'home run'
           : `row trunk section ${si + 1}`;
         feederLines.push({
-          label: `${name} ${role}`, pts: seg.pts, kind: 'feeder', bounds: polyBounds(seg.pts),
+          label: `${name} ${role}`, pts: seg.pts, kind: 'feeder',
+          ownerIds: f.inverterIds, bounds: polyBounds(seg.pts),
         });
       }
     }
@@ -479,6 +481,11 @@ function runRoutingGatesInner(design: SiteDesign, ctx: RoutingGateContext): Rout
         const M = GATE_TERMINAL_RADIUS_FT;
         if (line.bounds.maxX < ob.bounds.minX - M || line.bounds.minX > ob.bounds.maxX + M ||
             line.bounds.maxY < ob.bounds.minY - M || line.bounds.minY > ob.bounds.maxY + M) continue;
+        // Under-skid MV collectors are supposed to ride through their own
+        // PCS units. Exempt only that circuit's inverters — containers and
+        // foreign PCS stay hard.
+        if (line.kind === 'feeder' && ob.e.kind === 'inverter' &&
+            line.ownerIds?.includes(ob.e.id)) continue;
         // Terminal-stub exemption: a run that STARTS or ENDS at this unit may
         // enter its footprint to land on the terminal — but only the
         // contiguous landing stub at that end is exempt. Trimming the stub
