@@ -1440,15 +1440,159 @@ export function generateFeeders(
         const yOv = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1);
         const dx = Math.max(0, Math.max(a.x1 - b.x2, b.x1 - a.x2));
         const dy = Math.max(0, Math.max(a.y1 - b.y2, b.y1 - a.y2));
+        const PAST = 12;
         if (xOv > 2 && dy > 0 && dy < 28) {
           const y1 = Math.min(a.y2, b.y2);
           const y2 = Math.max(a.y1, b.y1);
-          if (y2 > y1 + 1) pushCluster(Math.max(a.x1, b.x1), y1, Math.min(a.x2, b.x2), y2);
+          // Pad width only — padding X ate the west road in Area 4 and the
+          // trunk then had no legal northbound except through CON columns.
+          if (y2 > y1 + 1) {
+            pushCluster(Math.min(a.x1, b.x1), y1, Math.max(a.x2, b.x2), y2);
+          }
         }
         if (yOv > 2 && dx > 0 && dx < 28) {
           const x1 = Math.min(a.x2, b.x2);
           const x2 = Math.max(a.x1, b.x1);
-          if (x2 > x1 + 1) pushCluster(x1, Math.max(a.y1, b.y1), x2, Math.min(a.y2, b.y2));
+          if (x2 > x1 + 1) {
+            pushCluster(
+              x1, Math.min(a.y1, b.y1) - PAST,
+              x2, Math.max(a.y2, b.y2) + PAST);
+          }
+        }
+      }
+    }
+  }
+  // Solid no-go yard: this PCS's batteries plus the DC courtyard up to the
+  // PCS face. Internal 3 ft gaps and the cable fan sit inside the AABB so
+  // a feeder cannot thread the cluster. The road on the opposite PCS face
+  // stays open. Each container is owned by its nearest PCS so a 24 ft
+  // drive between pads is not swallowed.
+  {
+    const pcsList = design.equipment.filter(e =>
+      e.kind === 'inverter' && !e.augmented && !e.future);
+    const ownerOf = (o: PlacedEquipment): PlacedEquipment | null => {
+      let best: PlacedEquipment | null = null, bestD = Infinity;
+      for (const p of pcsList) {
+        const d = Math.hypot(p.x - o.x, p.y - o.y);
+        if (d < bestD) { bestD = d; best = p; }
+      }
+      return bestD < 90 ? best : null;
+    };
+    const faceVote = new Map<string, { n: number; s: number; east: number; w: number }>();
+    for (const e of pcsList) {
+      const pcs = equipmentRect(e, 2);
+      const cans: Rect[] = [];
+      let n = 0, s = 0, east = 0, w = 0;
+      for (const o of design.equipment) {
+        if (o.kind !== 'bess' || o.augmented || o.future) continue;
+        if (ownerOf(o) !== e) continue;
+        cans.push(equipmentRect(o, 2));
+        const dx = o.x - e.x, dy = o.y - e.y;
+        if (Math.abs(dy) >= Math.abs(dx)) {
+          if (dy >= 0) n++; else s++;
+        } else if (dx >= 0) east++;
+        else w++;
+      }
+      faceVote.set(e.id, { n, s, east, w });
+      if (!cans.length) continue;
+      let x1 = Math.min(pcs.x1, ...cans.map(r => r.x1));
+      let y1 = Math.min(pcs.y1, ...cans.map(r => r.y1));
+      let x2 = Math.max(pcs.x2, ...cans.map(r => r.x2));
+      let y2 = Math.max(pcs.y2, ...cans.map(r => r.y2));
+      if (n + s >= east + w) {
+        if (n > s) y1 = pcs.y2;
+        else if (s > n) y2 = pcs.y1;
+      } else if (east > w) x1 = pcs.x2;
+      else if (w > east) x2 = pcs.x1;
+      pushCluster(x1, y1, x2, y2);
+    }
+    // Sandwich yard (Area 3/4): PCS on opposite faces of the same can
+    // field. Per-PCS boxes leave a hole down the middle AND between
+    // adjacent skids in the row (09 between PCS07-02 and 07-01). Fill the
+    // full interior between the two facing rows. Two parallel yards facing
+    // AWAY across a road do not match — their cans point into their own pads.
+    const rowMates = (e: PlacedEquipment, horiz: boolean) =>
+      pcsList.filter(o => horiz
+        ? Math.abs(o.y - e.y) < 16
+        : Math.abs(o.x - e.x) < 16);
+    const seenSandwich = new Set<string>();
+    for (let i = 0; i < pcsList.length; i++) {
+      for (let j = i + 1; j < pcsList.length; j++) {
+        const p = pcsList[i], q = pcsList[j];
+        const pr = equipmentRect(p, 2), qr = equipmentRect(q, 2);
+        const xOv = Math.min(pr.x2, qr.x2) - Math.max(pr.x1, qr.x1);
+        const yOv = Math.min(pr.y2, qr.y2) - Math.max(pr.y1, qr.y1);
+        const pv = faceVote.get(p.id) ?? { n: 0, s: 0, east: 0, w: 0 };
+        const qv = faceVote.get(q.id) ?? { n: 0, s: 0, east: 0, w: 0 };
+        if (xOv > 8 && Math.abs(p.y - q.y) > 24 && Math.abs(p.y - q.y) < 500) {
+          const nv = p.y > q.y ? pv : qv;
+          const sv = p.y > q.y ? qv : pv;
+          if (nv.s > nv.n && sv.n > sv.s) {
+            const north = p.y > q.y ? p : q;
+            const south = p.y > q.y ? q : p;
+            const lo = Math.min(north.y, south.y) + 12;
+            const hi = Math.max(north.y, south.y) - 12;
+            const intervening = pcsList.some(o =>
+              o !== north && o !== south && o.y > lo && o.y < hi &&
+              Math.min(equipmentRect(o, 2).x2, Math.max(pr.x2, qr.x2)) -
+              Math.max(equipmentRect(o, 2).x1, Math.min(pr.x1, qr.x1)) > 8);
+            if (!intervening) {
+              const nMates = rowMates(north, true).filter(e => {
+                const v = faceVote.get(e.id); return v && v.s > v.n;
+              });
+              const sMates = rowMates(south, true).filter(e => {
+                const v = faceVote.get(e.id); return v && v.n > v.s;
+              });
+              const key = `ns:${[...nMates, ...sMates].map(e => e.id).sort().join(',')}`;
+              if (nMates.length && sMates.length && !seenSandwich.has(key)) {
+                seenSandwich.add(key);
+                const nRects = nMates.map(e => equipmentRect(e, 2));
+                const sRects = sMates.map(e => equipmentRect(e, 2));
+                const y1 = Math.max(...sRects.map(r => r.y2));
+                const y2 = Math.min(...nRects.map(r => r.y1));
+                if (y2 - y1 > 4) {
+                  pushCluster(
+                    Math.min(...nRects.concat(sRects).map(r => r.x1)), y1,
+                    Math.max(...nRects.concat(sRects).map(r => r.x2)), y2);
+                }
+              }
+            }
+          }
+        }
+        if (yOv > 8 && Math.abs(p.x - q.x) > 24 && Math.abs(p.x - q.x) < 500) {
+          const ev = p.x > q.x ? pv : qv;
+          const wv = p.x > q.x ? qv : pv;
+          if (ev.w > ev.east && wv.east > wv.w) {
+            const eastE = p.x > q.x ? p : q;
+            const westE = p.x > q.x ? q : p;
+            const lo = Math.min(eastE.x, westE.x) + 12;
+            const hi = Math.max(eastE.x, westE.x) - 12;
+            const intervening = pcsList.some(o =>
+              o !== eastE && o !== westE && o.x > lo && o.x < hi &&
+              Math.min(equipmentRect(o, 2).y2, Math.max(pr.y2, qr.y2)) -
+              Math.max(equipmentRect(o, 2).y1, Math.min(pr.y1, qr.y1)) > 8);
+            if (!intervening) {
+              const eMates = rowMates(eastE, false).filter(e => {
+                const v = faceVote.get(e.id); return v && v.w > v.east;
+              });
+              const wMates = rowMates(westE, false).filter(e => {
+                const v = faceVote.get(e.id); return v && v.east > v.w;
+              });
+              const key = `ew:${[...eMates, ...wMates].map(e => e.id).sort().join(',')}`;
+              if (eMates.length && wMates.length && !seenSandwich.has(key)) {
+                seenSandwich.add(key);
+                const eRects = eMates.map(e => equipmentRect(e, 2));
+                const wRects = wMates.map(e => equipmentRect(e, 2));
+                const x1 = Math.max(...wRects.map(r => r.x2));
+                const x2 = Math.min(...eRects.map(r => r.x1));
+                if (x2 - x1 > 4) {
+                  pushCluster(
+                    x1, Math.min(...eRects.concat(wRects).map(r => r.y1)),
+                    x2, Math.max(...eRects.concat(wRects).map(r => r.y2)));
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -1466,6 +1610,127 @@ export function generateFeeders(
       x2 = Math.max(x2, r.x2); y2 = Math.max(y2, r.y2);
     }
     return { x1, y1, x2, y2 };
+  };
+  const bessVote = (e: PlacedEquipment) => {
+    let n = 0, s = 0, east = 0, w = 0;
+    for (const o of design.equipment) {
+      if (o.kind !== 'bess' || o.augmented || o.future) continue;
+      const dx = o.x - e.x, dy = o.y - e.y;
+      const d = Math.hypot(dx, dy);
+      // Area 4 cans sit ~60 ft west of the skid; 36 ft treated those pads
+      // as empty and the first hop went west through CON.
+      if (d >= 90) continue;
+      let owned = true;
+      for (const p of inverters) {
+        if (p.id === e.id) continue;
+        if (Math.hypot(o.x - p.x, o.y - p.y) < d - 0.1) { owned = false; break; }
+      }
+      if (!owned) continue;
+      if (Math.abs(dy) >= Math.abs(dx)) {
+        if (dy >= 0) n++; else s++;
+      } else if (dx >= 0) east++;
+      else w++;
+    }
+    return { n, s, east, w };
+  };
+  // Union of this vertical PCS stack plus the containers it owns. West
+  // takeoff must leave at the north/south of THIS box, not at PCS Y
+  // through the can field (Area 3/4).
+  const columnYardOf = (e: PlacedEquipment): Rect => {
+    const mates = inverters.filter(o => Math.abs(o.x - e.x) < 18);
+    const seed = mates.length ? mates : [e];
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const p of seed) {
+      const r = equipmentRect(p, 2);
+      x1 = Math.min(x1, r.x1); y1 = Math.min(y1, r.y1);
+      x2 = Math.max(x2, r.x2); y2 = Math.max(y2, r.y2);
+    }
+    for (const o of design.equipment) {
+      if (o.kind !== 'bess' || o.augmented || o.future) continue;
+      const near = seed.some(p => Math.hypot(o.x - p.x, o.y - p.y) < 90);
+      if (!near) continue;
+      const r = equipmentRect(o, 2);
+      x1 = Math.min(x1, r.x1); y1 = Math.min(y1, r.y1);
+      x2 = Math.max(x2, r.x2); y2 = Math.max(y2, r.y2);
+    }
+    return { x1, y1, x2, y2 };
+  };
+  const columnRoadX = (e: PlacedEquipment): number => {
+    const pcs = equipmentRect(e, 2);
+    const { east, w } = bessVote(e);
+    // West takeoff: the can field is between the skid and the road.
+    // Launching west at PCS Y is the Area 4 cut. Leave the east face
+    // and ride around the north/south of the yard instead.
+    if (approachAxis.horizApproach && approachAxis.dirX < 0) return pcs.x2 + 8;
+    if (approachAxis.horizApproach && approachAxis.dirX > 0) return pcs.x1 - 8;
+    if (east > w) return pcs.x1 - 8;
+    return pcs.x2 + 8;
+  };
+  const columnEdgeY = (e: PlacedEquipment): number => {
+    const local = columnYardOf(e);
+    let y1 = local.y1, y2 = local.y2;
+    for (const r of clusterRects) y1 = Math.min(y1, r.y1), y2 = Math.max(y2, r.y2);
+    const yLo = y1 - 8, yHi = y2 + 8;
+    return Math.abs(yHi - substation.y) <= Math.abs(yLo - substation.y) ? yHi : yLo;
+  };
+  const columnTurnY = (climb: number): number => {
+    if (!clusterRects.length) return climb;
+    const lo = Math.min(...clusterRects.map(r => r.y1)) - 8;
+    const hi = Math.max(...clusterRects.map(r => r.y2)) + 8;
+    return approachAxis.dirY > 0 ? Math.max(climb, hi) : Math.min(climb, lo);
+  };
+  const columnToward = (e: PlacedEquipment, start: Pt): Pt =>
+    ({ x: columnRoadX(e), y: start.y });
+  // First hop off a column PCS: the skid END away from its batteries (the
+  // road / drive), never along the DC courtyard even when that is toward
+  // the take-off. peelPadOf includes the cans, so pad.y2+8 was a trench
+  // down through CON (Area 4 yellow/teal, Area 1 red).
+  const pcsRoadToward = (e: PlacedEquipment, start: Pt): Pt => {
+    const r = equipmentRect(e, 2);
+    const { n, s, east, w } = bessVote(e);
+    const west = { x: r.x1 - 8, y: start.y };
+    const eastPt = { x: r.x2 + 8, y: start.y };
+    const south = { x: start.x, y: r.y1 - 8 };
+    const north = { x: start.x, y: r.y2 + 8 };
+    const intoCans = (goEast: boolean | null, goNorth: boolean | null) => {
+      if (goEast !== null) return goEast ? east - w > 1 : w - east > 1;
+      return goNorth ? n - s > 1 : s - n > 1;
+    };
+    const pickHoriz = (goEast: boolean) => goEast ? eastPt : west;
+    const pickVert = (goNorth: boolean) => goNorth ? north : south;
+    const wantEast = substation.x >= start.x;
+    const wantNorth = substation.y >= start.y;
+    const ns = n + s, ew = east + w;
+    // Road face = opposite the battery cloud. Approach-axis toward the
+    // take-off is used only when that hop is not into cans — otherwise
+    // the bottom-of-column south exit drops into the DC courtyard (Area 1
+    // red) and the top-of-column south exit drops into CON (Area 4).
+    if (ew > ns) return pickHoriz(w > east);
+    if (ns > ew) {
+      if (approachAxis.horizApproach && !intoCans(wantEast, null)) {
+        return pickHoriz(wantEast);
+      }
+      if (!approachAxis.horizApproach && !intoCans(null, s > n)) {
+        return pickVert(s > n);
+      }
+      return pickHoriz(intoCans(wantEast, null) ? w > east : wantEast);
+    }
+    if (approachAxis.horizApproach) {
+      if (!intoCans(wantEast, null)) return pickHoriz(wantEast);
+      if (!intoCans(null, wantNorth)) return pickVert(wantNorth);
+    } else {
+      if (!intoCans(null, wantNorth)) return pickVert(wantNorth);
+      if (!intoCans(wantEast, null)) return pickHoriz(wantEast);
+    }
+    return approachAxis.horizApproach ? pickHoriz(wantEast) : pickVert(wantNorth);
+  };
+  // Coordinate of the drive face (opposite this PCS's batteries) — used
+  // when a run line would otherwise sit in the 14 ft DC courtyard.
+  const pcsRoadFaceCoord = (e: PlacedEquipment, rideX: boolean): number => {
+    const r = equipmentRect(e, 2);
+    const { n, s, east, w } = bessVote(e);
+    if (rideX) return east >= w ? r.x1 - 8 : r.x2 + 8;
+    return n >= s ? r.y1 - 8 : r.y2 + 8;
   };
   const peelRoadCoord = (e: PlacedEquipment, start: Pt, rideX: boolean): number => {
     const pad = peelPadOf(e);
@@ -1498,31 +1763,6 @@ export function generateFeeders(
       trenchKeepOutRects(runs, 1.25),
       exemptEq.map(equipmentExemptRect),
     );
-  const pcsUnderExit = (inv: PlacedEquipment, start: Pt, toward: Pt): Pt => {
-    const vx = -Math.sin(inv.rotation), vy = Math.cos(inv.rotation);
-    const distOut = inv.width / 2 + 2;
-    const plus = { x: start.x + vx * distOut, y: start.y + vy * distOut };
-    const minus = { x: start.x - vx * distOut, y: start.y - vy * distOut };
-    const dPlus = Math.hypot(toward.x - plus.x, toward.y - plus.y);
-    const dMinus = Math.hypot(toward.x - minus.x, toward.y - minus.y);
-    // When the target is along the PCS long axis the two across-sides are
-    // tied — pick the face away from the nearest battery so the peel lands
-    // on the drive aisle, not in the DC fan.
-    if (Math.abs(dPlus - dMinus) < 1) {
-      let nearestBess = Infinity;
-      let bessSide = 0;
-      for (const e of design.equipment) {
-        if (e.kind !== 'bess') continue;
-        const d = Math.hypot(e.x - start.x, e.y - start.y);
-        if (d < nearestBess) {
-          nearestBess = d;
-          bessSide = Math.sign((e.x - start.x) * vx + (e.y - start.y) * vy);
-        }
-      }
-      if (bessSide !== 0) return bessSide > 0 ? minus : plus;
-    }
-    return dMinus < dPlus ? minus : plus;
-  };
   // Drafter route overrides: keys consumed by a live feeder, and the gi's of
   // circuits whose home run is drafter-drawn (the collinear separation pass
   // must never re-lay those — they are WYSIWYG).
@@ -2225,10 +2465,8 @@ export function generateFeeders(
       const hookTo = (c: number): Pt[] => {
         const off = 28;
         if (rideX) {
-          // Always leave along the take-off axis first. A straight X hop at
-          // PCS height is the Area 1 green cut through the DC courtyard.
-          const y = p.launchPt.y + dirY * off;
-          return [{ x: launchC, y: p.launchPt.y }, { x: launchC, y }, { x: c, y }];
+          const road = pcsRoadToward(p.launch, p.launchPt);
+          return [p.launchPt, road, { x: c, y: road.y }];
         }
         if (linesVertical === true) {
           const x = p.launchPt.x + dirX * off;
@@ -2269,6 +2507,13 @@ export function generateFeeders(
           ? (preferDir >= 0 ? pad.x2 + 8 : pad.x1 - 8)
           : (preferDir >= 0 ? pad.y2 + 8 : pad.y1 - 8);
         if (runClearFor(p.launch)(edge)) return edge;
+      }
+      const inCourt = (c: number) => clusterRects.some(r => rideX
+        ? c > r.x1 && c < r.x2 && p.launchPt.y > r.y1 && p.launchPt.y < r.y2
+        : c > r.y1 && c < r.y2 && p.launchPt.x > r.x1 && p.launchPt.x < r.x2);
+      if (inCourt(best)) {
+        const face = pcsRoadFaceCoord(p.launch, rideX);
+        if (!inCourt(face)) return face;
       }
       return best;
     };
@@ -2441,7 +2686,7 @@ export function generateFeeders(
     for (let i = 0; i < pts.length - 1; i++) {
       const a = pts[i], b = pts[i + 1];
       const len = Math.hypot(b.x - a.x, b.y - a.y);
-      const samples = Math.max(2, Math.ceil(len / 8));
+      const samples = Math.max(2, Math.ceil(len / 4));
       for (let s = 1; s < samples; s++) {
         const t = s / samples;
         const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
@@ -2453,6 +2698,27 @@ export function generateFeeders(
   // Horizontal traced rows: a long sideways trench at PCS height is the
   // 09/purple cut. Sideways motion is legal only past the equipment field.
   const sweepsRow = (pts: Pt[]): boolean => {
+    // Column yards: a long E/W trench at pad Y is the Area 3/4 cut
+    // through the next can field. Flag it the same way horizontal rows
+    // flag a long N/S comb.
+    if (linesVertical === true) {
+      const past = Number.isFinite(fieldExitAlong)
+        ? fieldExitAlong + (horizApproach ? dirX : dirY) * 8
+        : climbOrigin;
+      const stepDir = horizApproach ? dirX : dirY;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i + 1];
+        if (Math.abs(a.y - b.y) > 2 || Math.abs(a.x - b.x) < 24) continue;
+        const along = horizApproach ? a.x : a.y;
+        if ((along - past) * stepDir >= -1) continue;
+        const y = (a.y + b.y) / 2;
+        if (clusterRects.some(r => y > r.y1 && y < r.y2 &&
+            Math.min(Math.max(a.x, b.x), r.x2) - Math.max(Math.min(a.x, b.x), r.x1) > 16)) {
+          return true;
+        }
+      }
+      return false;
+    }
     if (linesVertical !== false) return false;
     const past = Number.isFinite(fieldExitAlong)
       ? fieldExitAlong + (horizApproach ? dirX : dirY) * 8
@@ -2491,24 +2757,21 @@ export function generateFeeders(
   // Only the two field edges (and the road past fieldExitAlong) may carry it.
   const cutsYard = (pts: Pt[]): boolean => {
     if (!clusterRects.length) return false;
-    const xLo = Math.min(...clusterRects.map(r => r.x1));
-    const xHi = Math.max(...clusterRects.map(r => r.x2));
-    const yLo = Math.min(...clusterRects.map(r => r.y1));
-    const yHi = Math.max(...clusterRects.map(r => r.y2));
     for (let i = 0; i < pts.length - 1; i++) {
       const a = pts[i], b = pts[i + 1];
-      if (horizApproach) {
-        if (Math.abs(a.y - b.y) > 2 || Math.abs(a.x - b.x) < 40) continue;
-        const y = (a.y + b.y) / 2;
-        if (y <= yLo + 8 || y >= yHi - 8) continue;
-        const lo = Math.min(a.x, b.x), hi = Math.max(a.x, b.x);
-        if (Math.min(hi, xHi) - Math.max(lo, xLo) > 40) return true;
-      } else {
-        if (Math.abs(a.x - b.x) > 2 || Math.abs(a.y - b.y) < 40) continue;
-        const x = (a.x + b.x) / 2;
-        if (x <= xLo + 8 || x >= xHi - 8) continue;
-        const lo = Math.min(a.y, b.y), hi = Math.max(a.y, b.y);
-        if (Math.min(hi, yHi) - Math.max(lo, yLo) > 40) return true;
+      const horiz = Math.abs(a.y - b.y) < 2 && Math.abs(a.x - b.x) >= 24;
+      const vert = Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) >= 24;
+      if (!horiz && !vert) continue;
+      for (const r of clusterRects) {
+        if (horiz) {
+          if (a.y <= r.y1 + 1 || a.y >= r.y2 - 1) continue;
+          const lo = Math.min(a.x, b.x), hi = Math.max(a.x, b.x);
+          if (Math.min(hi, r.x2) - Math.max(lo, r.x1) > 16) return true;
+        } else {
+          if (a.x <= r.x1 + 1 || a.x >= r.x2 - 1) continue;
+          const lo = Math.min(a.y, b.y), hi = Math.max(a.y, b.y);
+          if (Math.min(hi, r.y2) - Math.max(lo, r.y1) > 16) return true;
+        }
       }
     }
     return false;
@@ -2692,42 +2955,50 @@ export function generateFeeders(
     const climbRaw = climbOrigin + dir * climbOrderOf[gi] * climbStep;
     const climbCoord = dir > 0 ? Math.min(climbRaw, climbLimit) : Math.max(climbRaw, climbLimit);
     const roadPt = rowExitOf[gi].road ?? nearestRoadWaypoint(start, roadAisles);
-    // Aim along the assigned run (row-end outward, or the road). Across the
-    // skid the two faces are then tied and pcsUnderExit picks the side away
-    // from batteries — never the container courtyard, even if the nearest
-    // road waypoint sits on the far side of the island.
-    const localRun = linesVertical === false && clusterRects.length
+    const columnYard = isTracedYard && !tracedHorizontalRows;
+    // Aim along the assigned run (row-end outward, or the road-side PCS end).
+    const fieldEdgeRun = linesVertical === false && !columnYard && clusterRects.length
       ? (() => {
           const lo = Math.min(...clusterRects.map(r => horizApproach ? r.y1 : r.x1));
           const hi = Math.max(...clusterRects.map(r => horizApproach ? r.y2 : r.x2));
           const s = horizApproach ? start.y : start.x;
           const sign = s < (lo + hi) / 2 ? -1 : 1;
-          const edge = sign < 0 ? lo - 8 : hi + 8;
+          let edge = sign < 0 ? lo - 8 : hi + 8;
+          const snap: Pt = horizApproach ? { x: start.x, y: edge } : { x: edge, y: start.y };
+          if (feederCrossesObstacle([start, snap], clusterRects, start, snap)) {
+            edge = pcsRoadFaceCoord(last, !horizApproach);
+          }
           return edge + sign * (peelOffsetOf[gi] ?? 0);
         })()
-      : peelRoadCoord(last, start, !horizApproach);
+      : null;
     // Use THIS PCS's pad only. A merged column AABB would put "off-row"
     // south of the whole stack, and the drop at start.x would cut every
     // container row in between (Area 2 F2/F8).
     const toward = (() => {
-      if (linesVertical === false) {
+      if (!columnYard && linesVertical === false) {
+        const localRun = fieldEdgeRun ?? peelRoadCoord(last, start, !horizApproach);
         const raw = horizApproach
           ? { x: start.x + dirX * 16, y: start.y }
           : { x: start.x, y: start.y + dirY * 16 };
         const along0 = horizApproach ? start.y : start.x;
-        if (Math.abs(localRun - along0) < 48) {
-          return horizApproach ? { x: start.x, y: localRun } : { x: localRun, y: start.y };
+        if (!horizApproach && Math.abs(localRun - along0) < 48) {
+          const snap = { x: localRun, y: start.y };
+          if (!clusterRects.length ||
+              !feederCrossesObstacle([start, snap], clusterRects, start, snap)) {
+            return snap;
+          }
         }
         return raw;
       }
-      const pad = peelPadOf(last);
-      return horizApproach
-        ? { x: dirX > 0 ? pad.x2 + 8 : pad.x1 - 8, y: start.y }
-        : { x: start.x, y: dirY > 0 ? pad.y2 + 8 : pad.y1 - 8 };
+      return columnToward(last, start);
     })();
-    const underExitBase = linesVertical === false
-      ? toward
-      : pcsUnderExit(last, start, toward);
+    // Column local run rides the road-side coordinate of THIS skid. peelPadOf
+    // includes the cans, so pad.y1-16 was a trench down through CON (Area 4
+    // yellow/teal) and pad.x1-16 cut the west courtyard (Area 1 red).
+    const localRun = fieldEdgeRun ?? (horizApproach ? toward.y : toward.x);
+    // First hop is the road-side PCS end, not the across-skid face — that
+    // face is the DC courtyard when the long axis points at the take-off.
+    const underExitBase = toward;
     const peelExtra = peelOffsetOf[gi] ?? 0;
     const underExit = (() => {
       if (peelExtra < 0.01 || linesVertical === false) return underExitBase;
@@ -2741,18 +3012,26 @@ export function generateFeeders(
     })();
     const peelCoord = horizApproach ? underExit.x : underExit.y;
     const dropJog: Pt = underExit;
+    const driveAlong = horizApproach
+      ? (columnYard
+          ? columnEdgeY(last)
+          : (() => {
+              const face = pcsRoadFaceCoord(last, false);
+              return Math.abs(face - start.y) < 24 ? face : underExit.y;
+            })())
+      : peelCoord;
     const localStart: Pt = horizApproach
-      ? { x: peelCoord, y: localRun }
+      ? { x: climbCoord, y: driveAlong }
       : { x: localRun, y: peelCoord };
     const runStart: Pt = horizApproach
-      ? { x: peelCoord, y: runCoord }
+      ? { x: climbCoord, y: driveAlong }
       : { x: runCoord, y: peelCoord };
     // Exit point: end of the in-yard run, on the climb line.
     const exitPt: Pt = horizApproach
       ? { x: climbCoord, y: runCoord }
       : { x: runCoord, y: climbCoord };
     const localExit: Pt = horizApproach
-      ? { x: climbCoord, y: localRun }
+      ? { x: climbCoord, y: driveAlong }
       : { x: localRun, y: climbCoord };
     // Top of the climb: on the feeder's own lane.
     const laneJoin: Pt = horizApproach
@@ -2770,12 +3049,21 @@ export function generateFeeders(
     // Horizontal rows: drop onto THIS pad's road (take-off face), ride that
     // line to the field edge, then climb. Sideways at PCS height combs the
     // row; southbound at launch X cuts the next container row.
-    const ideal = linesVertical === false
+    // East/west take-off: finish the west/east exit along the PCS, then
+    // turn only on the climb line (the road). A Y-leg at underExit.x is
+    // still inside the can columns (Area 4 yellow/teal through CON0507).
+    const ideal = horizApproach
+      ? dedupePts([
+          start, underExit, { x: underExit.x, y: driveAlong },
+          { x: climbCoord, y: driveAlong },
+          exitPt, laneJoin, waypoint, ...entry,
+        ])
+      : (linesVertical === false && !columnYard)
       ? dedupePts([
           start,
           underExit,
-          horizApproach ? { x: underExit.x, y: localRun } : { x: localRun, y: underExit.y },
-          horizApproach ? { x: climbCoord, y: localRun } : { x: localRun, y: climbCoord },
+          { x: localRun, y: underExit.y },
+          { x: localRun, y: climbCoord },
           exitPt, laneJoin, waypoint, ...entry,
         ])
       : (Math.abs(localRun - runCoord) > 1
@@ -2795,7 +3083,9 @@ export function generateFeeders(
       // climb: a free start→exit grid route may travel east on a foreign
       // corridor and then cut across other feeders' climbs (comb violation).
       const viaOwnRun = (() => {
-        const drop = Math.abs(localRun - runCoord) > 1
+        const drop = horizApproach
+          ? [{ x: underExit.x, y: driveAlong }, { x: climbCoord, y: driveAlong }, exitPt]
+          : Math.abs(localRun - runCoord) > 1
           ? [...routeSegmentTrenchAware(underExit, localStart, homeObstaclesAuto), localExit]
           : routeSegmentTrenchAware(underExit, runStart, homeObstaclesAuto);
         const cand = stripBacktracks(dedupePts([start, ...drop, exitPt]));
@@ -2820,7 +3110,8 @@ export function generateFeeders(
         const cand = stripBacktracks(
           dedupePts([...runPts, laneJoin, waypoint, ...entry]));
         return feederCrossesObstacle(cand, homeObstaclesAuto, start, substation) ||
-          bandCoRunViolations(cand, crossBands) > 0 ? null : cand;
+          bandCoRunViolations(cand, crossBands) > 0 ||
+          clusterHits(cand) > 0 || cutsYard(cand) || sweepsRow(cand) ? null : cand;
       };
       // Neither reroute candidate can rely on the ideal comb nesting it just
       // broke — build BOTH full staggered routes, score each against the home
@@ -2977,19 +3268,28 @@ export function generateFeeders(
       const alongLaunchH = horizApproach && homePts.length >= 2 &&
         Math.abs(homePts[0].x - homePts[1].x) < 2 &&
         Math.abs(homePts[0].y - homePts[1].y) > 24;
-      if (linesVertical === false &&
+      if (!columnYard && linesVertical === false &&
           (sweepsRow(homePts) || cutsYard(homePts) || alongLaunch || alongLaunchH)) {
         const road = underExit;
         const ride = localRun;
         const forced = stripBacktracks(dedupePts([
           start,
           road,
-          horizApproach ? { x: road.x, y: ride } : { x: ride, y: road.y },
-          horizApproach ? { x: climbCoord, y: ride } : { x: ride, y: climbCoord },
+          horizApproach ? { x: road.x, y: driveAlong } : { x: ride, y: road.y },
+          horizApproach ? { x: climbCoord, y: driveAlong } : { x: ride, y: climbCoord },
           exitPt, laneJoin, waypoint, ...entry,
         ]));
         if ((!sweepsRow(forced) && !cutsYard(forced)) ||
             scoreRoute(forced) < scoreRoute(homePts)) homePts = forced;
+      } else if (columnYard) {
+        const roadX = columnRoadX(last);
+        const edgeY = columnEdgeY(last);
+        homePts = stripBacktracks(dedupePts(horizApproach
+          ? [start, { x: roadX, y: start.y }, { x: roadX, y: edgeY },
+              { x: climbCoord, y: edgeY }, exitPt, laneJoin, waypoint, ...entry]
+          : [start, { x: roadX, y: start.y }, { x: roadX, y: columnTurnY(climbCoord) },
+              { x: runCoord, y: columnTurnY(climbCoord) },
+              laneJoin, waypoint, ...entry]));
       }
     }
     // Angled mode: replace the exterior lane ride (climb → lane → approach)
@@ -3712,7 +4012,7 @@ export function generateFeeders(
   // a home run through a container yard. Rebuild a perimeter comb when they do.
   // Column yards (Area 1/3) keep under-PCS / island routing — this rebuild
   // is the row-field-edge comb and would cut those courtyards.
-  if (linesVertical === false) {
+  if (linesVertical === false && tracedHorizontalRows) {
     for (let gi = 0; gi < circuits.length; gi++) {
       if (customRouted.has(gi) || angledRouted.has(gi)) continue;
       const c = circuits[gi];
@@ -3736,7 +4036,11 @@ export function generateFeeders(
         const hi = Math.max(...clusterRects.map(r => horizApproach ? r.y2 : r.x2));
         const s = horizApproach ? start.y : start.x;
         const sign = s < (lo + hi) / 2 ? -1 : 1;
-        const edge = sign < 0 ? lo - 8 : hi + 8;
+        let edge = sign < 0 ? lo - 8 : hi + 8;
+        const snap: Pt = horizApproach ? { x: start.x, y: edge } : { x: edge, y: start.y };
+        if (feederCrossesObstacle([start, snap], clusterRects, start, snap)) {
+          edge = pcsRoadFaceCoord(last, !horizApproach);
+        }
         return edge + sign * (peelOffsetOf[gi] ?? 0);
       })();
       const dir = horizApproach ? dirX : dirY;
@@ -3769,21 +4073,32 @@ export function generateFeeders(
       const roadAlong = roadAlong0;
       const along0 = horizApproach ? start.y : start.x;
       const nearEdge = Math.abs(localRun - along0) < 48;
+      const faceY = pcsRoadFaceCoord(last, false);
+      const driveY = Math.abs(faceY - start.y) < 24 ? faceY : start.y;
       const forced = stripBacktracks(dedupePts(
-        nearEdge
+        horizApproach
           ? [
               start,
-              horizApproach ? { x: start.x, y: localRun } : { x: localRun, y: start.y },
-              horizApproach ? { x: climbCoord, y: localRun } : { x: localRun, y: climbCoord },
-              horizApproach ? { x: climbCoord, y: runCoord } : { x: runCoord, y: climbCoord },
+              { x: start.x + dirX * 16, y: start.y },
+              { x: start.x + dirX * 16, y: driveY },
+              { x: climbCoord, y: driveY },
+              { x: climbCoord, y: runCoord },
+              laneJoin, waypoint, ...entry,
+            ]
+          : nearEdge
+          ? [
+              start,
+              { x: localRun, y: start.y },
+              { x: localRun, y: climbCoord },
+              { x: runCoord, y: climbCoord },
               laneJoin, waypoint, ...entry,
             ]
           : [
               start,
-              horizApproach ? { x: roadAlong, y: start.y } : { x: start.x, y: roadAlong },
-              horizApproach ? { x: roadAlong, y: localRun } : { x: localRun, y: roadAlong },
-              horizApproach ? { x: climbCoord, y: localRun } : { x: localRun, y: climbCoord },
-              horizApproach ? { x: climbCoord, y: runCoord } : { x: runCoord, y: climbCoord },
+              { x: start.x, y: roadAlong },
+              { x: localRun, y: roadAlong },
+              { x: localRun, y: climbCoord },
+              { x: runCoord, y: climbCoord },
               laneJoin, waypoint, ...entry,
             ],
       ));
@@ -3798,7 +4113,7 @@ export function generateFeeders(
         refreshElectrical(c);
       }
     }
-  } else {
+  } else if (!(isTracedYard && !tracedHorizontalRows)) {
     for (let gi = 0; gi < circuits.length; gi++) {
       if (customRouted.has(gi) || angledRouted.has(gi)) continue;
       const c = circuits[gi];
@@ -3806,6 +4121,7 @@ export function generateFeeders(
       if (!seg || seg.pts.length < 2) continue;
       if (!fieldComb(seg.pts) && !cutsYard(seg.pts) && clusterHits(seg.pts) === 0) continue;
       const start = seg.pts[0];
+      const road = pcsRoadToward(pre[gi].launch, start);
       const dir = horizApproach ? dirX : dirY;
       const spread = spreadOf(laneRankOf[gi]);
       const waypointCoord = horizApproach
@@ -3821,19 +4137,6 @@ export function generateFeeders(
         ? Math.min(climbRaw, climbLimit)
         : Math.max(climbRaw, climbLimit);
       const runCoord = runCoordOf[gi];
-      const pad = peelPadOf(pre[gi].launch);
-      const ridePad = peelRoadCoord(pre[gi].launch, start, !horizApproach);
-      const yLo = Math.min(...clusterRects.map(r => r.y1));
-      const yHi = Math.max(...clusterRects.map(r => r.y2));
-      const xLo = Math.min(...clusterRects.map(r => r.x1));
-      const xHi = Math.max(...clusterRects.map(r => r.x2));
-      const around = horizApproach
-        ? (start.y < (yLo + yHi) / 2 ? yLo - 8 : yHi + 8)
-        : (start.x < (xLo + xHi) / 2 ? xLo - 8 : xHi + 8);
-      const drop = horizApproach
-        ? peelRoadCoord(pre[gi].launch, start, true)
-        : (dirY > 0 ? pad.y2 + 8 : pad.y1 - 8);
-      const ride = horizApproach ? around : ridePad;
       const laneJoin: Pt = horizApproach
         ? { x: climbCoord, y: laneCenter + spread }
         : { x: laneCenter + spread, y: climbCoord };
@@ -3843,16 +4146,107 @@ export function generateFeeders(
       const entry: Pt[] = horizApproach
         ? [{ x: substation.x, y: waypoint.y }, substation]
         : [{ x: waypoint.x, y: substation.y }, substation];
-      const forced = stripBacktracks(dedupePts([
-        start,
-        horizApproach ? { x: drop, y: start.y } : { x: start.x, y: drop },
-        horizApproach ? { x: drop, y: ride } : { x: ride, y: drop },
-        horizApproach ? { x: climbCoord, y: ride } : { x: ride, y: climbCoord },
-        horizApproach ? { x: climbCoord, y: runCoord } : { x: runCoord, y: climbCoord },
-        laneJoin, waypoint, ...entry,
-      ]));
-      if (fieldComb(seg.pts) || cutsYard(seg.pts) ||
-          clusterHits(forced) < clusterHits(seg.pts)) {
+      const forced = stripBacktracks(dedupePts(
+        horizApproach
+          ? [
+              start, road, { x: climbCoord, y: road.y },
+              { x: climbCoord, y: runCoord },
+              laneJoin, waypoint, ...entry,
+            ]
+          : [
+              start, road, { x: road.x, y: climbCoord },
+              { x: runCoord, y: climbCoord },
+              laneJoin, waypoint, ...entry,
+            ],
+      ));
+      if (clusterHits(forced) < clusterHits(seg.pts) ||
+          ((cutsYard(seg.pts) || fieldComb(seg.pts)) &&
+           !cutsYard(forced) && clusterHits(forced) <= clusterHits(seg.pts))) {
+        seg.pts = forced;
+        seg.lengthFt = polyLen(forced);
+        refreshElectrical(c);
+      }
+    }
+  }
+
+  // Any home run still sampling a battery yard is forced onto the road-side
+  // exit. Fail-open L/grid fallbacks used to keep the illegal geometry.
+  {
+    for (let gi = 0; gi < circuits.length; gi++) {
+      if (customRouted.has(gi) || angledRouted.has(gi)) continue;
+      const c = circuits[gi];
+      const seg = c.segments[c.segments.length - 1];
+      if (!seg || seg.pts.length < 2) continue;
+      const hits = clusterHits(seg.pts);
+      if (hits === 0 && !cutsYard(seg.pts)) continue;
+      const start = seg.pts[0];
+      const lastEq = pre[gi].launch;
+      const dir = horizApproach ? dirX : dirY;
+      const spread = spreadOf(laneRankOf[gi]);
+      const waypointCoord = horizApproach
+        ? substation.x - dirX * SUBSTATION_APPROACH_FT
+        : substation.y - dirY * SUBSTATION_APPROACH_FT;
+      const climbLimit = waypointCoord - dir * FEEDER_TRENCH_SPACING_FT;
+      const climbAvail = (climbLimit - climbOrigin) * dir;
+      const climbStep = feederCount > 1 && climbAvail > 0
+        ? Math.min(FEEDER_TRENCH_SPACING_FT, climbAvail / (feederCount - 1))
+        : FEEDER_TRENCH_SPACING_FT;
+      const climbRaw = climbOrigin + dir * climbOrderOf[gi] * climbStep;
+      const climbCoord = dir > 0
+        ? Math.min(climbRaw, climbLimit)
+        : Math.max(climbRaw, climbLimit);
+      const runCoord = runCoordOf[gi];
+      const laneJoin: Pt = horizApproach
+        ? { x: climbCoord, y: laneCenter + spread }
+        : { x: laneCenter + spread, y: climbCoord };
+      const waypoint: Pt = horizApproach
+        ? { x: waypointCoord, y: laneCenter + spread }
+        : { x: laneCenter + spread, y: waypointCoord };
+      const entry: Pt[] = horizApproach
+        ? [{ x: substation.x, y: waypoint.y }, substation]
+        : [{ x: waypoint.x, y: substation.y }, substation];
+      const forced = (isTracedYard && !tracedHorizontalRows)
+        ? stripBacktracks(dedupePts(horizApproach
+          ? [start, { x: columnRoadX(lastEq), y: start.y },
+              { x: columnRoadX(lastEq), y: columnEdgeY(lastEq) },
+              { x: climbCoord, y: columnEdgeY(lastEq) },
+              { x: climbCoord, y: runCoord }, laneJoin, waypoint, ...entry]
+          : [start, { x: columnRoadX(lastEq), y: start.y },
+              { x: columnRoadX(lastEq), y: columnTurnY(climbCoord) },
+              { x: runCoord, y: columnTurnY(climbCoord) }, laneJoin, waypoint, ...entry]))
+        : stripBacktracks(dedupePts(
+        horizApproach
+          ? [
+              start, pcsRoadToward(lastEq, start), { x: pcsRoadToward(lastEq, start).x, y: (() => {
+                const road = pcsRoadToward(lastEq, start);
+                const face = pcsRoadFaceCoord(lastEq, !horizApproach);
+                const drive = Math.abs(face - start.y) < 24 ? face : road.y;
+                return drive;
+              })() },
+              { x: climbCoord, y: (() => {
+                const road = pcsRoadToward(lastEq, start);
+                const face = pcsRoadFaceCoord(lastEq, !horizApproach);
+                return Math.abs(face - start.y) < 24 ? face : road.y;
+              })() },
+              { x: climbCoord, y: runCoord },
+              laneJoin, waypoint, ...entry,
+            ]
+          : [
+              start, pcsRoadToward(lastEq, start), { x: (() => {
+                const road = pcsRoadToward(lastEq, start);
+                const face = pcsRoadFaceCoord(lastEq, !horizApproach);
+                return Math.abs(face - start.x) < 24 ? face : road.x;
+              })(), y: pcsRoadToward(lastEq, start).y },
+              { x: (() => {
+                const road = pcsRoadToward(lastEq, start);
+                const face = pcsRoadFaceCoord(lastEq, !horizApproach);
+                return Math.abs(face - start.x) < 24 ? face : road.x;
+              })(), y: climbCoord },
+              { x: runCoord, y: climbCoord },
+              laneJoin, waypoint, ...entry,
+            ],
+      ));
+      if (clusterHits(forced) < hits || (hits > 0 && clusterHits(forced) === 0)) {
         seg.pts = forced;
         seg.lengthFt = polyLen(forced);
         refreshElectrical(c);
