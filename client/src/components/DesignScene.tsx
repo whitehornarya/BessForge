@@ -565,15 +565,15 @@ function generatedCableVisible(
 }
 
 // Cable runs with the cinematic tour's presentation-only DC reroute beat.
-// Outside that beat this renders design.cables unchanged. During the beat it
+// Outside that beat this is design.cables unchanged. During the beat it
 // derives temporary direct geometry without writing it back to the design,
-// store, session, or export pipeline.
-function TourSwapCableRuns({ design }: { design: SiteDesign }) {
-  const drawingVisibility = useDesignStore(s => s.drawingVisibility);
+// store, session, or export pipeline. Shared by cable polylines and trenches
+// so both stay in sync during the swap.
+function useDisplayCableRuns(design: SiteDesign | null | undefined): CableRun[] {
   const swap = useDesignStore(s => s.tourDcSwap);
-  const swapOn = swap > 0;
+  const swapOn = !!design && swap > 0;
   const directCables = useMemo(() => {
-    if (!swapOn) return null;
+    if (!design || !swapOn) return null;
     try {
       return generateCableRouting(
         equipmentForRouting(design.equipment), design.augmentationZones, design.fence,
@@ -585,8 +585,9 @@ function TourSwapCableRuns({ design }: { design: SiteDesign }) {
     }
   }, [swapOn, design]);
 
-  const runs = useMemo(() => {
-    const isDc = (run: typeof design.cables[number]) => run.class === 'DC' && !run.ref;
+  return useMemo(() => {
+    if (!design) return [];
+    const isDc = (run: CableRun) => run.class === 'DC' && !run.ref;
     if (!directCables || swap <= 0) return design.cables;
     const oldDc = design.cables.filter(isDc);
     const newDc = directCables.filter(isDc);
@@ -598,6 +599,11 @@ function TourSwapCableRuns({ design }: { design: SiteDesign }) {
       ...oldDc.slice(Math.min(cut, oldDc.length)),
     ];
   }, [design, directCables, swap]);
+}
+
+function TourSwapCableRuns({ design }: { design: SiteDesign }) {
+  const drawingVisibility = useDesignStore(s => s.drawingVisibility);
+  const runs = useDisplayCableRuns(design);
 
   return (
     <>
@@ -1450,6 +1456,7 @@ function AuxFeederTrenches() {
 function CableTrenches() {
   const design = useDesignStore(s => s.design);
   const drawingVisibility = useDesignStore(s => s.drawingVisibility);
+  const displayCables = useDisplayCableRuns(design);
   const patchBounds = useMemo(() => ({
     fence: design?.fence ?? [],
     obstacles: (design?.equipment ?? []).map(e => {
@@ -1465,10 +1472,12 @@ function CableTrenches() {
   }), [design]);
   // Scope: AUX/DC/LVAC/fiber runs only — in-yard MV bus/spine runs are drawn
   // as surface circuits and the MV home-run trench is FeederTrenches.
+  // Use the same display list as TourSwapCableRuns so Direct tour swaps
+  // keep trenches aligned with the visible cables.
   const runs = useMemo(
-    () => (design?.cables ?? []).filter(c =>
+    () => displayCables.filter(c =>
       c.class !== 'MV' && generatedCableVisible(c.class, drawingVisibility)),
-    [design, drawingVisibility],
+    [displayCables, drawingVisibility],
   );
   if (!design || runs.length === 0) return null;
   return <CableTrenchChannels runs={runs} colors={CABLE_COLORS} patchBounds={patchBounds} />;

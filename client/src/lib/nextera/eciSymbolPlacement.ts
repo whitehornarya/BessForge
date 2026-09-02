@@ -229,6 +229,7 @@ function compartmentEraseFor(
   kind: PlacedEquipment['kind'],
   length: number,
   width: number,
+  source: SymbolSource,
 ): {
   sourceRing: [number, number][];
   sourceBounds: LocalRect;
@@ -290,15 +291,18 @@ function compartmentEraseFor(
   const pad = 0.14;
   let [minX, minY, maxX, maxY] = candidate.bounds;
   minX -= pad; minY -= pad; maxX += pad; maxY += pad;
-  if (kind === 'inverter') {
-    // Open the erase to the authored lower body edge. This also removes a
-    // compartment fused into a compound trace instead of leaving a new
-    // rectangular hatch island around the erased window.
-    minY = -width / 2 - pad;
-  } else if ((minX + maxX) / 2 < 0) {
-    minX = -length / 2 - pad;
-  } else {
-    maxX = length / 2 + pad;
+  // ECI compound traces: open erase through the rim to the equipment edge so
+  // a fused compartment does not leave a hatch island. GLB TraceGenius ink is
+  // already a closed thin annulus — opening to the edge merges outer+hole into
+  // a C-notch and the stroked perimeter looks gappy. Keep GLB erase interior-only.
+  if (source === 'eci') {
+    if (kind === 'inverter') {
+      minY = -width / 2 - pad;
+    } else if ((minX + maxX) / 2 < 0) {
+      minX = -length / 2 - pad;
+    } else {
+      maxX = length / 2 + pad;
+    }
   }
   return {
     sourceRing: candidate.ring,
@@ -455,7 +459,7 @@ export function eciSymbolForEquipment(
   // Do not let a broad geometric heuristic erase valid service-panel detail
   // from a source variant explicitly inventoried as frame-free.
   const compartmentDetection = sourceRingExpected
-    ? compartmentEraseFor(glyph, eq.kind, eq.length, eq.width)
+    ? compartmentEraseFor(glyph, eq.kind, eq.length, eq.width, glyphSource)
     : undefined;
   const compartmentErase = compartmentDetection?.eraseBounds;
   const compartmentBounds =

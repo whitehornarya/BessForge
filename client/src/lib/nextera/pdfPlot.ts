@@ -214,10 +214,16 @@ export function renderSheet(doc: jsPDF, disp: DisplayList, t: PageTransform) {
       const [cr, cg, cb] = colorOf(op.layer, op.color);
       doc.setDrawColor(cr, cg, cb);
       applyStroke(op.layer);
-      const pts = op.closed ? [...op.pts, op.pts[0]] : op.pts;
-      for (let i = 0; i + 1 < pts.length; i++) {
-        doc.line(t.toX(pts[i][0]), t.toY(pts[i][1]), t.toX(pts[i + 1][0]), t.toY(pts[i + 1][1]));
-      }
+      // One path so dash phase continues around the polyline (per-edge
+      // doc.line reset phase to 0 and broke dashed legend/plan rectangles).
+      if (op.pts.length < 2) continue;
+      const path: Array<{ op: string; c?: number[] }> = [];
+      op.pts.forEach((p, i) => {
+        path.push({ op: i === 0 ? 'm' : 'l', c: [t.toX(p[0]), t.toY(p[1])] });
+      });
+      if (op.closed) path.push({ op: 'h' });
+      (doc as any).path(path);
+      (doc as any).stroke();
     } else if (op.kind === 'arc') {
       const [cr, cg, cb] = colorOf(op.layer);
       doc.setDrawColor(cr, cg, cb);

@@ -3,7 +3,8 @@
 // the Node regression suite can verify the decomposition directly.
 //
 // Plan frame: x = easting, y = northing (feet). The 3D scene maps
-// (x, y) -> (x, elev, -y), which is why cz/ang negate y below.
+// (x, y) -> (x, elev, -y). Sub centers use cz = -midY; yaw is plan
+// bearing atan2(dy, dx) so rotateY aligns the channel with the segment.
 
 export const FEEDER_TRENCH_W_FT = 3;
 // Minimum polyline sub-segment length worth drawing a channel piece for.
@@ -169,7 +170,7 @@ export type FeederSub = {
   cx: number; // scene x of the sub-segment center
   cz: number; // scene z of the sub-segment center (= -plan y)
   len: number; // true polyline length (before overhang)
-  ang: number; // plan-frame direction; renderer maps plan y to scene -z
+  ang: number; // plan bearing atan2(dy,dx); renderer maps via rotateY to scene xz
   idx?: number; // owning feeder's 1-based circuit idx (per-feeder coloring)
 };
 
@@ -179,7 +180,11 @@ function toSub(key: string, a: Pt2, b: Pt2, len: number, idx?: number): FeederSu
     cx: (a.x + b.x) / 2,
     cz: -(a.y + b.y) / 2,
     len,
-    ang: Math.atan2(-(b.y - a.y), b.x - a.x),
+    // Plan bearing atan2(dy,dx). InstancedTrenchChannels rotates about +Y so
+    // local +X maps to scene (cos θ, -sin θ) = (dx, -dy)/len — matching
+    // plan (x,y) → scene (x,-y). atan2(-dy,dx) mirrored diagonals (axis-
+    // aligned runs still looked fine), so Direct DC digs missed the wires.
+    ang: Math.atan2(b.y - a.y, b.x - a.x),
     idx,
   };
 }

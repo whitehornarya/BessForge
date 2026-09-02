@@ -1114,9 +1114,9 @@ export function generateCableRouting(
         a2 = faceOffset(a, pos[1], neg[0]);
         b2 = faceOffset(b, pos[pos.length - 2], neg[neg.length - 1]);
       } else {
-        // Auto/island fans: blue (−) rides parallel 0.6 ft beside red on
-        // the side of its own planned departure (chords are near
-        // face-perpendicular there, so a parallel offset stays on-face).
+        // Fallback chord-perpendicular offset (unused by current auto/island/
+        // traced callers, which all pass faceAligned). Kept for callers that
+        // collapse without structured first/last face legs.
         const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
         let nx = -dy / l, ny = dx / l;
         if (nx * (neg[0].x - a.x) + ny * (neg[0].y - a.y) < 0) { nx = -nx; ny = -ny; }
@@ -1834,7 +1834,7 @@ export function generateCableRouting(
           b.containers.map(c => islToLocalEq(rIsl, c)),
           0,
           (id, pos, neg) => addDcPair(`dc-${id}`,
-            ...dcPairPaths(b.n, mapPts(pos), mapPts(neg))),
+            ...dcPairPaths(b.n, mapPts(pos), mapPts(neg), true)),
           (id, pts) => addRun(`lvac-${id}`, 'LVAC', mapPts(pts))
         );
         rotDrops.set(rIsl.n, [...(rotDrops.get(rIsl.n) ?? []), ...drops]);
@@ -1845,7 +1845,7 @@ export function generateCableRouting(
       const drops = routePairBlock(
         b.inv, b.containers, isl.y,
         (id, pos, neg) => addDcPair(`dc-${id}`,
-          ...dcPairPaths(b.n, pos, neg)),
+          ...dcPairPaths(b.n, pos, neg, true)),
         (id, pts) => addRun(`lvac-${id}`, 'LVAC', pts)
       );
       islandDrops.set(isl.y, [...(islandDrops.get(isl.y) ?? []), ...drops]);
@@ -1897,7 +1897,7 @@ export function generateCableRouting(
           { x: txNeg, y: corridorYNeg },
           { x: dcXNeg, y: corridorYNeg },
           { x: dcXNeg, y: endY },
-        ]));
+        ], true));
         addRun(`lvac-${c.id}`, 'LVAC', [
           { x: dropX, y: busY },
           { x: dropX, y: lvacCorY },
@@ -1925,7 +1925,7 @@ export function generateCableRouting(
           { x: riserXNeg, y: endY - 2.6 },
           { x: dcXNeg, y: endY - 2.6 },
           { x: dcXNeg, y: endY },
-        ]));
+        ], true));
         addRun(`lvac-${c.id}`, 'LVAC', [
           { x: dropX, y: busY },
           { x: dropX, y: lvacCorY },
