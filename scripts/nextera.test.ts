@@ -3965,6 +3965,45 @@ async function main() {
           Math.abs(a209Hop.dx) < Math.abs(a209Hop.dy),
           `fan=${a209Fan} dx=${a209Hop.dx.toFixed(1)} dy=${a209Hop.dy.toFixed(1)} home=${a209Home.slice(0, 6).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
 
+        // Area 2 row yard on a wide parcel: home runs must stay near the
+        // pads, not spike to a ghost channel at the west routing bound.
+        const a2widePcs = [
+          { id: 'inv-a2w-0', x: 200, y: 0 },
+          { id: 'inv-a2w-1', x: 240, y: 0 },
+          { id: 'inv-a2w-2', x: 200, y: 70 },
+          { id: 'inv-a2w-3', x: 240, y: 70 },
+        ].map(p => ({
+          ...p, kind: 'inverter' as const, label: p.id,
+          rotation: 0, length: 22, width: 8,
+        }));
+        const a2wideBess = a2widePcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + 22, y: p.y + (k === 1 ? -6 : 6), rotation: 0, length: 16, width: 8,
+        })));
+        const a2wideFence: Pt[] = [
+          { x: -800, y: -80 }, { x: 400, y: -80 },
+          { x: 400, y: 280 }, { x: -800, y: 280 },
+        ];
+        const a2wide = generateFeeders({
+          fence: a2wideFence, boundary: { polygon: a2wideFence },
+          equipment: [...a2widePcs, ...a2wideBess],
+          cables: a2widePcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y }, { x: p.x, y: p.y - 5 }],
+          })),
+          aisles: [{ x: 160, y: 70, length: 280, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 4,
+        } as any, { x: 220, y: 220 }, 5, { maxPerFeeder: 1, approach: 'N' });
+        const a2minX = Math.min(...a2widePcs.map(p => p.x));
+        let a2west = Infinity;
+        for (const f of a2wide) {
+          for (const p of f.segments.slice(-1)[0]?.pts ?? []) a2west = Math.min(a2west, p.x);
+        }
+        check('[feeder-road] row-yard home runs do not spike west of the pads',
+          a2wide.length >= 1 && a2minX - a2west < 80 &&
+          countCanHits(a2wide, a2wideBess) === 0,
+          `west=${a2west.toFixed(0)} pads=${a2minX} drift=${(a2minX - a2west).toFixed(0)}`);
+
         // Area 4 west takeoff: two PCS rows with cans south of each. The
         // south row's home run must leave west into the road before any
         // northbound — not cut the north row's CON columns (yellow 08).

@@ -2492,8 +2492,12 @@ export function generateFeeders(
       const runStart: Pt = horizApproach ? { x: startPt.x, y: c } : { x: c, y: startPt.y };
       const exit: Pt = horizApproach ? { x: climbBase, y: c } : { x: c, y: climbBase };
       const ride = [runStart, exit];
-      return !feederCrossesObstacle(ride, obs, startPt, exit) &&
-        !hitsForeignPcs(ride, foreignPcsRects(last.id));
+      // Foreign-PCS keep-out is for stacked COLUMN yards (Area 1). On
+      // horizontal-row yards it rejects every nearby drive and the
+      // stagger walks out to the parcel edge (Area 2 west spikes).
+      if (isTracedYard && !tracedHorizontalRows &&
+          hitsForeignPcs(ride, foreignPcsRects(last.id))) return false;
+      return !feederCrossesObstacle(ride, obs, startPt, exit);
     };
   };
   {
@@ -2528,9 +2532,12 @@ export function generateFeeders(
         if (roadThere) channels.push(mid);
       };
       if (merged.length) {
-        pushGap(runLo, merged[0][0]);
+        // Do not treat the empty half-parcel west/south of the first pad
+        // as a ride channel — that midpoint is the Area 2 ghost spike.
+        const EDGE_FT = 48;
+        pushGap(Math.max(runLo, merged[0][0] - EDGE_FT), merged[0][0]);
         for (let i = 0; i < merged.length - 1; i++) pushGap(merged[i][1], merged[i + 1][0]);
-        pushGap(merged[merged.length - 1][1], runHi);
+        pushGap(merged[merged.length - 1][1], Math.min(runHi, merged[merged.length - 1][1] + EDGE_FT));
       }
       for (const a of roadAisles) {
         if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.y)) continue;
@@ -2604,7 +2611,8 @@ export function generateFeeders(
         const face = pcsRoadFaceCoord(p.launch, rideX);
         if (!inCourt(face)) return face;
       }
-      if (hitsForeignPcs(hookTo(best), foreignPcsRects(p.launch.id))) {
+      if (isTracedYard && !tracedHorizontalRows &&
+          hitsForeignPcs(hookTo(best), foreignPcsRects(p.launch.id))) {
         const face = rideX ? columnRoadX(p.launch) : pcsRoadFaceCoord(p.launch, false);
         if (runClearFor(p.launch)(face)) return face;
       }
@@ -4397,7 +4405,9 @@ export function generateFeeders(
   // Home runs that have left their own chain must not ride under a
   // neighbor PCS (Area 1 teal/orange under PCS03 / PCS05). Peel to the
   // road-side of THIS last skid, then turn — yards still win.
-  {
+  // Horizontal-row yards (Area 2) keep their existing comb: this rebuild
+  // used a far run-line and drew the west spikes.
+  if (isTracedYard && !tracedHorizontalRows) {
     const dir = horizApproach ? dirX : dirY;
     const waypointCoord = horizApproach
       ? substation.x - dirX * SUBSTATION_APPROACH_FT
