@@ -1686,6 +1686,35 @@ export function generateFeeders(
   };
   const columnToward = (e: PlacedEquipment, start: Pt): Pt =>
     ({ x: columnRoadX(e), y: start.y });
+  // Last-PCS pad including its DC courtyard so the home run can leave the
+  // far end past the cable fan (Area 2 09 through PCS09-03).
+  const padBeyond = (e: PlacedEquipment): Rect => {
+    const r = equipmentRect(e, 2);
+    let x1 = r.x1, y1 = r.y1, x2 = r.x2, y2 = r.y2;
+    for (const o of design.equipment) {
+      if (o.kind !== 'bess' || o.augmented || o.future) continue;
+      if (Math.hypot(o.x - e.x, o.y - e.y) > 90) continue;
+      const cr = equipmentRect(o, 2);
+      x1 = Math.min(x1, cr.x1); y1 = Math.min(y1, cr.y1);
+      x2 = Math.max(x2, cr.x2); y2 = Math.max(y2, cr.y2);
+    }
+    for (const c of clusterRects) {
+      if (Math.min(c.x2, r.x2 + 6) - Math.max(c.x1, r.x1 - 6) > 2 &&
+          Math.min(c.y2, r.y2 + 6) - Math.max(c.y1, r.y1 - 6) > 2) {
+        x1 = Math.min(x1, c.x1); y1 = Math.min(y1, c.y1);
+        x2 = Math.max(x2, c.x2); y2 = Math.max(y2, c.y2);
+      }
+    }
+    return { x1, y1, x2, y2 };
+  };
+  const oppositeChainExit = (e: PlacedEquipment, start: Pt, prev: Pt): Pt => {
+    const pad = padBeyond(e);
+    const dx = start.x - prev.x, dy = start.y - prev.y;
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      return { x: start.x, y: dy >= 0 ? pad.y2 + 8 : pad.y1 - 8 };
+    }
+    return { x: dx >= 0 ? pad.x2 + 8 : pad.x1 - 8, y: start.y };
+  };
   // First hop off a column PCS: the skid END away from its batteries (the
   // road / drive), never along the DC courtyard even when that is toward
   // the take-off. peelPadOf includes the cans, so pad.y2+8 was a trench
@@ -3001,6 +3030,9 @@ export function generateFeeders(
     // south of the whole stack, and the drop at start.x would cut every
     // container row in between (Area 2 F2/F8).
     const toward = (() => {
+      if (chain.length >= 2 && !horizApproach) {
+        return oppositeChainExit(last, start, feederNodeOf(chain[chain.length - 2]));
+      }
       if (!columnYard && linesVertical === false) {
         const localRun = fieldEdgeRun ?? peelRoadCoord(last, start, !horizApproach);
         const raw = horizApproach
@@ -3310,9 +3342,17 @@ export function generateFeeders(
       } else if (columnYard) {
         const roadX = columnRoadX(last);
         const edgeY = columnEdgeY(last);
+        const far = !horizApproach && chain.length >= 2
+          ? oppositeChainExit(last, start, feederNodeOf(chain[chain.length - 2]))
+          : null;
         homePts = stripBacktracks(dedupePts(horizApproach
           ? [start, { x: roadX, y: start.y }, { x: roadX, y: edgeY },
               { x: climbCoord, y: edgeY }, exitPt, laneJoin, waypoint, ...entry]
+          : far
+          ? [start, far, { x: roadX, y: far.y },
+              { x: roadX, y: columnTurnY(climbCoord) },
+              { x: runCoord, y: columnTurnY(climbCoord) },
+              laneJoin, waypoint, ...entry]
           : [start, { x: roadX, y: start.y }, { x: roadX, y: columnTurnY(climbCoord) },
               { x: runCoord, y: columnTurnY(climbCoord) },
               laneJoin, waypoint, ...entry]));
@@ -4051,11 +4091,17 @@ export function generateFeeders(
       const alongColH = horizApproach && seg.pts.length >= 2 &&
         Math.abs(seg.pts[0].y - seg.pts[1].y) < 2 &&
         Math.abs(seg.pts[0].x - seg.pts[1].x) > 20;
-      if (hits === 0 && !sweepsRow(seg.pts) && !cutsYard(seg.pts) &&
-          !fieldComb(seg.pts) &&
-          !(linesVertical === false && (alongCol || alongColH))) continue;
       const start = seg.pts[0];
       const last = pre[gi].launch;
+      const chainEnd = pre[gi].chain;
+      const farExit = !horizApproach && chainEnd.length >= 2
+        ? oppositeChainExit(last, start, feederNodeOf(chainEnd[chainEnd.length - 2]))
+        : null;
+      const oppositeEndHop = !!(farExit && seg.pts.length >= 2 &&
+        Math.hypot(seg.pts[1].x - farExit.x, seg.pts[1].y - farExit.y) < 14);
+      if (hits === 0 && !sweepsRow(seg.pts) && !cutsYard(seg.pts) &&
+          !fieldComb(seg.pts) &&
+          !(linesVertical === false && ((alongCol && !oppositeEndHop) || alongColH))) continue;
       const localRun = (() => {
         if (!clusterRects.length) return peelRoadCoord(last, start, !horizApproach);
         const lo = Math.min(...clusterRects.map(r => horizApproach ? r.y1 : r.x1));
@@ -4109,6 +4155,15 @@ export function generateFeeders(
               { x: start.x + dirX * 16, y: driveY },
               { x: climbCoord, y: driveY },
               { x: climbCoord, y: runCoord },
+              laneJoin, waypoint, ...entry,
+            ]
+          : farExit
+          ? [
+              start,
+              farExit,
+              { x: localRun, y: farExit.y },
+              { x: localRun, y: climbCoord },
+              { x: runCoord, y: climbCoord },
               laneJoin, waypoint, ...entry,
             ]
           : nearEdge
@@ -4231,12 +4286,20 @@ export function generateFeeders(
       const entry: Pt[] = horizApproach
         ? [{ x: substation.x, y: waypoint.y }, substation]
         : [{ x: waypoint.x, y: substation.y }, substation];
+      const chainEnd = pre[gi].chain;
+      const far = !horizApproach && chainEnd.length >= 2
+        ? oppositeChainExit(lastEq, start, feederNodeOf(chainEnd[chainEnd.length - 2]))
+        : null;
       const forced = (isTracedYard && !tracedHorizontalRows)
         ? stripBacktracks(dedupePts(horizApproach
           ? [start, { x: columnRoadX(lastEq), y: start.y },
               { x: columnRoadX(lastEq), y: columnEdgeY(lastEq) },
               { x: climbCoord, y: columnEdgeY(lastEq) },
               { x: climbCoord, y: runCoord }, laneJoin, waypoint, ...entry]
+          : far
+          ? [start, far, { x: columnRoadX(lastEq), y: far.y },
+              { x: columnRoadX(lastEq), y: columnTurnY(climbCoord) },
+              { x: runCoord, y: columnTurnY(climbCoord) }, laneJoin, waypoint, ...entry]
           : [start, { x: columnRoadX(lastEq), y: start.y },
               { x: columnRoadX(lastEq), y: columnTurnY(climbCoord) },
               { x: runCoord, y: columnTurnY(climbCoord) }, laneJoin, waypoint, ...entry]))
@@ -4255,6 +4318,13 @@ export function generateFeeders(
                 return Math.abs(face - start.y) < 24 ? face : road.y;
               })() },
               { x: climbCoord, y: runCoord },
+              laneJoin, waypoint, ...entry,
+            ]
+          : far
+          ? [
+              start, far,
+              { x: pcsRoadToward(lastEq, start).x, y: far.y },
+              { x: runCoord, y: far.y },
               laneJoin, waypoint, ...entry,
             ]
           : [

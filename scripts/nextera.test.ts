@@ -3893,6 +3893,24 @@ async function main() {
           eColFanHits === 0 && eColTop.dx <= 2,
           `fan=${eColFanHits} dx=${eColTop.dx.toFixed(1)} home=${eColTop.home.slice(0, 6).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
 
+        // Area 2 09: one feeder through a N/S PCS stack, cans east. Leave
+        // the north end of the last skid (opposite the incoming hops),
+        // then turn — never peel east through the DC fan at PCS Y.
+        const a209 = generateFeeders({
+          ...eColDesign, tracedPcsUnits: 3,
+        } as any, { x: 0, y: 180 }, 5, { maxPerFeeder: 3, approach: 'N' });
+        const a209Home = a209.find(f => f.inverterIds.includes('inv-ecol-2'))
+          ?.segments.slice(-1)[0]?.pts ?? [];
+        const a209Fan = samplesThrough(a209Home, eColFan);
+        const a209Hop = {
+          dx: (a209Home[1]?.x ?? 0) - (a209Home[0]?.x ?? 0),
+          dy: (a209Home[1]?.y ?? 0) - (a209Home[0]?.y ?? 0),
+        };
+        check('[feeder-road] stacked PCS chain exits the far end, not the DC courtyard',
+          a209Home.length >= 2 && a209Fan === 0 && a209Hop.dy > 8 &&
+          Math.abs(a209Hop.dx) < Math.abs(a209Hop.dy),
+          `fan=${a209Fan} dx=${a209Hop.dx.toFixed(1)} dy=${a209Hop.dy.toFixed(1)} home=${a209Home.slice(0, 6).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+
         // Area 4 west takeoff: two PCS rows with cans south of each. The
         // south row's home run must leave west into the road before any
         // northbound — not cut the north row's CON columns (yellow 08).
