@@ -2393,19 +2393,23 @@ export function generateCableRouting(
     });
     return [world(faceLy), world(faceLy - f * busOffset)];
   };
-  // MV attach: aux-face tap → under-skid centerline (ly = 0). Feeders ride
-  // under the PCS rather than on a parallel collector beside the aux face.
+  // MV attach: aux-face tap → under-skid near the aux long edge (away from
+  // the container / doorEnd face). Centerline joins sit next to the battery
+  // courtyard, so feeder hops L-bend around bess/cluster keep-outs; an
+  // aux-edge collector keeps the trunk on the free side of the PCS.
   const pcsUnderTap = (inv: PlacedEquipment, endOffset: number): [Pt, Pt] => {
     const m = mirrorOf(inv);
     const f = inv.doorEnd ?? -1;
     const lx = m * (inv.length / 2 - endOffset);
     const faceLy = -f * inv.width / 2;
+    const EDGE_INSET_FT = 0.5;
+    const underLy = -f * (inv.width / 2 - EDGE_INSET_FT);
     const cs = Math.cos(inv.rotation), sn = Math.sin(inv.rotation);
     const world = (ly: number): Pt => ({
       x: inv.x + lx * cs - ly * sn,
       y: inv.y + lx * sn + ly * cs,
     });
-    return [world(faceLy), world(0)];
+    return [world(faceLy), world(underLy)];
   };
   invRows.forEach((row, r) => {
     const invTop = row[0].y + row[0].width / 2;
@@ -2492,7 +2496,6 @@ export function generateCableRouting(
       // LVAC lands at the aux transformer connection — both at the RIGHT end
       // of the PCS (opposite the DC compartment; mirrored when the block is
       // flipped). Fiber ties in alongside with a small stagger for legibility.
-      const mvX = inv.x + mirrorOf(inv) * (inv.length / 2 - 1.2);
       const lvacX = inv.x + mirrorOf(inv) * (inv.length / 2 - 2.6);
       const fiberX = inv.x + mirrorOf(inv) * (inv.length / 2 - 4.0);
       if (verticalTracedInvIds.has(inv.id)) {
@@ -2505,7 +2508,10 @@ export function generateCableRouting(
             [fiberTap, fiberBusTap, { x: fiberBusTap.x, y: fiberY }]);
         }
       } else if (!tracedInvIds.has(inv.id)) {
-        addRun(`mv-drop-${inv.id}`, 'MV', [{ x: mvX, y: invTop }, { x: mvX, y: inv.y }]);
+        // Same aux-edge under-skid join as traced pcsUnderTap — landing at
+        // inv.y (centerline) puts the feeder hop next to the battery yard.
+        const [mvTap, mvUnder] = pcsUnderTap(inv, 1.2);
+        addRun(`mv-drop-${inv.id}`, 'MV', [mvTap, mvUnder]);
         if (!rowVerticalTraced) {
           addRun(`fiber-drop-${inv.id}`, 'FIBER',
             [{ x: fiberX, y: invTop }, { x: fiberX, y: fiberY }]);
@@ -2518,9 +2524,9 @@ export function generateCableRouting(
   });
 
   // Drawing-traced PCS MV starts on the local aux/MV end opposite the DC fan
-  // and joins a collector UNDER the PCS centerline (not a parallel offset
-  // beside the aux face). This pass replaces the legacy world-Y row buses
-  // only for orphan-owned/traced blocks.
+  // and joins a collector under the PCS near the aux long edge (not the
+  // centerline, and not a parallel offset beside the aux face). This pass
+  // replaces the legacy world-Y row buses only for orphan-owned/traced blocks.
   {
     type MvTap = {
       inv: PlacedEquipment;
@@ -2593,10 +2599,10 @@ export function generateCableRouting(
         // FeederCircuit membership owns the straight row collector itself
         // (its chain-hop segments), so max-per-feeder settings and approved
         // manual assignments cannot diverge from a separately chunked bus.
-        // All drops on one physical row land on the same full-precision row
-        // axis under the skids; any valid contiguous subset therefore forms
-        // one straight collector, while a cross-row assignment fails the
-        // feeder route gate.
+        // All drops on one physical row land on the same aux-edge under-skid
+        // axis; any valid contiguous subset therefore forms one straight
+        // collector clear of the container courtyard, while a cross-row
+        // assignment fails the feeder route gate.
         physicalRow.sort((a, b) =>
           along(a.under) - along(b.under) || a.inv.id.localeCompare(b.inv.id));
         const coord = physicalRow.reduce(
