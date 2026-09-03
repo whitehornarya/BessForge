@@ -21607,12 +21607,13 @@ sys.exit(0)
     const cfg = getEffectiveConfiguration('ge-aux-400', 4); // legacy QTY4 grid fixtures: pinned so the new QTY3 island default cannot silently reshape them
     const run = (opts: any) => generateSiteDesign(hondo, cfg, 100, 400, { hotClimate: true, ...opts });
     const base = run({});
-    const explicit = run({ dcRouting: 'orthogonal' });
-    check('[439] explicit orthogonal option is byte-identical to the default',
-      JSON.stringify(explicit.cables) === JSON.stringify(base.cables) &&
-      JSON.stringify(explicit.trench) === JSON.stringify(base.trench));
+    const explicitDirect = run({ dcRouting: 'direct' });
+    const orthogonal = run({ dcRouting: 'orthogonal' });
+    check('[439] explicit direct option is byte-identical to the default',
+      JSON.stringify(explicitDirect.cables) === JSON.stringify(base.cables) &&
+      JSON.stringify(explicitDirect.trench) === JSON.stringify(base.trench));
 
-    const direct = run({ dcRouting: 'direct' });
+    const direct = base;
     const dcOf = (d2: any) => d2.cables.filter((c: any) =>
       c.class === 'DC' && !c.ref && c.id.startsWith('dc-') && !c.id.startsWith('dc-aug-'));
     const segLen = (pts: any[]) => {
@@ -21626,18 +21627,18 @@ sys.exit(0)
     // 0.6 ft beside the collapsed (+) straight, so its endpoints sit within
     // the pair separation of its orthogonal plan, not exactly on it.
     const near = (a: any, b: any, tol: number) => Math.hypot(a.x - b.x, a.y - b.y) < tol;
-    const baseMap = new Map<string, any>(dcOf(base).map((c: any) => [c.id, c]));
+    const orthoMap = new Map<string, any>(dcOf(orthogonal).map((c: any) => [c.id, c]));
     let paired = true, endpointsMatch = true, notLonger = true;
     let straightened = 0;
     for (const c of dcOf(direct)) {
-      const b = baseMap.get(c.id);
+      const b = orthoMap.get(c.id);
       if (!b) { paired = false; continue; }
       const tol = c.id.endsWith('-neg') ? 1.25 : 0.05;
       if (!near(c.pts[0], b.pts[0], tol) || !near(c.pts[c.pts.length - 1], b.pts[b.pts.length - 1], tol)) endpointsMatch = false;
       if (segLen(c.pts) > segLen(b.pts) + 0.01) notLonger = false;
       if (c.pts.length === 2 && b.pts.length > 2) straightened++;
     }
-    check('[439] every direct-mode DC run pairs with an orthogonal-mode run', paired && dcOf(direct).length === dcOf(base).length);
+    check('[439] every direct-mode DC run pairs with an orthogonal-mode run', paired && dcOf(direct).length === dcOf(orthogonal).length);
     check('[439] direct runs keep the same PCS exit and container entry endpoints', endpointsMatch);
     check('[439] direct runs are never longer than their 90° counterparts', notLonger);
     check('[439] direct mode straightens at least one multi-leg run', straightened > 0, `straightened=${straightened}`);
@@ -21678,7 +21679,7 @@ sys.exit(0)
     // 6 ft exemption). The run must fall back to its 90° path.
     {
       const straightRuns = dcOf(direct)
-        .filter((c: any) => c.pts.length === 2 && (baseMap.get(c.id)?.pts.length ?? 0) > 2)
+        .filter((c: any) => c.pts.length === 2 && (orthoMap.get(c.id)?.pts.length ?? 0) > 2)
         .sort((x: any, y: any) => segLen(y.pts) - segLen(x.pts));
       const victim = straightRuns[0]; // longest straightened run
       check('[439] found a straightened run for the obstacle regression', !!victim && segLen(victim.pts) > 12,
@@ -21706,19 +21707,19 @@ sys.exit(0)
       const kO = arrangementCacheKey(hondo, cfg, 100, 400, { hotClimate: true, dcRouting: 'orthogonal' });
       const kD = arrangementCacheKey(hondo, cfg, 100, 400, { hotClimate: true, dcRouting: 'direct' });
       const kNone = arrangementCacheKey(hondo, cfg, 100, 400, { hotClimate: true });
-      check('[439] arrangement cache key distinguishes DC routing modes', kO !== kD && kO === kNone);
+      check('[439] arrangement cache key distinguishes DC routing modes', kO !== kD && kD === kNone);
     }
 
     // Blocked runs (e.g. front-row containers whose entry faces away from the
     // PCS) keep their orthogonal path, surfaced by one aggregated warning.
     const blocked = dcOf(direct).filter((c: any) => {
-      const b = baseMap.get(c.id);
+      const b = orthoMap.get(c.id);
       return b && b.pts.length > 2 && c.pts.length > 2;
     });
     const warned = direct.warnings.some((w: string) => w.includes('kept 90° trench routing'));
     check('[439] blocked runs keep 90° path with one aggregated warning',
       blocked.length === 0 ? !warned : (warned &&
-        blocked.every((c: any) => JSON.stringify(c.pts) === JSON.stringify(baseMap.get(c.id).pts))),
+        blocked.every((c: any) => JSON.stringify(c.pts) === JSON.stringify(orthoMap.get(c.id).pts))),
       `blocked=${blocked.length} warned=${warned}`);
 
     // Cable summary follows the direct geometry (WYSIWYG lengths for BOM/DXF)

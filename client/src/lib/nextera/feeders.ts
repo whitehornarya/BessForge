@@ -2869,19 +2869,62 @@ export function generateFeeders(
     // axis-aligned hops are re-laid on the feeder's own parallel hop line
     // (hopShiftOf) with short taps back into the two PCS units — otherwise
     // the collinear hop trenches of both circuits read as one shared trench.
+    //
+    // Under-skid joins can wander a few feet across a physical row (pose
+    // deltas, missing mv-drop → PCS center, lane mix). A tiny ΔY on an
+    // otherwise horizontal hop makes routeSegment emit an L with 2 bends.
+    // Snap the whole chain onto one shared across-line so every hop is a
+    // single straight trunk span (same idea as averaged mv-drop joins).
+    const ROW_JOG_SNAP_FT = 6;
+    const { hopNodeOf, rowSnapped } = (() => {
+      const nodes = chain.map(e => ({ id: e.id, p: feederNodeOf(e) }));
+      const fallback = { hopNodeOf: feederNodeOf, rowSnapped: false };
+      if (nodes.length < 2) return fallback;
+      let ai = 0, bi = 1, span = -1;
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const d = dist(nodes[i].p, nodes[j].p);
+          if (d > span) { span = d; ai = i; bi = j; }
+        }
+      }
+      if (span < 1) return fallback;
+      const origin = nodes[ai].p;
+      const ux = (nodes[bi].p.x - origin.x) / span;
+      const uy = (nodes[bi].p.y - origin.y) / span;
+      const along = (p: Pt) => (p.x - origin.x) * ux + (p.y - origin.y) * uy;
+      const across = (p: Pt) => -(p.x - origin.x) * uy + (p.y - origin.y) * ux;
+      const meanAcross = nodes.reduce((s, n) => s + across(n.p), 0) / nodes.length;
+      if (nodes.some(n => Math.abs(across(n.p) - meanAcross) > ROW_JOG_SNAP_FT)) {
+        return fallback;
+      }
+      const snapped = new Map<string, Pt>();
+      for (const n of nodes) {
+        const s = along(n.p);
+        snapped.set(n.id, {
+          x: origin.x + ux * s - uy * meanAcross,
+          y: origin.y + uy * s + ux * meanAcross,
+        });
+      }
+      return {
+        hopNodeOf: (e: PlacedEquipment) => snapped.get(e.id) ?? feederNodeOf(e),
+        rowSnapped: true,
+      };
+    })();
     for (let j = 0; j < chain.length - 1; j++) {
       const a = chain[j], b = chain[j + 1];
       const hopObs = autoObs(obstaclesExcept(a.id, b.id)).concat(
-        p.rowGrammar ? [] : clusterRects,
-        p.rowGrammar
+        (p.rowGrammar || rowSnapped) ? [] : clusterRects,
+        (p.rowGrammar || rowSnapped)
           ? []
           : cableKeepOutFrom([...dcRuns, ...priorHops, ...priorHomes], [a, b]));
-      const A = feederNodeOf(a), B = feederNodeOf(b);
+      const A = hopNodeOf(a), B = hopNodeOf(b);
       // Recognized rows land on their canonical under-skid mv-collector
       // through the mv-drop-* endpoints. That collector is the one straight
       // row trunk; handing it to the generic obstacle router may legally
       // return an L-shaped detour, which is forbidden by the row grammar.
-      let pts = p.rowGrammar ? [A, B] : routeSegmentTrenchAware(A, B, hopObs);
+      // Snapped near-row chains get the same straight [A, B] treatment so a
+      // few feet of join stagger cannot reintroduce the 2-bend L-jog.
+      let pts = (p.rowGrammar || rowSnapped) ? [A, B] : routeSegmentTrenchAware(A, B, hopObs);
       // routeSegment keeps its L-route when the grid reroute finds no path —
       // on dense traced yards that used to silently lay a trench straight
       // through other feeders' PCS and the container columns. Per the
@@ -2890,7 +2933,7 @@ export function generateFeeders(
       // first, and only keep a crossing route with a loud warning when every
       // candidate fails.
       {
-        if (!p.rowGrammar &&
+        if (!p.rowGrammar && !rowSnapped &&
             (feederCrossesObstacle(pts, hopObs, A, B) || crossesForbidden(pts) > 0)) {
           const roadPt = nearestRoadWaypoint(A, roadAisles);
           const cands: Pt[][] = [[A, { x: A.x, y: B.y }, B]];

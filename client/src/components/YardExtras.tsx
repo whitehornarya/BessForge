@@ -8,7 +8,9 @@ import { SiteDesign, IslandInfo, PlacedEquipment } from '../lib/nextera/types';
 import { assetUrl } from '../lib/assetUrl';
 import {
   feederTrenchSubSegments,
+  sharpJointPatches,
   FEEDER_TRENCH_W_FT,
+  FEEDER_SUB_MIN_LEN_FT,
   type FeederLike,
   type PatchClipBounds,
 } from '../lib/nextera/feederTrenchGeom';
@@ -293,12 +295,16 @@ const QUAT_XNEG90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,
 const QUAT_Y90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
 const QUAT_Z90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
 
-function InstancedTrenchChannels({ items, w, condRadius, condDrop, condSegs }: {
+function InstancedTrenchChannels({ items, w, condRadius, condDrop, condSegs, joinOverhang = true }: {
   items: TrenchSub[];
   w: number;          // trench width (ft)
   condRadius: number; // conductor radius (ft)
   condDrop: number;   // conductor height above the excavation bottom (ft)
   condSegs: 8 | 10;   // conductor radial segments (parity with the old meshes)
+  // Feeder digs run overlong by one trench width so L-corners join cleanly.
+  // Cable digs (Direct DC especially) must stop exactly on CableRun.pts so the
+  // excavation follows the wires into the compartment landings.
+  joinOverhang?: boolean;
 }) {
   const d = TRENCH_DEPTH_FT;
   const built = useMemo(() => {
@@ -314,7 +320,7 @@ function InstancedTrenchChannels({ items, w, condRadius, condDrop, condSegs }: {
       // Three's +Y rotation maps local +X toward scene -Z, exactly matching
       // the plan (x,y) -> scene (x,-y) projection for a plan-frame angle.
       base.makeRotationY(s.ang).setPosition(s.cx, 0, s.cz);
-      const L = s.len + w; // overlong so channels join cleanly at L-corners
+      const L = joinOverhang ? s.len + w : s.len;
       const push = (arr: THREE.Matrix4[], px: number, py: number, pz: number, q: THREE.Quaternion, sx: number, sy: number, sz: number) => {
         local.compose(p.set(px, py, pz), q, sc.set(sx, sy, sz));
         arr.push(new THREE.Matrix4().multiplyMatrices(base, local));
@@ -336,7 +342,7 @@ function InstancedTrenchChannels({ items, w, condRadius, condDrop, condSegs }: {
       condByColor.set(s.color, arr);
     }
     return { stencil, bottom, walls, cond: Array.from(condByColor, ([color, mats]) => ({ color, mats })) };
-  }, [items, w, condRadius, condDrop, d]);
+  }, [items, w, condRadius, condDrop, d, joinOverhang]);
   return (
     <group>
       {/* stencil mask: punches the openings out of ground/roads/surfacing.
@@ -427,30 +433,70 @@ export function CableTrenchChannels({
   colors: Record<string, string>;
   patchBounds?: PatchClipBounds;
 }) {
-  // Reference-only (dashed) runs are annotations, not real trenches.
-  const subs = useMemo(() => {
+  // Follow CableRun.pts exactly at open terminals (Direct DC landings), but
+  // keep half-width overhang only toward interior L-joints so orthogonal
+  // LVAC/DC elbows still join. joinOverhang=false below — length already
+  // includes any joint overhang baked into each item.
+  const items = useMemo<TrenchSub[]>(() => {
     const solid = runs.filter(r => !r.ref && r.pts.length >= 2);
-    // One decomposition call per run so each sub-segment keeps its run's
-    // cable class for conductor tinting (keys are namespaced by run id).
-    return solid.flatMap(r => {
-      // Polarity-aware color key for the DC (+)/(−) conductor pairs.
+    const half = CABLE_TRENCH_W_FT / 2;
+    const out: TrenchSub[] = [];
+    for (const r of solid) {
       const cls = r.class === 'DC' && r.polarity
         ? (r.polarity === 'pos' ? 'DC+' : 'DC-')
         : r.class;
-      return feederTrenchSubSegments([{ segments: [{ pts: r.pts }] }], patchBounds)
-        .map(s => ({ ...s, key: `${r.id}:${s.key}`, cls }));
-    });
-  }, [runs, patchBounds]);
-  // Cable conductor tinted per run class.
-  const items = useMemo<TrenchSub[]>(
-    () => subs.map(s => ({
-      cx: s.cx, cz: s.cz, ang: s.ang, len: s.len,
-      color: colors[s.cls] ?? '#22c55e',
-    })),
-    [subs, colors]
-  );
+      const color = colors[cls] ?? '#22c55e';
+      const pts = r.pts;
+      const nSeg = pts.length - 1;
+      for (let i = 0; i < nSeg; i++) {
+        const a = pts[i];
+        const b = pts[i + 1];
+        const len = Math.hypot(b.x - a.x, b.y - a.y);
+        if (!Number.isFinite(len) || len < FEEDER_SUB_MIN_LEN_FT) continue;
+        // Direct (1 segment): no overhang. Multi-leg: overhang only at joints.
+        const ha = i > 0 ? half : 0;
+        const hb = i < nSeg - 1 ? half : 0;
+        const ux = (b.x - a.x) / len;
+        const uy = (b.y - a.y) / len;
+        const L = len + ha + hb;
+        const midX = (a.x + b.x) / 2 + ux * (hb - ha) / 2;
+        const midY = (a.y + b.y) / 2 + uy * (hb - ha) / 2;
+        out.push({
+          cx: midX,
+          cz: -midY,
+          len: L,
+          // Plan bearing — see feederTrenchGeom.toSub (must not use -dy).
+          ang: Math.atan2(b.y - a.y, b.x - a.x),
+          color,
+        });
+      }
+      if (pts.length > 2) {
+        for (const p of sharpJointPatches(pts, patchBounds)) {
+          const len = Math.hypot(p.b.x - p.a.x, p.b.y - p.a.y);
+          if (!Number.isFinite(len) || len < FEEDER_SUB_MIN_LEN_FT - 1e-9) continue;
+          out.push({
+            cx: (p.a.x + p.b.x) / 2,
+            cz: -(p.a.y + p.b.y) / 2,
+            len,
+            ang: Math.atan2(p.b.y - p.a.y, p.b.x - p.a.x),
+            color,
+          });
+        }
+      }
+    }
+    return out;
+  }, [runs, colors, patchBounds]);
   if (items.length === 0) return null;
-  return <InstancedTrenchChannels items={items} w={CABLE_TRENCH_W_FT} condRadius={0.15} condDrop={0.4} condSegs={8} />;
+  return (
+    <InstancedTrenchChannels
+      items={items}
+      w={CABLE_TRENCH_W_FT}
+      condRadius={0.15}
+      condDrop={0.4}
+      condSegs={8}
+      joinOverhang={false}
+    />
+  );
 }
 
 // 1x1 transparent GIF: the uploaded fence FBX references its source texture

@@ -1,5 +1,5 @@
 import { finalizePdfBlob } from '@/lib/nextera/pdfIdentity';
-import { Fragment, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useDesignStore } from '../lib/stores/useDesignStore';
 import { generateArrangements, ARRANGEMENTS, ArrangementStrategy, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, MANUAL_EQUIPMENT_CATALOG, isManualEquipmentSpec, isTracedBessYard } from '../lib/nextera/layoutEngine';
@@ -40,7 +40,7 @@ import { buildEnergySim, DEFAULT_CABLE_LOSS_FRAC, ENERGY_SIM_NUM_LIMITS } from '
 import { buildEnergySimPdf } from '../lib/nextera/energySimPdf';
 import { computeEarthworkCost, fmtUSD, COST_DISCLAIMER } from '../lib/nextera/earthworkCost';
 import { isCoordinateLocation, fetchGeocodedLocation } from '../lib/nextera/geocode';
-import { siteAreasTotals, areasMissingRoads, areasWithAccessRoadShortfalls } from '../lib/nextera/siteAreas';
+import { siteAreasTotals } from '../lib/nextera/siteAreas';
 import { areaFeederEndpoint, effectiveTakeoffs } from '../lib/nextera/substationTakeoffs';
 import { SiteComposeInput, selectionLabel, selectedSiteAreas } from '../lib/nextera/siteCompose';
 import { TAKEOFF_DIRECTIONS, type TakeoffDirection } from '../lib/nextera/types';
@@ -53,22 +53,6 @@ import { getSavedApiBaseOverride, resolveApiBase, saveApiBaseOverride } from '..
 import { API_STATUS_EVENT, type ApiResponseMeta } from '../lib/api/fetch';
 import { exportSitePack, importSitePack, prefetchSiteData } from '../lib/offline/sitePack';
 import { satelliteCoverageBbox } from '../lib/nextera/satellite';
-
-const SAMPLE_SITES: { name: string; url: string; boundaryNames?: string[] }[] = [
-  {
-    name: 'Great Prairie 1 & 2',
-    url: assetUrl('/samples/great-prairie-1-2.kmz'),
-    // The KMZ holds 8 polygons — only these three are selectable site boundaries.
-    boundaryNames: [
-      'GREAT PRAIRIE WIND LLC substation boundary',
-      'GP1 phase 1 - 200MW',
-      'GP Energy Storage Boundary',
-    ],
-  },
-  { name: 'Great Prairie Laydown', url: assetUrl('/samples/laydown.kmz') },
-  { name: 'Hondo 100MW', url: assetUrl('/samples/hondo-100mw.kmz') },
-  { name: 'Kaser NEER', url: assetUrl('/samples/kaser-neer.kmz') },
-];
 
 const DRAWING_VISIBILITY_LABELS: Record<DrawingVisibilityKey, { label: string; hint: string }> = {
   fiber: {
@@ -250,12 +234,6 @@ function ReferenceAutoFill() {
   const setBusyOverlay = useDesignStore(s => s.setBusyOverlay);
   const cancelReferenceTrace = useDesignStore(s => s.cancelReferenceTrace);
   const [applyProgress, setApplyProgress] = useState<{ frac: number; label: string } | null>(null);
-  const gearPlacement = useDesignStore(s => s.gearPlacement);
-  const setGearPlacement = useDesignStore(s => s.setGearPlacement);
-  const bulkTag = useDesignStore(s => s.bulkTag);
-  const setBulkTag = useDesignStore(s => s.setBulkTag);
-  const placedEquipment = useDesignStore(s => s.layoutEdits.placedEquipment);
-  const removePlacedEquipment = useDesignStore(s => s.removePlacedEquipment);
   const lastRejection = useDesignStore(s => s.lastRejection);
   // Group selection lives in the store so the 3D ghost preview shows exactly
   // what Apply will commit (unchecking a group hides its ghosts too).
@@ -332,7 +310,7 @@ function ReferenceAutoFill() {
           )}
           {tracePlan.missingAux.length > 0 && (
             <div className="text-[10px] text-slate-400">
-              Not in the drawing: {tracePlan.missingAux.map(k => TRACE_KIND_LABELS[k]).join(', ')} — place them by hand below after applying.
+              Not in the drawing: {tracePlan.missingAux.map(k => TRACE_KIND_LABELS[k]).join(', ')}.
             </div>
           )}
           {applyProgress && (
@@ -387,65 +365,6 @@ function ReferenceAutoFill() {
           {lastRejection && <div className="text-[10px] text-red-400">{lastRejection}</div>}
         </div>
       )}
-      <div className="mt-2 border-t border-slate-700 pt-2">
-        <div className="text-[10px] text-slate-400 mb-1">Place aux gear by hand (click the plan to drop):</div>
-        <div className="flex flex-wrap gap-1">
-          {(['auxTransformer', 'fireControlPanel', 'auxSwitchPanel', 'commsCabinet'] as const).map(k => (
-            <button
-              key={k}
-              onClick={() => setGearPlacement(gearPlacement?.kind === k ? null : k)}
-              className={`text-[10px] px-1.5 py-1 rounded ${gearPlacement?.kind === k ? 'bg-cyan-600 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}`}
-            >
-              {TRACE_KIND_LABELS[k]}
-            </button>
-          ))}
-        </div>
-        {gearPlacement && (
-          <div className="text-[10px] text-cyan-300 mt-1">Click the plan view to place the {TRACE_KIND_LABELS[gearPlacement.kind].toLowerCase()} · Esc cancels</div>
-        )}
-      </div>
-      <div className="mt-2 border-t border-slate-700 pt-2">
-        <div className="text-[10px] text-slate-400 mb-1">Tag drawn shapes by hand (arm a tag, then drag a box over them in the plan):</div>
-        <div className="flex flex-wrap gap-1">
-          {([
-            ['bess', 'BESS'], ['inverter', 'PCS'], ['conex', 'CONEX'], ['generator', 'Generator'],
-            ['road', 'Road'], ['wideRoad', 'Wide road'],
-          ] as const).map(([k, lbl]) => (
-            <button
-              key={k}
-              onClick={() => setBulkTag(bulkTag === k ? null : k)}
-              className={`text-[10px] px-1.5 py-1 rounded ${bulkTag === k ? 'bg-cyan-600 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}`}
-            >
-              {lbl}
-            </button>
-          ))}
-        </div>
-        {bulkTag && (
-          <div className="text-[10px] text-cyan-300 mt-1">
-            Drag a box over the drawn shapes to add them as {bulkTag === 'wideRoad' ? 'a wide road' : bulkTag === 'road' ? 'roads' : TRACE_KIND_LABELS[bulkTag] + 's'} — click the tag again to cancel.
-          </div>
-        )}
-        {(placedEquipment?.length ?? 0) > 0 && (
-          <div className="mt-1.5 max-h-32 overflow-y-auto flex flex-col gap-0.5 pr-1">
-            {placedEquipment!.map(p => (
-              <div key={p.id} className="flex items-center justify-between gap-2 text-[10px] text-slate-300">
-                <span className="truncate">
-                  {isManualEquipmentSpec(p)
-                    ? MANUAL_EQUIPMENT_CATALOG[p.type].short
-                    : TRACE_KIND_LABELS[p.kind] ?? p.kind} · ({Math.round(p.x)}, {Math.round(p.y)}) ft{!isManualEquipmentSpec(p) && p.source === 'trace' ? ' · traced' : ''}
-                </span>
-                <button
-                  onClick={() => removePlacedEquipment(p.id)}
-                  className="text-red-400 hover:text-red-300 shrink-0"
-                  title="Remove this placed equipment"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -718,62 +637,150 @@ function displayBounds(lim: { min: number; max: number }, perUnit: number, decim
   };
 }
 
-// Collapsible discipline section for the control panel. Collapse state is a
-// per-browser preference only (localStorage, one JSON map keyed by section
-// id) — never project data, so shared project files are unaffected. Children
-// stay mounted (hidden via CSS) so collapsing never changes behavior, only
-// what is visible.
-const PANEL_OPEN_KEY = 'nextera-panel-open';
+// Exclusive section tabs for the control panel. Which section is visible is a
+// per-browser preference only (localStorage id) — never project data.
+// Inactive sections stay mounted (hidden via CSS) so controls/file inputs do
+// not remount when switching tabs.
+const PANEL_SECTION_KEY = 'nextera-panel-section';
+
+const PANEL_SECTIONS = [
+  { id: 'site', title: 'Site Boundary (KMZ)' },
+  { id: 'equipment', title: 'Equipment Configuration' },
+  { id: 'target', title: 'Target Rating' },
+  { id: 'titleblock', title: 'Title Block' },
+  { id: 'electrical', title: 'Substation & MV Feeders' },
+  { id: 'edit', title: 'Edit Layout' },
+  { id: 'arrangements', title: 'Reset & Arrangements' },
+  { id: 'exports', title: 'Exports' },
+] as const;
+
+type PanelSectionId = (typeof PANEL_SECTIONS)[number]['id'];
+
+type PanelNavValue = {
+  activeId: PanelSectionId;
+  setActiveId: (id: PanelSectionId) => void;
+};
+
+const PanelNavContext = createContext<PanelNavValue | null>(null);
+
+function readStoredPanelSection(): PanelSectionId {
+  try {
+    const raw = localStorage.getItem(PANEL_SECTION_KEY);
+    if (raw && PANEL_SECTIONS.some(s => s.id === raw)) return raw as PanelSectionId;
+  } catch {
+    // storage unavailable / corrupt — default site
+  }
+  return 'site';
+}
+
+function persistPanelSection(id: PanelSectionId) {
+  try {
+    localStorage.setItem(PANEL_SECTION_KEY, id);
+  } catch {
+    // storage unavailable; preference just won't persist
+  }
+}
+
 function PanelSection({ id, title, discipline, children }: {
-  id: string;
+  id: PanelSectionId;
   title: string;
   discipline: string;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(PANEL_OPEN_KEY);
-      if (raw) {
-        const map = JSON.parse(raw);
-        if (map && typeof map[id] === 'boolean') return map[id];
-      }
-    } catch {
-      // storage unavailable / corrupt — default open
-    }
-    return true;
-  });
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    try {
-      const raw = localStorage.getItem(PANEL_OPEN_KEY);
-      const map = raw ? (JSON.parse(raw) ?? {}) : {};
-      map[id] = next;
-      localStorage.setItem(PANEL_OPEN_KEY, JSON.stringify(map));
-    } catch {
-      // storage unavailable; preference just won't persist
-    }
-  };
+  const nav = useContext(PanelNavContext);
+  const active = nav?.activeId === id;
   return (
-    <section>
-      <button
-        type="button"
-        onClick={toggle}
-        className="w-full flex items-center justify-between gap-2 mb-2 text-left group"
-        title={open ? 'Collapse section' : 'Expand section'}
-      >
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400 group-hover:text-slate-200">
+    <section id={`panel-sec-${id}`} className={active ? undefined : 'hidden'} aria-hidden={!active}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
           {title}
         </h3>
-        <span className="flex items-center gap-1.5 shrink-0">
-          <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-500 border border-slate-700 rounded px-1 py-px">
-            {discipline}
-          </span>
-          <span className="text-slate-500 text-[10px]">{open ? '▾' : '▸'}</span>
+        <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-500 border border-slate-700 rounded px-1 py-px shrink-0">
+          {discipline}
         </span>
-      </button>
-      <div className={open ? undefined : 'hidden'}>{children}</div>
+      </div>
+      <div>{children}</div>
     </section>
+  );
+}
+
+function PanelSectionNav({
+  boundaryReady,
+  designReady,
+}: {
+  boundaryReady: boolean;
+  designReady: boolean;
+}) {
+  const nav = useContext(PanelNavContext);
+  if (!nav) return null;
+  return (
+    <nav
+      className={[
+        'group/nav absolute inset-y-0 left-0 z-20',
+        'flex flex-col gap-1.5 py-3 px-1',
+        'w-8 hover:w-44 focus-within:w-44',
+        'overflow-hidden transition-[width] duration-150 ease-out',
+        'bg-slate-950 border-r border-slate-700 shadow-lg',
+      ].join(' ')}
+      aria-label="Control panel sections"
+    >
+      {PANEL_SECTIONS.map(s => {
+        // Site Boundary stays reachable with no KMZ (that is the upload tab).
+        // Everything else — including Exports — waits on a loaded boundary;
+        // Edit / Arrangements also need a generated layout.
+        const needsBoundary = s.id !== 'site';
+        const needsDesign = s.id === 'edit' || s.id === 'arrangements';
+        const blockedByUpload = needsBoundary && !boundaryReady;
+        const blockedByDesign = !blockedByUpload && needsDesign && !designReady;
+        const disabled = blockedByUpload || blockedByDesign;
+        const active = nav.activeId === s.id;
+        // Native title on disabled <button> is unreliable in some browsers —
+        // put the hint on a wrapping span so hover still shows it.
+        const hoverHint = blockedByUpload
+          ? 'Please upload a KMZ'
+          : blockedByDesign
+            ? 'Please generate a layout first'
+            : s.title;
+        return (
+          <span
+            key={s.id}
+            title={hoverHint}
+            className="block w-full"
+          >
+            <button
+              type="button"
+              disabled={disabled}
+              aria-label={disabled ? `${s.title}. ${hoverHint}` : s.title}
+              aria-current={active ? 'page' : undefined}
+              onClick={() => nav.setActiveId(s.id)}
+              className={[
+                'h-8 w-full shrink-0 rounded text-left text-[10px] font-semibold',
+                'flex items-center overflow-hidden',
+                'px-0 group-hover/nav:px-2 group-focus-within/nav:px-2',
+                'justify-center group-hover/nav:justify-start group-focus-within/nav:justify-start',
+                'disabled:opacity-35 disabled:cursor-not-allowed',
+                'transition-[padding] duration-150',
+                active
+                  ? 'bg-cyan-600 text-white'
+                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100',
+              ].join(' ')}
+            >
+              <span className="truncate hidden group-hover/nav:inline group-focus-within/nav:inline">
+                {s.title}
+              </span>
+              <span
+                className={[
+                  'block w-1.5 h-1.5 rounded-full shrink-0',
+                  'group-hover/nav:hidden group-focus-within/nav:hidden',
+                  active ? 'bg-white' : 'bg-slate-500',
+                ].join(' ')}
+                aria-hidden
+              />
+            </button>
+          </span>
+        );
+      })}
+    </nav>
   );
 }
 
@@ -879,7 +886,7 @@ export default function DesignControlPanel() {
   const [switchingAreaId, setSwitchingAreaId] = useState<string | null>(null);
   const {
     boundary, boundaryPicker, chooseBoundary, chooseAllBoundariesWithProgress, siteAreas, activeAreaId, setActiveArea, cancelBoundaryPicker, design, areaZones, configId, targetMW, targetMWh, hotClimate, containersPerPcs, roadMode, autoRoadWrap, ringMode, perimeterBand, fencePlacement, laydownPct, augmentPct, futurePhaseUnits, surfacingMode, surfacingDepthIn, deadSpaceTrim, dcRouting, textureSetId, gePcsColor, showGateModel, showFence3D, showFeederColors, showSatellite, satelliteStatus, satelliteError, terrain, terrainStatus, terrainError, showTerrain, labelDistanceScaling, showSlopeHeatmap, maxGradePct, showContours, contourIntervalFt, showGradingLimits, gradingSlopeRatio, exportContoursDxf, exportCutFillShading, showGrounding, groundingXray, groundingRodSpacingFt, exportGroundingDxf, exportTrenchSectionsDxf, exportSurfacingMesh, titleBlock, lgiaInputs, isLoading, busyOverlay, setBusyOverlay, error,
-    loadKmz, loadSample, setConfigId, setTargetMW, setTargetMWh, setHotClimate, setContainersPerPcs, setRoadMode, setAutoRoadWrap, setRingMode, setPerimeterBand, setFencePlacement, setLaydownPct, setAugmentPct, setFuturePhaseUnits, setIslandAugUnits, setIslandAugEnd, adjustIslandBlocks, setSurfacingMode, setSurfacingDepthIn, setDeadSpaceTrim, setDcRouting, setTextureSetId, setGePcsColor, setShowGateModel, setShowFence3D, setShowFeederColors, setShowSatellite, loadSatellite, setShowTerrain, setLabelDistanceScaling, setShowSlopeHeatmap, setMaxGradePct, setShowContours, setContourIntervalFt, setShowGradingLimits, setGradingSlopeRatio, setExportContoursDxf, setExportCutFillShading, setShowGrounding, setGroundingXray, setGroundingRodSpacingFt, setExportGroundingDxf, setExportTrenchSectionsDxf, setExportSurfacingMesh, requestInspectTrench, requestOverview, setTitleBlock, setLgiaInputs, clearSite,
+    loadKmz, setConfigId, setTargetMW, setTargetMWh, setHotClimate, setContainersPerPcs, setRoadMode, setAutoRoadWrap, setRingMode, setPerimeterBand, setFencePlacement, setLaydownPct, setAugmentPct, setFuturePhaseUnits, setIslandAugUnits, setIslandAugEnd, adjustIslandBlocks, setSurfacingMode, setSurfacingDepthIn, setDeadSpaceTrim, setDcRouting, setTextureSetId, setGePcsColor, setShowGateModel, setShowFence3D, setShowFeederColors, setShowSatellite, loadSatellite, setShowTerrain, setLabelDistanceScaling, setShowSlopeHeatmap, setMaxGradePct, setShowContours, setContourIntervalFt, setShowGradingLimits, setGradingSlopeRatio, setExportContoursDxf, setExportCutFillShading, setShowGrounding, setGroundingXray, setGroundingRodSpacingFt, setExportGroundingDxf, setExportTrenchSectionsDxf, setExportSurfacingMesh, requestInspectTrench, requestOverview, setTitleBlock, setLgiaInputs, clearSite,
     eciLegend, setEciLegend,
     substation, placingSubstation, feeders, feederAssignments, feederMaterial,
     setPlacingSubstation, removeSubstation, setFeederSize, setFeederMaterial, assignInverterToFeeder, resetFeederOverrides, resetFeederSizes, removeFeederRoute,
@@ -917,18 +924,6 @@ export default function DesignControlPanel() {
   const siteTotals = useMemo(
     () => (siteAreas.length > 1 ? siteAreasTotals(siteAreas, areaFeederCounts) : null),
     [siteAreas, areaFeederCounts]
-  );
-  // Areas whose yard came out with no interior roads. The layout engine can
-  // silently fall back to a compact, road-free layout when the target does
-  // not fit with roads — in a multi-area site that can happen to an area the
-  // drafter is not looking at, so the roads appear to vanish for no reason.
-  const roadlessAreas = useMemo(
-    () => (siteAreas.length > 1 ? areasMissingRoads(siteAreas) : []),
-    [siteAreas]
-  );
-  const roadCapacityShortfallAreas = useMemo(
-    () => (siteAreas.length > 1 ? areasWithAccessRoadShortfalls(siteAreas) : []),
-    [siteAreas]
   );
   // Substation take-off editing targets the ACTIVE area. Its live take-offs
   // are the mirrored ones when the drafter has edited them, otherwise the
@@ -1340,18 +1335,6 @@ export default function DesignControlPanel() {
     setGradResult(null);
   }, [boundary, terrain, configId, targetMW, targetMWh, hotClimate, containersPerPcs, roadMode, laydownPct, augmentPct, surfacingMode, surfacingDepthIn]);
 
-  // Default sample: on a fresh start (no boundary, no saved session to
-  // restore), open Great Prairie 1 & 2 so its boundary choices are shown.
-  const autoLoadedRef = useRef(false);
-  useEffect(() => {
-    if (autoLoadedRef.current) return;
-    const st = useDesignStore.getState();
-    if (st.boundary || st.savedSession) return;
-    autoLoadedRef.current = true;
-    void handleSample(SAMPLE_SITES[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Optimizer results are only valid for the inputs they were computed from —
   // drop stale candidate cards whenever a core input changes.
   useEffect(() => {
@@ -1687,13 +1670,6 @@ export default function DesignControlPanel() {
     const st = useDesignStore.getState();
     if (st.error) toast.error(st.error);
     else if (!st.boundaryPicker) toast.success('Site boundary loaded');
-  };
-
-  const handleSample = async (s: { name: string; url: string; boundaryNames?: string[] }) => {
-    await loadSample(s.url, s.name, s.boundaryNames);
-    const st = useDesignStore.getState();
-    if (st.error) toast.error(st.error);
-    else if (!st.boundaryPicker) toast.success(`${s.name} loaded`);
   };
 
   // Opt-in existing-grade contours (reference layer), shared by every export
@@ -2949,12 +2925,36 @@ export default function DesignControlPanel() {
     }
   };
 
+  const [panelActiveId, setPanelActiveIdState] = useState<PanelSectionId>(() => readStoredPanelSection());
+  const setPanelActiveId = useCallback((id: PanelSectionId) => {
+    setPanelActiveIdState(id);
+    persistPanelSection(id);
+  }, []);
+  // Fall back to Site Boundary when the active tab is no longer reachable
+  // (no KMZ yet, or Edit/Arrangements without a layout).
+  useEffect(() => {
+    if (panelActiveId === 'site') return;
+    if (!boundary) {
+      setPanelActiveId('site');
+      return;
+    }
+    if (!design && (panelActiveId === 'edit' || panelActiveId === 'arrangements')) {
+      setPanelActiveId('site');
+    }
+  }, [boundary, design, panelActiveId, setPanelActiveId]);
+
+  const panelNavValue = useMemo<PanelNavValue>(() => ({
+    activeId: panelActiveId,
+    setActiveId: setPanelActiveId,
+  }), [panelActiveId, setPanelActiveId]);
+
   return (
-    <div className="w-96 shrink-0 h-full overflow-y-auto bg-slate-900 text-slate-100 border-r border-slate-700 flex flex-col">
-      {/* Header */}
-      <div className="p-4 border-b border-slate-700 bg-slate-950">
+    <PanelNavContext.Provider value={panelNavValue}>
+    <div className="w-96 shrink-0 h-full bg-slate-900 text-slate-100 border-r border-slate-700 flex flex-col">
+      {/* Header — full width above the section rail */}
+      <div className="shrink-0 p-4 border-b border-slate-700 bg-slate-950">
         <div className="flex items-center gap-3">
-          <img src={assetUrl('/eci-logo.svg')} alt="ECI" className="h-10 w-auto bg-white rounded p-1" />
+          <img src={assetUrl('/epc-logo.png')} alt="ECI" className="h-10 w-auto bg-white rounded p-1.5 object-contain" />
           <div>
             <div className="font-bold text-sm leading-tight">BESSForge</div>
             <div className="text-xs text-slate-400">BESS 10% Design Tool</div>
@@ -2965,6 +2965,9 @@ export default function DesignControlPanel() {
         </div>
       </div>
 
+      <div className="relative flex-1 min-h-0">
+      <PanelSectionNav boundaryReady={!!boundary} designReady={!!design} />
+      <div className="pl-8 h-full overflow-y-auto flex flex-col">
       <div className="p-4 space-y-5 flex-1">
         {/* Saved-session restore banner */}
         {savedSession && !boundary && (
@@ -2992,7 +2995,7 @@ export default function DesignControlPanel() {
         )}
 
         {/* Step 1: KMZ upload */}
-        <PanelSection id="site" title="1. Site Boundary (KMZ)" discipline="Layout">
+        <PanelSection id="site" title="Site Boundary (KMZ)" discipline="Layout">
           <input
             ref={fileRef}
             type="file"
@@ -3238,27 +3241,10 @@ export default function DesignControlPanel() {
               </div>
             </div>
           )}
-          <div className="mt-3">
-            <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1.5">
-              Sample sites
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {SAMPLE_SITES.map(s => (
-                <button
-                  key={s.url}
-                  onClick={() => handleSample(s)}
-                  disabled={isLoading}
-                  className="text-left text-xs px-2 py-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 transition-colors"
-                >
-                  {s.name}
-                </button>
-              ))}
-            </div>
-          </div>
         </PanelSection>
 
         {/* Step 2: Configuration */}
-        <PanelSection id="equipment" title="2. Equipment Configuration" discipline="Layout">
+        <PanelSection id="equipment" title="Equipment Configuration" discipline="Layout">
           <select
             value={configId}
             onChange={e => setConfigId(e.target.value)}
@@ -3306,7 +3292,7 @@ export default function DesignControlPanel() {
         </PanelSection>
 
         {/* Step 3: Target */}
-        <PanelSection id="target" title="3. Target Rating" discipline="Layout · Civil">
+        <PanelSection id="target" title="Target Rating" discipline="Layout · Civil">
           <div className="grid grid-cols-2 gap-3">
             <label className="text-xs text-slate-400">
               Power (MW)
@@ -5026,7 +5012,7 @@ export default function DesignControlPanel() {
         </PanelSection>
 
         {/* Step 4: Title block info */}
-        <PanelSection id="titleblock" title="4. Title Block" discipline="Exports">
+        <PanelSection id="titleblock" title="Title Block" discipline="Exports">
           <div className="space-y-2">
             <label className="text-xs text-slate-400 block">
               Project Name
@@ -5107,7 +5093,7 @@ export default function DesignControlPanel() {
         </PanelSection>
 
         {/* Step 5: Substation + MV feeders */}
-        <PanelSection id="electrical" title="5. Substation &amp; MV Feeders" discipline="Electrical">
+        <PanelSection id="electrical" title="Substation & MV Feeders" discipline="Electrical">
           {!design ? (
             <div className="text-xs text-slate-500">Generate a layout first.</div>
           ) : (
@@ -5767,7 +5753,7 @@ export default function DesignControlPanel() {
 
         {/* Step 6: Edit layout */}
         {design && (
-          <PanelSection id="edit" title="6. Edit Layout" discipline="Layout">
+          <PanelSection id="edit" title="Edit Layout" discipline="Layout">
             <div className="space-y-2 text-xs text-slate-400">
               {/* Row/block move controls need auto rows; an empty area (manual
                   placement only) still gets the placement + placed-island tools. */}
@@ -6296,7 +6282,7 @@ export default function DesignControlPanel() {
 
         {/* Step 7: Reset & alternative arrangements */}
         {design && (
-          <PanelSection id="arrangements" title="7. Reset &amp; Arrangements" discipline="Layout">
+          <PanelSection id="arrangements" title="Reset & Arrangements" discipline="Layout">
             <div className="space-y-2 text-xs text-slate-400">
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -6635,157 +6621,98 @@ export default function DesignControlPanel() {
               {/* Multi-scenario comparison (Max Capacity / Min Cabling / Min Civil / Balanced) */}
               <ScenarioComparePanel />
             </div>
+
+            {/* Layout summary — lives on this tab only (was formerly always
+                visible under every exclusive section). */}
+            <section className="bg-slate-800 rounded p-3 text-sm space-y-1 mt-5">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
+                {siteAreas.length > 1 ? 'Auto-Sized Layout — this area' : 'Auto-Sized Layout'}
+              </h3>
+              <div className="flex justify-between"><span className="text-slate-400">Blocks placed</span><span>{design.blocksPlaced} / {design.blocksRequired}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">BESS containers</span><span>{design.equipment.filter(e => e.kind === 'bess').length}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">PCS Units</span><span>{design.equipment.filter(e => e.kind === 'inverter').length}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Achieved</span><span>{design.achievedMW.toFixed(1)} MW / {design.achievedMWh.toFixed(0)} MWh</span></div>
+            </section>
+
+            {siteTotals && (
+              <section className="bg-slate-800 rounded p-3 text-sm space-y-1 mt-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
+                  Whole Site — {siteTotals.perArea.length} areas
+                </h3>
+                <div className="flex justify-between"><span className="text-slate-400">Blocks placed</span><span>{siteTotals.blocksPlaced} / {siteTotals.blocksRequired}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">BESS containers</span><span>{siteTotals.bessContainers}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">PCS Units</span><span>{siteTotals.pcsUnits}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">Achieved</span><span>{siteTotals.achievedMW.toFixed(1)} MW / {siteTotals.achievedMWh.toFixed(0)} MWh</span></div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Future augmentation</span>
+                  <span>{siteTotals.augBlocks} blk (+{siteTotals.augMW.toFixed(1)} MW / +{siteTotals.augMWh.toFixed(0)} MWh)</span>
+                </div>
+                <div className="flex justify-between"><span className="text-slate-400">Site area</span><span>{siteTotals.acres.toFixed(1)} ac</span></div>
+                <div className="mt-2 pt-2 border-t border-slate-700 space-y-0.5">
+                  {siteTotals.perArea.map(a => (
+                    <div key={a.id} className="space-y-0.5">
+                      <div className="flex justify-between gap-2 text-[11px]">
+                        <span className="text-slate-400 truncate">
+                          {a.name}
+                          {a.kind === 'substation' && <span className="text-slate-600"> · sub</span>}
+                        </span>
+                        <span className="shrink-0 text-slate-300">
+                          {a.generated
+                            ? a.kind === 'substation'
+                              ? `${a.acres.toFixed(1)} ac`
+                              : `${a.blocksPlaced}/${a.blocksRequired} blk · ${a.achievedMW.toFixed(1)} MW / ${a.achievedMWh.toFixed(0)} MWh`
+                            : <span className="text-slate-500">not generated</span>}
+                        </span>
+                      </div>
+                      {a.generated && a.kind === 'bess' && (
+                        <div className="pl-2 text-[10px] leading-snug text-slate-500">
+                          {a.blocksShort > 0
+                            ? `Short ${a.blocksShort} block${a.blocksShort === 1 ? '' : 's'} of target`
+                            : 'Full target met'}
+                          {' · '}
+                          {a.augBlocks > 0
+                            ? `Future aug ${a.augBlocks} blk (+${a.augMW.toFixed(1)} MW / +${a.augMWh.toFixed(0)} MWh, not in active total)`
+                            : 'No future augmentation fits'}
+                          <br />
+                          {a.servingSubstation
+                            ? <>Served by {a.servingSubstation}{a.feederCount >= 0 ? ` · ${a.feederCount} routed feeder${a.feederCount === 1 ? '' : 's'}` : ''}</>
+                            : 'No substation take-off aimed at this area — MV feeders not routed'}
+                          {a.servingSubstation && a.feederCount === 0 && (
+                            <> — no feeders routed</>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <div className="mt-3">
+              <DrawingVisibilityPanel />
+            </div>
+
+            <section className="bg-slate-800 rounded p-3 text-xs space-y-1.5 mt-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
+                Container Markers
+              </h3>
+              <div className="flex items-start gap-2">
+                <span className="inline-block w-6 h-2 mt-1 shrink-0 rounded-sm bg-slate-100 border border-slate-500" />
+                <span className="text-slate-300">White stripe = door / compartment end wall</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="inline-block w-6 mt-0.5 shrink-0 text-center font-mono text-slate-100">A/C</span>
+                <span className="text-slate-300">(A) = E-panel on left side, (C) = E-panel on right side</span>
+              </div>
+            </section>
+
+            <div className="mt-3">
+              <CompliancePanel />
+            </div>
           </PanelSection>
         )}
 
-        {/* Results — the active area, then (multi-area only) the whole site */}
-        {design && (
-          <section className="bg-slate-800 rounded p-3 text-sm space-y-1">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
-              {siteAreas.length > 1 ? 'Auto-Sized Layout — this area' : 'Auto-Sized Layout'}
-            </h3>
-            <div className="flex justify-between"><span className="text-slate-400">Blocks placed</span><span>{design.blocksPlaced} / {design.blocksRequired}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">BESS containers</span><span>{design.equipment.filter(e => e.kind === 'bess').length}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">PCS Units</span><span>{design.equipment.filter(e => e.kind === 'inverter').length}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Achieved</span><span>{design.achievedMW.toFixed(1)} MW / {design.achievedMWh.toFixed(0)} MWh</span></div>
-            {design.warnings.map((w, i) => {
-              if (w.startsWith('Island alignment available:')) {
-                return (
-                  <div key={i} className="text-xs mt-2 text-amber-400">
-                    ⚠ {w}{' '}
-                    <button
-                      type="button"
-                      className="underline hover:text-amber-200 transition-colors"
-                      onClick={() => setAlignIslands(true)}
-                    >
-                      Enable alignment
-                    </button>
-                  </div>
-                );
-              }
-              return (
-                <div
-                  key={i}
-                  className={`${w.startsWith('Access-road capacity shortfall:')
-                    ? 'border border-red-500/70 bg-red-950/35 text-red-300 font-medium rounded px-2 py-1.5'
-                    : 'text-amber-400'} text-xs mt-2`}
-                >
-                  ⚠ {w}
-                </div>
-              );
-            })}
-          </section>
-        )}
-
-        {/* Whole-site totals: every area summed, with each area still listed
-            separately. Areas that have not generated are called out rather
-            than quietly dropped, so the site figure is never a silent
-            undercount. */}
-        {design && siteTotals && (
-          <section className="bg-slate-800 rounded p-3 text-sm space-y-1">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
-              Whole Site — {siteTotals.perArea.length} areas
-            </h3>
-            <div className="flex justify-between"><span className="text-slate-400">Blocks placed</span><span>{siteTotals.blocksPlaced} / {siteTotals.blocksRequired}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">BESS containers</span><span>{siteTotals.bessContainers}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">PCS Units</span><span>{siteTotals.pcsUnits}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Achieved</span><span>{siteTotals.achievedMW.toFixed(1)} MW / {siteTotals.achievedMWh.toFixed(0)} MWh</span></div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">Future augmentation</span>
-              <span>{siteTotals.augBlocks} blk (+{siteTotals.augMW.toFixed(1)} MW / +{siteTotals.augMWh.toFixed(0)} MWh)</span>
-            </div>
-            <div className="flex justify-between"><span className="text-slate-400">Site area</span><span>{siteTotals.acres.toFixed(1)} ac</span></div>
-            <div className="mt-2 pt-2 border-t border-slate-700 space-y-0.5">
-              {siteTotals.perArea.map(a => (
-                <div key={a.id} className="space-y-0.5">
-                  <div className="flex justify-between gap-2 text-[11px]">
-                    <span className="text-slate-400 truncate">
-                      {a.name}
-                      {a.kind === 'substation' && <span className="text-slate-600"> · sub</span>}
-                    </span>
-                    <span className="shrink-0 text-slate-300">
-                      {a.generated
-                        ? a.kind === 'substation'
-                          ? `${a.acres.toFixed(1)} ac`
-                          : `${a.blocksPlaced}/${a.blocksRequired} blk · ${a.achievedMW.toFixed(1)} MW / ${a.achievedMWh.toFixed(0)} MWh`
-                        : <span className="text-amber-400">not generated</span>}
-                    </span>
-                  </div>
-                  {/* Per-area detail: every BESS footprint is designed to the
-                      FULL selected target, so its own shortfall, its future
-                      augmentation reserve (never part of the active MW) and
-                      the substation actually collecting it all belong on the
-                      area's own line rather than only in the site total. */}
-                  {a.generated && a.kind === 'bess' && (
-                    <div className="pl-2 text-[10px] leading-snug text-slate-500">
-                      {a.blocksShort > 0 ? (
-                        <span className="text-amber-400">
-                          Short {a.blocksShort} block{a.blocksShort === 1 ? '' : 's'} of target
-                        </span>
-                      ) : (
-                        <span className="text-emerald-400">Full target met</span>
-                      )}
-                      {' · '}
-                      {a.augBlocks > 0
-                        ? `Future aug ${a.augBlocks} blk (+${a.augMW.toFixed(1)} MW / +${a.augMWh.toFixed(0)} MWh, not in active total)`
-                        : 'No future augmentation fits'}
-                      <br />
-                      {a.servingSubstation
-                        ? <>Served by {a.servingSubstation}{a.feederCount >= 0 ? ` · ${a.feederCount} routed feeder${a.feederCount === 1 ? '' : 's'}` : ''}</>
-                        : <span className="text-amber-400">No substation take-off aimed at this area — MV feeders not routed</span>}
-                      {a.servingSubstation && a.feederCount === 0 && (
-                        <span className="text-amber-400"> — no feeders routed</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-            {siteTotals.pendingAreas > 0 && (
-              <div className="text-amber-400 text-xs mt-2">
-                ⚠ {siteTotals.pendingAreas} area{siteTotals.pendingAreas > 1 ? 's have' : ' has'} no layout yet — the site total above is incomplete.
-              </div>
-            )}
-            {/* Roads dropped on an area the drafter may not be viewing. Named
-                explicitly so a compact-mode fallback is never a silent loss. */}
-            {roadlessAreas.map(a => (
-              <div key={a.id} className="text-amber-400 text-xs mt-2">
-                ⚠ {a.name}: no interior access roads. {a.reason}
-              </div>
-            ))}
-            {roadCapacityShortfallAreas.map(a => (
-              <div key={a.id} className="border border-red-500/70 bg-red-950/35 text-red-300 font-medium rounded px-2 py-1.5 text-xs mt-2">
-                ⚠ {a.name}: {a.reason}
-              </div>
-            ))}
-          </section>
-        )}
-
-        {design && <DrawingVisibilityPanel />}
-
-        {/* Container marker legend */}
-        {design && (
-          <section className="bg-slate-800 rounded p-3 text-xs space-y-1.5">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">
-              Container Markers
-            </h3>
-            <div className="flex items-start gap-2">
-              <span className="inline-block w-6 h-2 mt-1 shrink-0 rounded-sm bg-slate-100 border border-slate-500" />
-              <span className="text-slate-300">White stripe = door / compartment end wall</span>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="inline-block w-6 mt-0.5 shrink-0 text-center font-mono text-slate-100">A/C</span>
-              <span className="text-slate-300">(A) = E-panel on left side, (C) = E-panel on right side</span>
-            </div>
-          </section>
-        )}
-
-        {/* Compliance report against the NextEra guidance checklist */}
-        {design && <CompliancePanel />}
-      </div>
-
-      {/* Export */}
-      <div className="p-4 border-t border-slate-700">
+        <PanelSection id="exports" title="Exports" discipline="Exports">
         {design && (() => {
           const report = validateDesign(design, { titleBlock, feeders, substation, terrain: terrainAnalysis.steep, electrical: electricalReport, areaZones });
           const icon = (s: string) => (s === 'pass' ? '✓' : s === 'warn' ? '⚠' : '✕');
@@ -7258,7 +7185,11 @@ export default function DesignControlPanel() {
         <div className="text-[10px] text-slate-500 mt-2 text-center">
           Clean 2D plan — rectangles match layout 1:1, units in feet
         </div>
+        </PanelSection>
+      </div>
+      </div>
       </div>
     </div>
+    </PanelNavContext.Provider>
   );
 }

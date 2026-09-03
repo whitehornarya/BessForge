@@ -565,15 +565,15 @@ function generatedCableVisible(
 }
 
 // Cable runs with the cinematic tour's presentation-only DC reroute beat.
-// Outside that beat this renders design.cables unchanged. During the beat it
+// Outside that beat this is design.cables unchanged. During the beat it
 // derives temporary direct geometry without writing it back to the design,
-// store, session, or export pipeline.
-function TourSwapCableRuns({ design }: { design: SiteDesign }) {
-  const drawingVisibility = useDesignStore(s => s.drawingVisibility);
+// store, session, or export pipeline. Shared by cable polylines and trenches
+// so both stay in sync during the swap.
+function useDisplayCableRuns(design: SiteDesign | null | undefined): CableRun[] {
   const swap = useDesignStore(s => s.tourDcSwap);
-  const swapOn = swap > 0;
+  const swapOn = !!design && swap > 0;
   const directCables = useMemo(() => {
-    if (!swapOn) return null;
+    if (!design || !swapOn) return null;
     try {
       return generateCableRouting(
         equipmentForRouting(design.equipment), design.augmentationZones, design.fence,
@@ -585,8 +585,9 @@ function TourSwapCableRuns({ design }: { design: SiteDesign }) {
     }
   }, [swapOn, design]);
 
-  const runs = useMemo(() => {
-    const isDc = (run: typeof design.cables[number]) => run.class === 'DC' && !run.ref;
+  return useMemo(() => {
+    if (!design) return [];
+    const isDc = (run: CableRun) => run.class === 'DC' && !run.ref;
     if (!directCables || swap <= 0) return design.cables;
     const oldDc = design.cables.filter(isDc);
     const newDc = directCables.filter(isDc);
@@ -598,6 +599,11 @@ function TourSwapCableRuns({ design }: { design: SiteDesign }) {
       ...oldDc.slice(Math.min(cut, oldDc.length)),
     ];
   }, [design, directCables, swap]);
+}
+
+function TourSwapCableRuns({ design }: { design: SiteDesign }) {
+  const drawingVisibility = useDesignStore(s => s.drawingVisibility);
+  const runs = useDisplayCableRuns(design);
 
   return (
     <>
@@ -1450,6 +1456,7 @@ function AuxFeederTrenches() {
 function CableTrenches() {
   const design = useDesignStore(s => s.design);
   const drawingVisibility = useDesignStore(s => s.drawingVisibility);
+  const displayCables = useDisplayCableRuns(design);
   const patchBounds = useMemo(() => ({
     fence: design?.fence ?? [],
     obstacles: (design?.equipment ?? []).map(e => {
@@ -1465,10 +1472,12 @@ function CableTrenches() {
   }), [design]);
   // Scope: AUX/DC/LVAC/fiber runs only — in-yard MV bus/spine runs are drawn
   // as surface circuits and the MV home-run trench is FeederTrenches.
+  // Use the same display list as TourSwapCableRuns so Direct tour swaps
+  // keep trenches aligned with the visible cables.
   const runs = useMemo(
-    () => (design?.cables ?? []).filter(c =>
+    () => displayCables.filter(c =>
       c.class !== 'MV' && generatedCableVisible(c.class, drawingVisibility)),
-    [design, drawingVisibility],
+    [displayCables, drawingVisibility],
   );
   if (!design || runs.length === 0) return null;
   return <CableTrenchChannels runs={runs} colors={CABLE_COLORS} patchBounds={patchBounds} />;
@@ -6192,8 +6201,6 @@ function OrthoPoseCamera() {
   return null;
 }
 
-// Keyboard pan for orbit / plan views. WASD always pans; arrow keys pan only
-// when placement / selection nudge is not claiming them.
 // Hard clamps for OrbitControls / dolly (wide enough for whole-site framing).
 const ORTHO_ZOOM_MIN = 0.01;
 const ORTHO_ZOOM_MAX = 50;
@@ -6306,99 +6313,34 @@ function CameraZoomBridge({
   return null;
 }
 
-function CameraKeyPan({
-  enabled,
-  arrowsClaimed,
-}: {
-  enabled: boolean;
-  arrowsClaimed: boolean;
-}) {
-  const camera = useThree(s => s.camera);
-  const controls = useThree(s => s.controls) as any;
-  const invalidate = useThree(s => s.invalidate);
-  const held = useRef({ n: false, s: false, e: false, w: false, shift: false });
+// OrbitControls remaps left-drag to pan when Shift/Ctrl/Meta is held. Briefly
+// disable pan for left button only so left-drag stays rotate; right-drag pan
+// is restored on pointerup.
+function DisableLeftModifierPan() {
+  const controls = useThree(s => s.controls) as { enablePan: boolean; domElement: HTMLElement } | null;
 
   useEffect(() => {
-    if (!enabled) {
-      held.current = { n: false, s: false, e: false, w: false, shift: false };
-      return;
-    }
-    const typing = (t: EventTarget | null) => {
-      const el = t as HTMLElement | null;
-      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    if (!controls?.domElement) return;
+    const el = controls.domElement;
+    const onDown = (e: PointerEvent) => {
+      if (e.button === 0) controls.enablePan = false;
     };
-    const dirFor = (e: KeyboardEvent): 'n' | 's' | 'e' | 'w' | null => {
-      const k = e.key;
-      if (k === 'w' || k === 'W') return 'n';
-      if (k === 's' || k === 'S') return 's';
-      if (k === 'a' || k === 'A') return 'w';
-      if (k === 'd' || k === 'D') return 'e';
-      if (arrowsClaimed) return null;
-      if (k === 'ArrowUp') return 'n';
-      if (k === 'ArrowDown') return 's';
-      if (k === 'ArrowLeft') return 'w';
-      if (k === 'ArrowRight') return 'e';
-      return null;
+    const onUp = () => {
+      controls.enablePan = true;
     };
-    const onDown = (e: KeyboardEvent) => {
-      if (typing(e.target)) return;
-      if (e.key === 'Shift') { held.current.shift = true; return; }
-      const d = dirFor(e);
-      if (!d) return;
-      e.preventDefault();
-      held.current[d] = true;
-    };
-    const onUp = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') { held.current.shift = false; return; }
-      const d = dirFor(e);
-      if (!d) return;
-      held.current[d] = false;
-    };
-    const onBlur = () => {
-      held.current = { n: false, s: false, e: false, w: false, shift: false };
-    };
-    window.addEventListener('keydown', onDown);
-    window.addEventListener('keyup', onUp);
-    window.addEventListener('blur', onBlur);
+    el.addEventListener('pointerdown', onDown, true);
+    el.addEventListener('pointerup', onUp, true);
+    el.addEventListener('pointercancel', onUp, true);
+    window.addEventListener('pointerup', onUp);
     return () => {
-      window.removeEventListener('keydown', onDown);
-      window.removeEventListener('keyup', onUp);
-      window.removeEventListener('blur', onBlur);
-      held.current = { n: false, s: false, e: false, w: false, shift: false };
+      el.removeEventListener('pointerdown', onDown, true);
+      el.removeEventListener('pointerup', onUp, true);
+      el.removeEventListener('pointercancel', onUp, true);
+      window.removeEventListener('pointerup', onUp);
+      controls.enablePan = true;
     };
-  }, [enabled, arrowsClaimed]);
+  }, [controls]);
 
-  useFrame((_, dt) => {
-    if (!enabled || !controls) return;
-    const h = held.current;
-    let dx = 0, dz = 0; // scene: +X east, -Z north (plan +Y)
-    if (h.n) dz -= 1;
-    if (h.s) dz += 1;
-    if (h.e) dx += 1;
-    if (h.w) dx -= 1;
-    if (!dx && !dz) return;
-    const len = Math.hypot(dx, dz) || 1;
-    dx /= len; dz /= len;
-    const ortho = camera as THREE.OrthographicCamera;
-    let step: number;
-    if (ortho.isOrthographicCamera) {
-      const worldW = (ortho.right - ortho.left) / Math.max(ortho.zoom, 1e-6);
-      // ~12% of view width per second (Shift = 3×); kept deliberately slow.
-      step = worldW * 0.12 * Math.min(dt, 0.05);
-    } else {
-      const dist = camera.position.distanceTo(controls.target) || 200;
-      step = dist * 0.12 * Math.min(dt, 0.05);
-    }
-    if (h.shift) step *= 3;
-    const mx = dx * step;
-    const mz = dz * step;
-    camera.position.x += mx;
-    camera.position.z += mz;
-    controls.target.x += mx;
-    controls.target.z += mz;
-    controls.update();
-    invalidate();
-  });
   return null;
 }
 
@@ -6438,7 +6380,7 @@ function ZoomBarHud({
     <div
       className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 pointer-events-auto bg-slate-900/85 border border-slate-600 rounded shadow px-2 py-1.5"
       data-testid="zoom-bar"
-      title="Zoom — scroll wheel also zooms; right-drag to pan, arrows/WASD to move"
+      title="Zoom — scroll wheel also zooms; left-drag rotates (3D); right-drag pans"
     >
       <button
         type="button"
@@ -7122,7 +7064,7 @@ export default function DesignScene() {
   });
   const walkMode = useDesignStore(s => s.walkMode);
   const setWalkMode = useDesignStore(s => s.setWalkMode);
-  // Live placement claims arrow keys for nudge; WASD still pans the camera.
+  // Live placement claims arrow keys for nudge.
   const placementActive = useDesignStore(s => !!s.placement);
   const zoomApiRef = useRef<CameraZoomNavApi | null>(null);
   const showSatellite = useDesignStore(s => s.showSatellite);
@@ -8219,18 +8161,18 @@ export default function DesignScene() {
           target={initialCam.target}
           enabled={!dragging && !walkMode && !tourActive}
           enableRotate={viewMode !== '2d'}
+          mouseButtons={{
+            LEFT: THREE.MOUSE.ROTATE,
+            MIDDLE: THREE.MOUSE.DOLLY,
+            RIGHT: THREE.MOUSE.PAN,
+          }}
           maxPolarAngle={Math.PI / 2.05}
           minDistance={PERSPECTIVE_DIST_MIN}
           maxDistance={PERSPECTIVE_DIST_MAX}
           minZoom={ORTHO_ZOOM_MIN}
           maxZoom={ORTHO_ZOOM_MAX}
         />
-        {!walkMode && !tourActive && (
-          <CameraKeyPan
-            enabled={!dragging}
-            arrowsClaimed={placementActive || (editTool === 'move' && !!nudgeTarget)}
-          />
-        )}
+        {!walkMode && !tourActive && <DisableLeftModifierPan />}
         {!walkMode && !tourActive && (
           <CameraZoomBridge apiRef={zoomApiRef} />
         )}
