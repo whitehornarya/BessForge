@@ -12,6 +12,7 @@ const { app, BrowserWindow, ipcMain, safeStorage, session, shell } = require('el
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { BUNDLED_CESIUM_ION_TOKEN } = require('./cesiumIonToken.cjs');
 
 const APP_DIR = path.join(__dirname, 'app');
 const LOCAL_API_URL = 'http://127.0.0.1:53117';
@@ -80,13 +81,16 @@ function readCesiumToken() {
   const environmentToken = process.env.CESIUM_ION_TOKEN?.trim();
   if (environmentToken) return environmentToken;
   const file = tokenFilePath();
-  if (!fs.existsSync(file) || !safeStorage.isEncryptionAvailable()) return '';
-  try {
-    return safeStorage.decryptString(fs.readFileSync(file)).trim();
-  } catch (error) {
-    console.error('Could not decrypt the saved Cesium token:', error.message);
-    return '';
+  if (fs.existsSync(file) && safeStorage.isEncryptionAvailable()) {
+    try {
+      const saved = safeStorage.decryptString(fs.readFileSync(file)).trim();
+      if (saved) return saved;
+    } catch (error) {
+      console.error('Could not decrypt the saved Cesium token:', error.message);
+    }
   }
+  const bundled = typeof BUNDLED_CESIUM_ION_TOKEN === 'string' ? BUNDLED_CESIUM_ION_TOKEN.trim() : '';
+  return bundled;
 }
 
 function saveCesiumToken(value) {

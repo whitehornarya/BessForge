@@ -208,6 +208,7 @@ rmSync(path.join(PAYLOAD_DIR, 'electron.exe'), { force: true });
 const appDir = path.join(PAYLOAD_DIR, 'resources', 'app');
 mkdirSync(path.join(appDir, 'build'), { recursive: true });
 cpSync(path.join(ROOT, 'electron', 'main.cjs'), path.join(appDir, 'main.cjs'));
+cpSync(path.join(ROOT, 'electron', 'cesiumIonToken.cjs'), path.join(appDir, 'cesiumIonToken.cjs'));
 cpSync(path.join(ROOT, 'electron', 'preload.cjs'), path.join(appDir, 'preload.cjs'));
 cpSync(path.join(ROOT, 'electron', 'token-preload.cjs'), path.join(appDir, 'token-preload.cjs'));
 cpSync(path.join(ROOT, 'electron', 'token-setup.html'), path.join(appDir, 'token-setup.html'));
@@ -247,6 +248,7 @@ const payloadMB = Math.round(
 for (const required of [
   'BESSForge.exe',
   'resources/app/main.cjs',
+  'resources/app/cesiumIonToken.cjs',
   'resources/app/preload.cjs',
   'resources/app/token-preload.cjs',
   'resources/app/token-setup.html',
@@ -289,9 +291,9 @@ if (!args.has('--skip-portable')) {
       'Designs and exports remain on the local computer unless you deliberately share them.',
       '',
       'Local API and Cesium: BESSForge starts its bundled loopback API automatically.',
-      'On first launch, enter your Cesium ion token in the secure setup window.',
-      'Windows encrypts the token for your user; it is not stored in this ZIP or browser files.',
-      'To replace it later, run: BESSForge.exe --configure-cesium-token',
+      'Satellite imagery uses the Cesium ion token bundled for this internal build.',
+      'To replace it for your user, run: BESSForge.exe --configure-cesium-token',
+      'Windows encrypts any replacement token for your user account.',
       '',
       'API configuration: edit bessforge.config.json beside BESSForge.exe.',
       'Only HTTPS remote endpoints or loopback HTTP endpoints are accepted.',

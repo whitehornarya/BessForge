@@ -4,6 +4,11 @@ import {
   BoundedTtlCache, InputError, UpstreamError, fetchFixed, optionalQueryNumber,
   parseJson, queryNumber, safeProxyMessage,
 } from "./services/proxy-utils";
+import { BUNDLED_CESIUM_ION_TOKEN } from "./cesiumIonToken";
+
+function cesiumIonToken(): string {
+  return (process.env.CESIUM_ION_TOKEN?.trim() || BUNDLED_CESIUM_ION_TOKEN.trim());
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   app.get(['/health', '/api/health'], (_req, res) => {
@@ -35,7 +40,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   async function getBingImagery() {
     if (bingCache && bingCache.expires > Date.now()) return bingCache;
-    const token = process.env.CESIUM_ION_TOKEN;
+    const token = cesiumIonToken();
     if (!token) throw new Error('CESIUM_ION_TOKEN is not configured');
     const ionUrl = new URL('https://api.cesium.com/v1/assets/2/endpoint');
     ionUrl.searchParams.set('access_token', token);
