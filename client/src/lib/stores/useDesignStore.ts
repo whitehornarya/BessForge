@@ -14,6 +14,7 @@ import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementS
 // builder can match pave-as-drawn overrides without a circular import.
 export { tracedRoadFingerprint, tracedRoadFingerprintMatch };
 import type { DcRoutingMode } from '../nextera/cableRouting';
+import { generateCableRouting } from '../nextera/cableRouting';
 import { SurfacingMode } from '../nextera/types';
 import { OptimizeParams } from '../nextera/optimizer';
 import { generateDesignInWorker, workerAvailable, SupersededError, cancelChannel } from '../nextera/designWorkerClient';
@@ -2552,7 +2553,7 @@ const restoreFields = (snap: HistorySnap) => ({
   surfacingMode: snap.surfacingMode ?? 'between-roads',
   surfacingDepthIn: snap.surfacingDepthIn ?? SURFACING_DEPTH_IN_DEFAULT,
   deadSpaceTrim: snap.deadSpaceTrim ?? false,
-  dcRouting: snap.dcRouting ?? 'orthogonal',
+  dcRouting: snap.dcRouting ?? 'direct',
   feederRoutingMode: snap.feederRoutingMode === 'angled' ? 'angled' as const : 'orthogonal' as const,
   textureSetId: isYardTextureSetId(snap.textureSetId) ? snap.textureSetId : DEFAULT_TEXTURE_SET_ID,
   gePcsColor: snap.gePcsColor === undefined ? GE_PCS_GREEN : sanitizePcsColor(snap.gePcsColor),
@@ -4296,6 +4297,9 @@ interface DesignState {
   assignInverterToFeeder: (invId: string, feederIdx: number) => boolean;
   resetFeederOverrides: () => void;
   recomputeFeeders: () => void;
+  // Re-route DC/MV/LVAC/fiber on the current design without rebuilding the
+  // yard. Used when only dcRouting (or a per-block override) changes.
+  recomputeCables: () => void;
   // Re-route every area's feeders onto its resolved take-off (multi-area).
   // Falls back to recomputeFeeders for a single-area project.
   recomputeAllAreaFeeders: () => void;
@@ -4352,7 +4356,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   surfacingMode: 'between-roads',
   surfacingDepthIn: SURFACING_DEPTH_IN_DEFAULT,
   deadSpaceTrim: false,
-  dcRouting: 'orthogonal',
+  dcRouting: 'direct',
   feederRoutingMode: 'orthogonal',
   feederDrawRequest: null,
   auxFeederDrawRequest: false,
@@ -5343,7 +5347,9 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       ? 'Set DC runs to direct straight-line routing'
       : 'Set DC runs to 90° trench routing'));
     set({ dcRouting: mode });
-    get().regenerate();
+    // Equipment / fence unchanged — only re-route cables (full regenerate
+    // was rebuilding the whole yard and made the Direct toggle feel stuck).
+    get().recomputeCables();
   },
 
   setFeederRoutingMode: (mode: FeederRoutingMode) => {
@@ -5435,7 +5441,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     if (Object.keys(dcRoutingOverrides).length) nextEdits.dcRoutingOverrides = dcRoutingOverrides;
     else delete nextEdits.dcRoutingOverrides;
     set({ layoutEdits: nextEdits });
-    get().regenerate();
+    get().recomputeCables();
     get().pushHistory(before);
   },
 
@@ -9218,7 +9224,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       surfacingMode: p.surfacingMode ?? 'between-roads',
       deadSpaceTrim: p.deadSpaceTrim ?? false,
       surfacingDepthIn: p.surfacingDepthIn ?? SURFACING_DEPTH_IN_DEFAULT,
-      dcRouting: p.dcRouting ?? 'orthogonal',
+      dcRouting: p.dcRouting ?? 'direct',
       feederRoutingMode: p.feederRoutingMode === 'angled' ? 'angled' : 'orthogonal',
       textureSetId: isYardTextureSetId(p.textureSetId) ? p.textureSetId : DEFAULT_TEXTURE_SET_ID,
       // Project files that predate the GE Green default load as GE Green;
@@ -9661,6 +9667,34 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     }
     set({ feederSizes: {} });
     get().recomputeFeeders();
+  },
+
+  recomputeCables: () => {
+    const { design, layoutEdits, dcRouting, areaZones } = get();
+    if (!design) return;
+    const routing = generateCableRouting(
+      equipmentForRouting(design.equipment),
+      design.augmentationZones ?? [],
+      design.fence,
+      layoutEdits.trenchX ?? null,
+      design.reservedZones ?? [],
+      design.islands ?? null,
+      dcRouting,
+      layoutEdits.dcRoutingOverrides ?? null,
+      areaZones.filter(z => z.kind === 'exclusion'),
+    );
+    // Drop prior cable-router warnings, keep layout/civil ones, append fresh.
+    const cableWarn = /^(?:\d+ DC pair|Cable run )|kept 90° trench routing|serves equipment kept as drawn outside the fence/i;
+    const kept = (design.warnings ?? []).filter(w => !cableWarn.test(w));
+    set({
+      design: {
+        ...design,
+        cables: routing.cables,
+        trench: routing.trench,
+        corridorTrenches: routing.corridorTrenches,
+        warnings: [...kept, ...routing.warnings],
+      },
+    });
   },
 
   recomputeFeeders: () => {

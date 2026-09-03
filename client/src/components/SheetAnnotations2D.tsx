@@ -158,7 +158,7 @@ export default function SheetAnnotations2D() {
       <div className="border-2 border-black">
         <div className="flex border-b border-black">
           <div className="w-1/3 border-r border-black flex flex-col items-center justify-center py-1">
-            <img src={assetUrl('/eci-logo.svg')} alt="ECI" className="h-8 w-auto max-w-full object-contain" />
+            <img src={assetUrl('/epc-logo.png')} alt="ECI" className="h-8 w-auto max-w-full object-contain bg-white rounded p-1.5" />
           </div>
           <div className="flex-1 px-1.5 py-1">
             <div className="font-bold">{config.label.replace(/\s*\(.*\)$/, '')}</div>

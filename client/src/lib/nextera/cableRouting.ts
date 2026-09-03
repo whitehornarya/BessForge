@@ -378,7 +378,7 @@ export function generateCableRouting(
   pinnedTrenchX?: number | null,
   reservedZones: ReservedZone[] = [],
   islands: IslandInfo[] | null = null,
-  dcRouting: DcRoutingMode = 'orthogonal',
+  dcRouting: DcRoutingMode = 'direct',
   dcRoutingOverrides?: Record<string, DcRoutingMode> | null,
   exclusionZones?: import('./areaZones').AreaZone[] | null
 ): CableRoutingResult {
@@ -990,16 +990,12 @@ export function generateCableRouting(
   };
 
   // Direct DC routing: collapse a planned orthogonal container PAIR to two
-  // straight 0.6-ft-apart chords only when BOTH chords pass every keep-out
-  // the structured paths would face in addRun — equipment bodies (endpoint
-  // exemption scoped to the rects that OWN each endpoint, so a third
-  // container near an endpoint still blocks), the fence (traced equipment
-  // drawn outside the fence stays warn-only, mirroring addRun's keep
-  // policy), and underground exclusion areas (hard keep-outs everywhere
-  // except on the equipment footprint itself). The collapse is ONE decision
-  // for the pair: if either conductor's chord fails a check, BOTH keep
-  // their structured orthogonal paths. Blocked pairs are counted for one
-  // aggregated warning.
+  // straight 0.6-ft-apart chords when BOTH clear every keep-out the structured
+  // paths would face in addRun. If the straight chord clips foreign
+  // equipment, try a one-bend dogleg of two diagonal legs that skirts the
+  // pad(s) — still Direct (any-angle), still a pair decision. Only when no
+  // clear dogleg exists do BOTH keep their structured orthogonal paths.
+  // Blocked pairs are counted for one aggregated warning.
   let dcDirectBlocked = 0;
   const dcModeOf = (blockN: string): DcRoutingMode =>
     dcRoutingOverrides?.[blockN] ?? dcRouting;
@@ -1094,39 +1090,134 @@ export function generateCableRouting(
   ): [Pt[], Pt[]] => {
     if (dcModeOf(blockN) !== 'direct' || pos.length <= 2) return [pos, neg];
     const a = pos[0], b = pos[pos.length - 1];
-    if (straightDcOk(a, b, a, b, explicitOwners)) {
-      let a2: Pt, b2: Pt;
-      if (faceAligned) {
-        // Traced/hand-placed yards draw equipment at arbitrary angles, so a
-        // collapsed chord can run nearly ALONG a face; a chord-perpendicular
-        // offset there would push the (−) terminal inside the equipment
-        // body. Offset ALONG each face instead — the sheet-3 stagger
-        // direction. The first/last structured legs leave/enter
-        // perpendicular to their faces, so each face direction is that
-        // leg's perpendicular.
-        const faceOffset = (origin: Pt, legTo: Pt, toward: Pt): Pt => {
-          let fx = -(legTo.y - origin.y), fy = legTo.x - origin.x;
-          const l = Math.hypot(fx, fy) || 1;
-          fx /= l; fy /= l;
-          if (fx * (toward.x - origin.x) + fy * (toward.y - origin.y) < 0) { fx = -fx; fy = -fy; }
-          return { x: origin.x + fx * 0.6, y: origin.y + fy * 0.6 };
-        };
-        a2 = faceOffset(a, pos[1], neg[0]);
-        b2 = faceOffset(b, pos[pos.length - 2], neg[neg.length - 1]);
-      } else {
-        // Fallback chord-perpendicular offset (unused by current auto/island/
-        // traced callers, which all pass faceAligned). Kept for callers that
-        // collapse without structured first/last face legs.
-        const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
-        let nx = -dy / l, ny = dx / l;
-        if (nx * (neg[0].x - a.x) + ny * (neg[0].y - a.y) < 0) { nx = -nx; ny = -ny; }
-        a2 = { x: a.x + nx * 0.6, y: a.y + ny * 0.6 };
-        b2 = { x: b.x + nx * 0.6, y: b.y + ny * 0.6 };
-      }
-      // Blue must pass the SAME keep-out checks, with its endpoint
-      // exemptions anchored to the pair's owning equipment.
-      if (straightDcOk(a2, b2, a, b, explicitOwners)) return [[a, b], [a2, b2]];
+    // (−) terminals: face-aligned stagger when structured legs exist, else
+    // chord-perpendicular. Shared by the straight and dogleg Direct paths.
+    let a2: Pt, b2: Pt;
+    if (faceAligned) {
+      // Traced/hand-placed yards draw equipment at arbitrary angles, so a
+      // collapsed chord can run nearly ALONG a face; a chord-perpendicular
+      // offset there would push the (−) terminal inside the equipment
+      // body. Offset ALONG each face instead — the sheet-3 stagger
+      // direction. The first/last structured legs leave/enter
+      // perpendicular to their faces, so each face direction is that
+      // leg's perpendicular.
+      const faceOffset = (origin: Pt, legTo: Pt, toward: Pt): Pt => {
+        let fx = -(legTo.y - origin.y), fy = legTo.x - origin.x;
+        const l = Math.hypot(fx, fy) || 1;
+        fx /= l; fy /= l;
+        if (fx * (toward.x - origin.x) + fy * (toward.y - origin.y) < 0) { fx = -fx; fy = -fy; }
+        return { x: origin.x + fx * 0.6, y: origin.y + fy * 0.6 };
+      };
+      a2 = faceOffset(a, pos[1], neg[0]);
+      b2 = faceOffset(b, pos[pos.length - 2], neg[neg.length - 1]);
+    } else {
+      const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
+      let nx = -dy / l, ny = dx / l;
+      if (nx * (neg[0].x - a.x) + ny * (neg[0].y - a.y) < 0) { nx = -nx; ny = -ny; }
+      a2 = { x: a.x + nx * 0.6, y: a.y + ny * 0.6 };
+      b2 = { x: b.x + nx * 0.6, y: b.y + ny * 0.6 };
     }
+    // Blue must pass the SAME keep-out checks, with its endpoint
+    // exemptions anchored to the pair's owning equipment.
+    if (straightDcOk(a, b, a, b, explicitOwners) &&
+        straightDcOk(a2, b2, a, b, explicitOwners)) {
+      return [[a, b], [a2, b2]];
+    }
+
+    // Straight chord blocked — try a one-bend Direct dogleg of two diagonal
+    // legs that skirts foreign equipment. Seed candidates from (1) the
+    // structured corridor's own elbows (already known to clear pads) and
+    // (2) corners / lateral offsets around every body the red OR blue chord
+    // hits. Pair decision stays atomic: (+) and (−) both dogleg or neither.
+    const startOwner = explicitOwners?.[0] ?? endpointOwner(a);
+    const endOwner = explicitOwners?.[1] ?? endpointOwner(b);
+    const foreignHits = (p: Pt, q: Pt): typeof equipmentObstacles => {
+      const len = Math.hypot(q.x - p.x, q.y - p.y);
+      if (len <= 1e-9) return [];
+      return equipmentObstacles.filter(o => {
+        const hit = segmentEquipmentSpan(p, q, o, 0.75);
+        if (!hit) return false;
+        const lo = hit[0] * len, hi = hit[1] * len;
+        const startStub = o.id === startOwner && lo <= 0.01;
+        const endStub = o.id === endOwner && hi >= len - 0.01;
+        const unexemptLo = startStub ? Math.max(lo, 6) : lo;
+        const unexemptHi = endStub ? Math.min(hi, len - 6) : hi;
+        return unexemptHi - unexemptLo > 0.05;
+      });
+    };
+    const blockers = (() => {
+      const seen = new Set<string>();
+      const out: typeof equipmentObstacles = [];
+      for (const o of [...foreignHits(a, b), ...foreignHits(a2, b2)]) {
+        if (seen.has(o.id)) continue;
+        seen.add(o.id);
+        out.push(o);
+      }
+      return out;
+    })();
+    // (−) offset direction at the bend: average of the terminal face offsets,
+    // normalized to the 0.6 ft stagger so the blue dogleg stays parallel.
+    const ox = ((a2.x - a.x) + (b2.x - b.x)) / 2;
+    const oy = ((a2.y - a.y) + (b2.y - b.y)) / 2;
+    const ol = Math.hypot(ox, oy) || 1;
+    const negOffX = ox / ol * 0.6, negOffY = oy / ol * 0.6;
+    const toWorldLocal = (
+      o: (typeof equipmentObstacles)[number], lx: number, ly: number,
+    ): Pt => ({
+      x: o.x + lx * o.cos - ly * o.sin,
+      y: o.y + lx * o.sin + ly * o.cos,
+    });
+    const candidates: Pt[] = [];
+    const pushCand = (p: Pt) => {
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
+      candidates.push(p);
+    };
+    // Structured corridor elbows — the 90° path already cleared these.
+    for (let i = 1; i < pos.length - 1; i++) pushCand(pos[i]);
+    if (pos.length >= 4) {
+      pushCand({
+        x: (pos[1].x + pos[2].x) / 2,
+        y: (pos[1].y + pos[2].y) / 2,
+      });
+    }
+    const chordLen = Math.hypot(b.x - a.x, b.y - a.y);
+    for (const o of blockers) {
+      const pad = 0.75 + 1.2;
+      const hl = o.hl + pad, hw = o.hw + pad;
+      for (const [lx, ly] of [
+        [-hl, -hw], [hl, -hw], [hl, hw], [-hl, hw],
+        [0, -hw], [0, hw], [-hl, 0], [hl, 0],
+      ] as const) {
+        pushCand(toWorldLocal(o, lx, ly));
+      }
+      if (chordLen > 1e-9) {
+        const ux = (b.x - a.x) / chordLen, uy = (b.y - a.y) / chordLen;
+        const t = Math.max(0.15, Math.min(0.85,
+          ((o.x - a.x) * ux + (o.y - a.y) * uy) / chordLen));
+        const foot = { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) };
+        const nx = -uy, ny = ux;
+        for (const side of [-1, 1] as const) {
+          for (const dist of [1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12]) {
+            pushCand({ x: foot.x + side * nx * dist, y: foot.y + side * ny * dist });
+          }
+        }
+      }
+    }
+    let best: { pos: Pt[]; neg: Pt[]; len: number } | null = null;
+    for (const w of candidates) {
+      if (!straightDcOk(a, w, a, b, explicitOwners)) continue;
+      if (!straightDcOk(w, b, a, b, explicitOwners)) continue;
+      const w2 = { x: w.x + negOffX, y: w.y + negOffY };
+      if (!straightDcOk(a2, w2, a, b, explicitOwners)) continue;
+      if (!straightDcOk(w2, b2, a, b, explicitOwners)) continue;
+      const len =
+        Math.hypot(w.x - a.x, w.y - a.y) + Math.hypot(b.x - w.x, b.y - w.y);
+      if (!best || len < best.len - 1e-6) {
+        best = { pos: [a, w, b], neg: [a2, w2, b2], len };
+      }
+    }
+    if (best) return [best.pos, best.neg];
+
     dcDirectBlocked++;
     return [pos, neg];
   };
@@ -1834,7 +1925,7 @@ export function generateCableRouting(
           b.containers.map(c => islToLocalEq(rIsl, c)),
           0,
           (id, pos, neg) => addDcPair(`dc-${id}`,
-            ...dcPairPaths(b.n, mapPts(pos), mapPts(neg), true)),
+            ...dcPairPaths(b.n, mapPts(pos), mapPts(neg), true, [b.inv.id, id])),
           (id, pts) => addRun(`lvac-${id}`, 'LVAC', mapPts(pts))
         );
         rotDrops.set(rIsl.n, [...(rotDrops.get(rIsl.n) ?? []), ...drops]);
@@ -1845,7 +1936,7 @@ export function generateCableRouting(
       const drops = routePairBlock(
         b.inv, b.containers, isl.y,
         (id, pos, neg) => addDcPair(`dc-${id}`,
-          ...dcPairPaths(b.n, pos, neg, true)),
+          ...dcPairPaths(b.n, pos, neg, true, [b.inv.id, id])),
         (id, pts) => addRun(`lvac-${id}`, 'LVAC', pts)
       );
       islandDrops.set(isl.y, [...(islandDrops.get(isl.y) ?? []), ...drops]);
@@ -1897,7 +1988,7 @@ export function generateCableRouting(
           { x: txNeg, y: corridorYNeg },
           { x: dcXNeg, y: corridorYNeg },
           { x: dcXNeg, y: endY },
-        ], true));
+        ], true, [inv.id, c.id]));
         addRun(`lvac-${c.id}`, 'LVAC', [
           { x: dropX, y: busY },
           { x: dropX, y: lvacCorY },
@@ -1925,7 +2016,7 @@ export function generateCableRouting(
           { x: riserXNeg, y: endY - 2.6 },
           { x: dcXNeg, y: endY - 2.6 },
           { x: dcXNeg, y: endY },
-        ], true));
+        ], true, [inv.id, c.id]));
         addRun(`lvac-${c.id}`, 'LVAC', [
           { x: dropX, y: busY },
           { x: dropX, y: lvacCorY },

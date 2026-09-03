@@ -2176,7 +2176,7 @@ export function arrangementCacheKey(
     options.augmentPct ?? 0,
     options.surfacingMode ?? 'between-roads',
     options.surfacingDepthIn ?? SURFACING_DEPTH_IN_DEFAULT,
-    options.dcRouting ?? 'orthogonal',
+    options.dcRouting ?? 'direct',
     options.deadSpaceTrim === true,
     // Fence placement moves the fence itself, so it changes every candidate
     // arrangement's usable envelope: it MUST participate in the cache key or
@@ -4359,7 +4359,7 @@ function buildLayout(
   // Cable routing per Sheets 3-4 (DC / MV / LVAC / fiber + trench band)
   const routing = generateCableRouting(
     equipmentForRouting(equipment), augmentationZones, fence, options.constraints?.trenchX ?? null,
-    reservedZones, islands, options.dcRouting ?? 'orthogonal',
+    reservedZones, islands, options.dcRouting ?? 'direct',
     options.constraints?.dcRoutingOverrides ?? null,
     options.exclusionZones ?? null
   );
