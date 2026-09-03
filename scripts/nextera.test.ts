@@ -3758,6 +3758,60 @@ async function main() {
           a1Bot.home.length >= 2 && a1Cans === 0 && a1Bot.dx > 2,
           `dx=${a1Bot.dx.toFixed(1)} dy=${a1Bot.dy.toFixed(1)} cans=${a1Cans} n=${a1Feeders.length} home=${a1Bot.home.slice(0, 4).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
 
+        // Area 1 stacked feeders on one PCS column: the north circuit's
+        // home run must peel to the road, not continue under the south
+        // feeder's skids (hides that feeder's trench).
+        const a1nPcs = [160, 192, 224].map((y, i) => ({
+          id: `inv-a1n-${i}`, kind: 'inverter' as const, label: `PCS n ${i}`,
+          x: 0, y, rotation: Math.PI / 2, length: 22, width: 8,
+        }));
+        const a1sPcs = [0, 32, 64].map((y, i) => ({
+          id: `inv-a1s-${i}`, kind: 'inverter' as const, label: `PCS s ${i}`,
+          x: 0, y, rotation: Math.PI / 2, length: 22, width: 8,
+        }));
+        const a1ColPcs = [...a1nPcs, ...a1sPcs];
+        const a1ColBess = a1ColPcs.flatMap(p => [1, 2, 3].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x - 22, y: p.y + (k - 2) * 7, rotation: Math.PI / 2,
+          length: 16, width: 8,
+        })));
+        const a1ColFence: Pt[] = [
+          { x: -80, y: -240 }, { x: 160, y: -240 },
+          { x: 160, y: 280 }, { x: -80, y: 280 },
+        ];
+        const a1ColFeeders = generateFeeders({
+          fence: a1ColFence, boundary: { polygon: a1ColFence },
+          equipment: [...a1ColPcs, ...a1ColBess],
+          cables: a1ColPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y - 5 }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: 40, y: 80, length: 400, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 6,
+        } as any, { x: 40, y: -180 }, 5, { maxPerFeeder: 3, approach: 'S' });
+        const a1nHome = a1ColFeeders.find(f => f.inverterIds.includes('inv-a1n-2'))
+          ?.segments.slice(-1)[0]?.pts ?? [];
+        const southBoxes = a1sPcs.map(e => ({
+          x1: e.x - 8, y1: e.y - 14, x2: e.x + 8, y2: e.y + 14,
+        }));
+        let a1under = 0;
+        for (let i = 0; i < a1nHome.length - 1; i++) {
+          const a = a1nHome[i], b = a1nHome[i + 1];
+          const len = Math.hypot(b.x - a.x, b.y - a.y);
+          const samples = Math.max(2, Math.ceil(len / 3));
+          for (let s = 1; s < samples; s++) {
+            const t = s / samples;
+            const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+            if (southBoxes.some(r => x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2)) {
+              a1under++;
+            }
+          }
+        }
+        check('[feeder-road] finished column feeder does not ride under the next PCS',
+          a1ColFeeders.length >= 2 && a1nHome.length >= 2 && a1under === 0 &&
+          countCanHits(a1ColFeeders, a1ColBess) === 0,
+          `under=${a1under} n=${a1ColFeeders.length} home=${a1nHome.slice(0, 5).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+
         // Green / Area-3 style: cans inland (north), road south of the PCS.
         const a3Pcs = [0, 32, 64].map((x, i) => ({
           id: `inv-a3-${i}`, kind: 'inverter' as const, label: `PCS a3 ${i}`,

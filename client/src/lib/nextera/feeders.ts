@@ -1686,6 +1686,26 @@ export function generateFeeders(
   };
   const columnToward = (e: PlacedEquipment, start: Pt): Pt =>
     ({ x: columnRoadX(e), y: start.y });
+  const foreignPcsRects = (...ownIds: (string | undefined)[]): Rect[] => {
+    const skip = new Set(ownIds.filter(Boolean) as string[]);
+    return inverters.filter(e => !skip.has(e.id)).map(e => equipmentRect(e, 3));
+  };
+  const hitsForeignPcs = (pts: Pt[], rects: Rect[]): boolean => {
+    if (!rects.length) return false;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const n = Math.max(2, Math.ceil(len / 4));
+      for (let s = 1; s < n; s++) {
+        const t = s / n;
+        const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+        if (rects.some(r => x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
   // Last-PCS pad including its DC courtyard so the home run can leave the
   // far end past the cable fan (Area 2 09 through PCS09-03).
   const padBeyond = (e: PlacedEquipment): Rect => {
@@ -1703,6 +1723,22 @@ export function generateFeeders(
           Math.min(c.y2, r.y2 + 6) - Math.max(c.y1, r.y1 - 6) > 2) {
         x1 = Math.min(x1, c.x1); y1 = Math.min(y1, c.y1);
         x2 = Math.max(x2, c.x2); y2 = Math.max(y2, c.y2);
+      }
+    }
+    // A same-column cluster AABB can swallow the next feeder's PCS
+    // (Area 1 teal under PCS03). Never grow past the midpoint to a
+    // neighbor skid — opposite-end exit stays on THIS pad only.
+    for (const o of inverters) {
+      if (o.id === e.id) continue;
+      if (Math.abs(o.x - e.x) < 18) {
+        const mid = (e.y + o.y) / 2;
+        if (o.y > e.y) y2 = Math.min(y2, mid - 4);
+        else y1 = Math.max(y1, mid + 4);
+      }
+      if (Math.abs(o.y - e.y) < 18) {
+        const mid = (e.x + o.x) / 2;
+        if (o.x > e.x) x2 = Math.min(x2, mid - 4);
+        else x1 = Math.max(x1, mid + 4);
       }
     }
     return { x1, y1, x2, y2 };
@@ -2455,7 +2491,9 @@ export function generateFeeders(
       // shifting further only makes the drop cross more equipment rows.
       const runStart: Pt = horizApproach ? { x: startPt.x, y: c } : { x: c, y: startPt.y };
       const exit: Pt = horizApproach ? { x: climbBase, y: c } : { x: c, y: climbBase };
-      return !feederCrossesObstacle([runStart, exit], obs, startPt, exit);
+      const ride = [runStart, exit];
+      return !feederCrossesObstacle(ride, obs, startPt, exit) &&
+        !hitsForeignPcs(ride, foreignPcsRects(last.id));
     };
   };
   {
@@ -2565,6 +2603,10 @@ export function generateFeeders(
       if (inCourt(best)) {
         const face = pcsRoadFaceCoord(p.launch, rideX);
         if (!inCourt(face)) return face;
+      }
+      if (hitsForeignPcs(hookTo(best), foreignPcsRects(p.launch.id))) {
+        const face = rideX ? columnRoadX(p.launch) : pcsRoadFaceCoord(p.launch, false);
+        if (runClearFor(p.launch)(face)) return face;
       }
       return best;
     };
@@ -3031,7 +3073,9 @@ export function generateFeeders(
     // container row in between (Area 2 F2/F8).
     const toward = (() => {
       if (chain.length >= 2 && !horizApproach) {
-        return oppositeChainExit(last, start, feederNodeOf(chain[chain.length - 2]));
+        const far = oppositeChainExit(last, start, feederNodeOf(chain[chain.length - 2]));
+        const foreign = foreignPcsRects(...chain.map(e => e.id));
+        if (!hitsForeignPcs([start, far], foreign)) return far;
       }
       if (!columnYard && linesVertical === false) {
         const localRun = fieldEdgeRun ?? peelRoadCoord(last, start, !horizApproach);
@@ -4347,6 +4391,62 @@ export function generateFeeders(
         seg.lengthFt = polyLen(forced);
         refreshElectrical(c);
       }
+    }
+  }
+
+  // Home runs that have left their own chain must not ride under a
+  // neighbor PCS (Area 1 teal/orange under PCS03 / PCS05). Peel to the
+  // road-side of THIS last skid, then turn — yards still win.
+  {
+    const dir = horizApproach ? dirX : dirY;
+    const waypointCoord = horizApproach
+      ? substation.x - dirX * SUBSTATION_APPROACH_FT
+      : substation.y - dirY * SUBSTATION_APPROACH_FT;
+    const climbLimit = waypointCoord - dir * FEEDER_TRENCH_SPACING_FT;
+    const climbAvail = (climbLimit - climbOrigin) * dir;
+    const climbStep = feederCount > 1 && climbAvail > 0
+      ? Math.min(FEEDER_TRENCH_SPACING_FT, climbAvail / (feederCount - 1))
+      : FEEDER_TRENCH_SPACING_FT;
+    for (let gi = 0; gi < circuits.length; gi++) {
+      if (customRouted.has(gi) || angledRouted.has(gi)) continue;
+      const c = circuits[gi];
+      const home = c.segments[c.segments.length - 1];
+      if (!home || home.pts.length < 2) continue;
+      const own = pre[gi].chain.map(e => e.id);
+      const foreign = foreignPcsRects(...own);
+      if (!hitsForeignPcs(home.pts, foreign)) continue;
+      const lastEq = pre[gi].launch;
+      const start = home.pts[0];
+      const climbRaw = climbOrigin + dir * climbOrderOf[gi] * climbStep;
+      const climbCoord = dir > 0
+        ? Math.min(climbRaw, climbLimit)
+        : Math.max(climbRaw, climbLimit);
+      const runCoord = runCoordOf[gi];
+      const spread = spreadOf(laneRankOf[gi]);
+      const laneJoin: Pt = horizApproach
+        ? { x: climbCoord, y: laneCenter + spread }
+        : { x: laneCenter + spread, y: climbCoord };
+      const waypoint: Pt = horizApproach
+        ? { x: waypointCoord, y: laneCenter + spread }
+        : { x: laneCenter + spread, y: waypointCoord };
+      const entry: Pt[] = horizApproach
+        ? [{ x: substation.x, y: waypoint.y }, substation]
+        : [{ x: waypoint.x, y: substation.y }, substation];
+      const road = columnToward(lastEq, start);
+      const cand = stripBacktracks(dedupePts(horizApproach
+        ? [start, road, { x: road.x, y: columnEdgeY(lastEq) },
+            { x: climbCoord, y: columnEdgeY(lastEq) },
+            { x: climbCoord, y: runCoord }, laneJoin, waypoint, ...entry]
+        : [start, road, { x: road.x, y: columnTurnY(climbCoord) },
+            { x: runCoord, y: columnTurnY(climbCoord) },
+            laneJoin, waypoint, ...entry]));
+      if (hitsForeignPcs(cand, foreign)) continue;
+      if (clusterHits(cand) > clusterHits(home.pts) || cutsYard(cand) || sweepsRow(cand)) {
+        continue;
+      }
+      home.pts = cand;
+      home.lengthFt = polyLen(cand);
+      refreshElectrical(c);
     }
   }
 
