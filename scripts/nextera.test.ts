@@ -4051,6 +4051,307 @@ async function main() {
           a4sHome.home.length >= 2 && northCanHits === 0 && fieldVert === 0,
           `northCans=${northCanHits} fieldVert=${fieldVert} dx=${a4sHome.dx.toFixed(1)} home=${a4sHome.home.slice(0, 6).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
 
+        // Tight west take-off: climbs must nest so the bundle does not
+        // braid as it leaves the station (Area 4 × at BESS AREA 4 → W).
+        const a4tapSub: Pt = { x: -50, y: 35 };
+        const a4tapFeeders = generateFeeders({
+          fence: a4RowFence, boundary: { polygon: a4RowFence },
+          equipment: [...a4RowPcs, ...a4RowBess],
+          cables: a4RowPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 10, y: p.y }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: -40, y: 35, length: 220, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 6,
+        } as any, a4tapSub, 5, { maxPerFeeder: 1, approach: 'W' });
+        const a4ori = (p: Pt, q: Pt, r: Pt) =>
+          Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+        const nearTap = (p: Pt) => Math.hypot(p.x - a4tapSub.x, p.y - a4tapSub.y) < 55;
+        const atTap = (p: Pt) => Math.hypot(p.x - a4tapSub.x, p.y - a4tapSub.y) < 14;
+        const a4tapHomes = a4tapFeeders.map(f => f.segments.slice(-1)[0]?.pts ?? []);
+        let a4braid = 0;
+        for (let i = 0; i < a4tapHomes.length; i++) {
+          for (let j = i + 1; j < a4tapHomes.length; j++) {
+            const A = a4tapHomes[i], B = a4tapHomes[j];
+            for (let s = 0; s < A.length - 1; s++) {
+              for (let t = 0; t < B.length - 1; t++) {
+                if (atTap(A[s]) && atTap(A[s + 1]) && atTap(B[t]) && atTap(B[t + 1])) continue;
+                if (Math.abs(A[s].x - a4tapSub.x) < 2 && Math.abs(A[s + 1].x - a4tapSub.x) < 2) continue;
+                if (Math.abs(B[t].x - a4tapSub.x) < 2 && Math.abs(B[t + 1].x - a4tapSub.x) < 2) continue;
+                if (!nearTap(A[s]) && !nearTap(A[s + 1])) continue;
+                if (!nearTap(B[t]) && !nearTap(B[t + 1])) continue;
+                const o1 = a4ori(A[s], A[s + 1], B[t]), o2 = a4ori(A[s], A[s + 1], B[t + 1]);
+                const o3 = a4ori(B[t], B[t + 1], A[s]), o4 = a4ori(B[t], B[t + 1], A[s + 1]);
+                if (o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4) {
+                  a4braid++;
+                }
+              }
+            }
+          }
+        }
+        check('[feeder-road] tight west takeoff does not braid at the station',
+          a4tapFeeders.length >= 4 && a4braid === 0,
+          `n=${a4tapFeeders.length} braid=${a4braid}`);
+
+        // Field-side 90°: nest like Area 2 so the bundle does not braid
+        // at the corner (Area 3/4). Ignore the tap column at sub.x.
+        const a4inCorner = (p: Pt) =>
+          p.x < Math.min(...a4RowPcs.map(eq => eq.x)) - 4 && p.x > a4tapSub.x + 12;
+        let a4corner = 0;
+        for (let i = 0; i < a4tapHomes.length; i++) {
+          for (let j = i + 1; j < a4tapHomes.length; j++) {
+            const A = a4tapHomes[i], B = a4tapHomes[j];
+            for (let s = 0; s < A.length - 1; s++) {
+              for (let t = 0; t < B.length - 1; t++) {
+                if (Math.abs(A[s].x - a4tapSub.x) < 2 && Math.abs(A[s + 1].x - a4tapSub.x) < 2) continue;
+                if (Math.abs(B[t].x - a4tapSub.x) < 2 && Math.abs(B[t + 1].x - a4tapSub.x) < 2) continue;
+                if (!a4inCorner(A[s]) && !a4inCorner(A[s + 1])) continue;
+                if (!a4inCorner(B[t]) && !a4inCorner(B[t + 1])) continue;
+                const o1 = a4ori(A[s], A[s + 1], B[t]), o2 = a4ori(A[s], A[s + 1], B[t + 1]);
+                const o3 = a4ori(B[t], B[t + 1], A[s]), o4 = a4ori(B[t], B[t + 1], A[s + 1]);
+                if (o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4) {
+                  a4corner++;
+                }
+              }
+            }
+          }
+        }
+        check('[feeder-road] west takeoff nest does not braid at the field corner',
+          a4tapFeeders.length >= 4 && a4corner === 0,
+          `n=${a4tapFeeders.length} corner=${a4corner}`);
+
+        // Area 3/4 style: N–S column, west take-off. Each feeder stays on
+        // its pad Y (order may follow the stack) so the 90° is a highway
+        // nest, not a star.
+        const nestColPcs = [0, 40, 80, 120, 160, 200].map((y, i) => ({
+          id: `inv-nest-${i}`, kind: 'inverter' as const, label: `PCS ${i}`,
+          x: 40, y, rotation: Math.PI / 2, length: 22, width: 8,
+        }));
+        const nestColBess = nestColPcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x - 22, y: p.y + (k === 1 ? -6 : 6),
+          rotation: Math.PI / 2, length: 16, width: 8,
+        })));
+        const nestColFence: Pt[] = [
+          { x: -280, y: -80 }, { x: 160, y: -80 },
+          { x: 160, y: 280 }, { x: -280, y: 280 },
+        ];
+        const nestColSub: Pt = { x: -200, y: 100 };
+        const nestColFeeders = generateFeeders({
+          fence: nestColFence, boundary: { polygon: nestColFence },
+          equipment: [...nestColPcs, ...nestColBess],
+          cables: nestColPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 10, y: p.y }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: -20, y: 100, length: 280, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 6,
+        } as any, nestColSub, 5, { maxPerFeeder: 1, approach: 'W' });
+        const nestColHomes = nestColFeeders.map(f => f.segments.slice(-1)[0]?.pts ?? []);
+        const nestInCorner = (p: Pt) => p.x < 20 && p.x > nestColSub.x + 12;
+        let nestBraid = 0;
+        for (let i = 0; i < nestColHomes.length; i++) {
+          for (let j = i + 1; j < nestColHomes.length; j++) {
+            const A = nestColHomes[i], B = nestColHomes[j];
+            for (let s = 0; s < A.length - 1; s++) {
+              for (let t = 0; t < B.length - 1; t++) {
+                if (Math.abs(A[s].x - nestColSub.x) < 2 && Math.abs(A[s + 1].x - nestColSub.x) < 2) continue;
+                if (Math.abs(B[t].x - nestColSub.x) < 2 && Math.abs(B[t + 1].x - nestColSub.x) < 2) continue;
+                if (!nestInCorner(A[s]) && !nestInCorner(A[s + 1])) continue;
+                if (!nestInCorner(B[t]) && !nestInCorner(B[t + 1])) continue;
+                const o1 = a4ori(A[s], A[s + 1], B[t]), o2 = a4ori(A[s], A[s + 1], B[t + 1]);
+                const o3 = a4ori(B[t], B[t + 1], A[s]), o4 = a4ori(B[t], B[t + 1], A[s + 1]);
+                if (o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4) {
+                  nestBraid++;
+                }
+              }
+            }
+          }
+        }
+        check('[feeder-road] column west bundle does not braid at the 90° turn',
+          nestColFeeders.length >= 4 && nestBraid === 0 &&
+          countCanHits(nestColFeeders, nestColBess) === 0,
+          `n=${nestColFeeders.length} braid=${nestBraid}`);
+
+        const sharedTrunkFt = (homes: Pt[][], sub: Pt) => {
+          const pieces = (pts: Pt[]) => {
+            const out: { horiz: boolean; c: number; lo: number; hi: number }[] = [];
+            for (let k = 0; k < pts.length - 1; k++) {
+              const a = pts[k], b = pts[k + 1];
+              if (Math.abs(a.y - b.y) < 1e-6 && Math.abs(a.x - b.x) > 1e-6) {
+                out.push({ horiz: true, c: a.y, lo: Math.min(a.x, b.x), hi: Math.max(a.x, b.x) });
+              } else if (Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) > 1e-6) {
+                out.push({ horiz: false, c: a.x, lo: Math.min(a.y, b.y), hi: Math.max(a.y, b.y) });
+              }
+            }
+            return out;
+          };
+          let shared = 0;
+          for (let i = 0; i < homes.length; i++) {
+            for (let j = i + 1; j < homes.length; j++) {
+              for (const p of pieces(homes[i])) {
+                for (const q of pieces(homes[j])) {
+                  if (p.horiz !== q.horiz || Math.abs(p.c - q.c) >= 1.5) continue;
+                  const lo = Math.max(p.lo, q.lo), hi = Math.min(p.hi, q.hi);
+                  const mid = (lo + hi) / 2;
+                  const mx = p.horiz ? mid : p.c, my = p.horiz ? p.c : mid;
+                  if (Math.hypot(mx - sub.x, my - sub.y) < 50) continue;
+                  if (hi - lo > 8) shared += hi - lo;
+                }
+              }
+            }
+          }
+          return shared;
+        };
+        const nestShare = sharedTrunkFt(nestColHomes, nestColSub);
+        const a4share = sharedTrunkFt(a4tapHomes, a4tapSub);
+        check('[feeder-road] west takeoff homes do not share a collinear trunk',
+          nestShare < 1 && a4share < 1,
+          `colShare=${nestShare.toFixed(0)} rowShare=${a4share.toFixed(0)}`);
+
+        // West take-off with the N–S road well west of the pads: no long
+        // vertical may sit in the turning apron between pad edge and road
+        // (Area 4 red 05).
+        const apronPcs = [0, 40, 80].map((x, i) => ({
+          id: `inv-ap-${i}`, kind: 'inverter' as const, label: `PCS ${i}`,
+          x, y: 0, rotation: 0, length: 22, width: 8,
+        }));
+        const apronBess = apronPcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: p.y - 22, rotation: 0, length: 16, width: 8,
+        })));
+        const apronFence: Pt[] = [
+          { x: -280, y: -80 }, { x: 160, y: -80 },
+          { x: 160, y: 160 }, { x: -280, y: 160 },
+        ];
+        const apronRoadX = -80;
+        const apronSub: Pt = { x: -200, y: 40 };
+        const apronFeeders = generateFeeders({
+          fence: apronFence, boundary: { polygon: apronFence },
+          equipment: [...apronPcs, ...apronBess],
+          cables: apronPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 10, y: p.y }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: apronRoadX, y: 40, length: 220, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 3,
+        } as any, apronSub, 5, { maxPerFeeder: 1, approach: 'W' });
+        const padWest = Math.min(...apronPcs.map(p => p.x)) - 12;
+        let apronCuts = 0;
+        for (const f of apronFeeders) {
+          const home = f.segments.slice(-1)[0]?.pts ?? [];
+          for (let i = 0; i < home.length - 1; i++) {
+            const a = home[i], b = home[i + 1];
+            if (Math.abs(a.x - b.x) > 2 || Math.abs(a.y - b.y) < 24) continue;
+            const x = (a.x + b.x) / 2;
+            if (x < padWest - 2 && x > apronRoadX + 2) apronCuts++;
+          }
+        }
+        check('[feeder-road] west takeoff does not climb through the turning apron',
+          apronFeeders.length >= 2 && apronCuts === 0 &&
+          countCanHits(apronFeeders, apronBess) === 0,
+          `n=${apronFeeders.length} apronCuts=${apronCuts}`);
+
+        // Area 4 row: cans north of the PCS, west take-off. The home run
+        // from the east skid must ride the south road, not through the
+        // neighbor PCS (red 05 through PCS05-01..07).
+        const a4pcsRow = [0, 36, 72, 108, 144, 180, 216].map((x, i) => ({
+          id: `inv-a4p-${i}`, kind: 'inverter' as const, label: `PCS05-0${i + 1}`,
+          x, y: 0, rotation: 0, length: 22, width: 8,
+        }));
+        const a4pcsBess = a4pcsRow.flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: 22, rotation: 0, length: 16, width: 8,
+        })));
+        const a4pcsFence: Pt[] = [
+          { x: -280, y: -120 }, { x: 280, y: -120 },
+          { x: 280, y: 120 }, { x: -280, y: 120 },
+        ];
+        const a4pcsFeeders = generateFeeders({
+          fence: a4pcsFence, boundary: { polygon: a4pcsFence },
+          equipment: [...a4pcsRow, ...a4pcsBess],
+          cables: a4pcsRow.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y + 5 }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: -80, y: 0, length: 220, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 7,
+        } as any, { x: -200, y: -40 }, 5, { maxPerFeeder: 1, approach: 'W' });
+        const midPcs = a4pcsRow.map(e => ({
+          id: e.id, x1: e.x - 10, y1: e.y - 5, x2: e.x + 10, y2: e.y + 5,
+        }));
+        let throughPcs = 0;
+        for (const f of a4pcsFeeders) {
+          const home = f.segments.slice(-1)[0]?.pts ?? [];
+          const start = home[0];
+          if (!start) continue;
+          for (let i = 0; i < home.length - 1; i++) {
+            const a = home[i], b = home[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const samples = Math.max(2, Math.ceil(len / 3));
+            for (let s = 1; s < samples; s++) {
+              const t = s / samples;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (Math.hypot(x - start.x, y - start.y) < 20) continue;
+              if (midPcs.some(r => x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2)) {
+                throughPcs++;
+              }
+            }
+          }
+        }
+        check('[feeder-road] west row home run does not ride through neighbor PCS',
+          a4pcsFeeders.length >= 1 && throughPcs === 0 &&
+          countCanHits(a4pcsFeeders, a4pcsBess) === 0,
+          `n=${a4pcsFeeders.length} throughPcs=${throughPcs}`);
+
+        // Area 4 west-end 05: a drive north of the cans must not pull the
+        // home run up through CON0507 / BC505-07 at pad X.
+        const a4endPcs = [0, 36, 72].map((x, i) => ({
+          id: `inv-a4e-${i}`, kind: 'inverter' as const, label: `PCS05-0${i + 1}`,
+          x, y: 0, rotation: 0, length: 22, width: 8,
+        }));
+        const a4endBess = a4endPcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: 22, rotation: 0, length: 16, width: 8,
+        })));
+        const a4endFence: Pt[] = [
+          { x: -280, y: -120 }, { x: 200, y: -120 },
+          { x: 200, y: 140 }, { x: -280, y: 140 },
+        ];
+        const a4endFeeders = generateFeeders({
+          fence: a4endFence, boundary: { polygon: a4endFence },
+          equipment: [...a4endPcs, ...a4endBess],
+          cables: a4endPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y + 5 }, { x: p.x, y: p.y }],
+          })),
+          aisles: [
+            { x: 36, y: 50, length: 220, width: 20, rotation: 0 },
+            { x: 36, y: -36, length: 220, width: 20, rotation: 0 },
+          ],
+          roads: [], tracedPcsUnits: 3,
+        } as any, { x: -200, y: -40 }, 5, { maxPerFeeder: 1, approach: 'W' });
+        const westHome = a4endFeeders.find(f => f.inverterIds.includes('inv-a4e-0'))
+          ?.segments.slice(-1)[0]?.pts ?? [];
+        let westEndCanHits = 0;
+        const westCans = a4endBess.filter(b => Math.abs(b.x - 0) < 20).map(e => ({
+          x1: e.x - 9, y1: e.y - 5, x2: e.x + 9, y2: e.y + 5,
+        }));
+        for (let i = 0; i < westHome.length - 1; i++) {
+          const a = westHome[i], b = westHome[i + 1];
+          const samples = Math.max(2, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 3));
+          for (let s = 1; s < samples; s++) {
+            const t = s / samples;
+            const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+            if (westCans.some(r => x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2)) {
+              westEndCanHits++;
+            }
+          }
+        }
+        check('[feeder-road] west-end row home does not climb through own cans',
+          a4endFeeders.length >= 1 && westEndCanHits === 0,
+          `hits=${westEndCanHits} home=${westHome.slice(0, 5).map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join('→')}`);
+
         // Area 3 sandwich: PCS on the north AND south faces of one can
         // field. A feeder from the south row (takeoff north) must go around
         // the yard, not through the hole between the two PCS rows.

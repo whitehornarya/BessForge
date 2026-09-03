@@ -2132,6 +2132,22 @@ export function generateFeeders(
       fieldExitAlong = (horizApproach ? dirX : dirY) > 0 ? hi : lo;
     }
   }
+  // First N–S road on the take-off side of the field. Climbs that sit
+  // between the pads and that road cut the turning-apron corner
+  // (Area 4 red 05). Snap the staircase onto that road.
+  const approachRoadAlong = (() => {
+    if (!horizApproach || !Number.isFinite(fieldExitAlong)) return NaN;
+    let best = NaN, bestD = Infinity;
+    for (const a of roadAisles) {
+      if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.y)) continue;
+      const rot = Number.isFinite(a.rotation) ? a.rotation : 0;
+      if (Math.abs(Math.sin(rot)) < 0.5) continue;
+      const past = (a.x - fieldExitAlong) * dirX;
+      if (past < 8) continue;
+      if (past < bestD) { bestD = past; best = a.x; }
+    }
+    return best;
+  })();
   // Climb in the strip BETWEEN the yards and the take-off. The corridor
   // frame's climbBase is the far fence; when the take-off sits inside the
   // fence that origin is PAST the substation and every feeder turns on one
@@ -2140,7 +2156,9 @@ export function generateFeeders(
     const dir = horizApproach ? dirX : dirY;
     const beforeTakeoff = (horizApproach ? substation.x : substation.y)
       - dir * SUBSTATION_APPROACH_FT;
-    const pastYards = Number.isFinite(fieldExitAlong)
+    const pastYards = Number.isFinite(approachRoadAlong)
+      ? approachRoadAlong
+      : Number.isFinite(fieldExitAlong)
       ? fieldExitAlong + dir * 16
       : climbBase;
     return dir > 0
@@ -2548,6 +2566,36 @@ export function generateFeeders(
         if (alongRide) channels.push(rideX ? a.x : a.y);
       }
     }
+    const ownCanRects = (launch: PlacedEquipment): Rect[] => {
+      const boxes: Rect[] = [];
+      for (const e of design.equipment) {
+        if (e.kind !== 'bess' || e.augmented || e.future) continue;
+        if (Math.hypot(e.x - launch.x, e.y - launch.y) > 90) continue;
+        boxes.push(equipmentRect(e, 1));
+      }
+      return boxes;
+    };
+    const hookCutsOwnCans = (hook: Pt[], launch: PlacedEquipment): boolean => {
+      // East/west take-off: a north channel past the cans looks clear
+      // because LAUNCH_FT / missing cluster boxes hide CON on this pad
+      // (Area 4 red through CON0507). Area 2 is N/S — leave it alone.
+      if (!horizApproach) return false;
+      const boxes = ownCanRects(launch);
+      if (!boxes.length) return false;
+      for (let i = 0; i < hook.length - 1; i++) {
+        const a = hook[i], b = hook[i + 1];
+        const len = Math.hypot(b.x - a.x, b.y - a.y);
+        const n = Math.max(2, Math.ceil(len / 3));
+        for (let s = 1; s < n; s++) {
+          const t = s / n;
+          const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+          if (boxes.some(r => x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
     const pickChannel = (p: typeof pre[number], prefer: number): number => {
       const launchC = rideX ? p.launch.x : p.launch.y;
       const pad = peelPadOf(p.launch);
@@ -2580,6 +2628,7 @@ export function generateFeeders(
         const hook = hookTo(c);
         if (clusterRects.length &&
             feederCrossesObstacle(hook, clusterRects, hook[0], hook[hook.length - 1])) continue;
+        if (hookCutsOwnCans(hook, p.launch)) continue;
         const d = Math.abs(c - launchC);
         if (d < bestD && runClearFor(p.launch)(c)) {
           bestD = d;
@@ -2591,6 +2640,7 @@ export function generateFeeders(
           const hook = hookTo(c);
           if (clusterRects.length &&
               feederCrossesObstacle(hook, clusterRects, hook[0], hook[hook.length - 1])) continue;
+          if (hookCutsOwnCans(hook, p.launch)) continue;
           const d = Math.abs(c - launchC);
           if (d < bestD && runClearFor(p.launch)(c)) {
             bestD = d;
@@ -2668,7 +2718,8 @@ export function generateFeeders(
   // fence than where B's lane begins — otherwise the climb slices through
   // B's lane. Topologically sort those constraints so climbs form a nested
   // staircase; ties (and the impossible cycle case) fall back to lane rank.
-  const laneCoordOf = (gi: number) => laneCenter + spreadOf(laneRankOf[gi]);
+  const laneCoordOf = (gi: number) =>
+    horizApproach ? runCoordOf[gi] : laneCenter + spreadOf(laneRankOf[gi]);
   const mustClimbAfter: number[][] = Array.from({ length: feederCount }, () => []);
   const indeg = new Array<number>(feederCount).fill(0);
   for (let a = 0; a < feederCount; a++) {
@@ -2700,6 +2751,107 @@ export function generateFeeders(
     }
     for (const p of rankOrder) if (climbOrderOf[p.gi] < 0) climbOrderOf[p.gi] = next++;
   }
+
+  // Shared climb staircase. A shallow fence→take-off strip used to
+  // compress every climb onto one line, then the 45° chamfer braided
+  // the bundle (Area 4 at "BESS AREA 4 → W"). Keep full trench spacing
+  // when we can; grow toward the yard first, then past the approach.
+  const approachDir = horizApproach ? dirX : dirY;
+  const waypoint0 = horizApproach
+    ? substation.x - dirX * SUBSTATION_APPROACH_FT
+    : substation.y - dirY * SUBSTATION_APPROACH_FT;
+  let nestOrigin = climbOrigin;
+  let nestLimit = waypoint0 - approachDir * FEEDER_TRENCH_SPACING_FT;
+  {
+    const need = Math.max(0, feederCount - 1) * FEEDER_TRENCH_SPACING_FT;
+    let avail = (nestLimit - nestOrigin) * approachDir;
+    if (avail < need && Number.isFinite(fieldExitAlong)) {
+      const yardStop = fieldExitAlong + approachDir * 8;
+      const want = nestLimit - approachDir * need;
+      nestOrigin = approachDir > 0 ? Math.min(want, yardStop) : Math.max(want, yardStop);
+      avail = (nestLimit - nestOrigin) * approachDir;
+    }
+    if (avail < need) nestLimit = nestOrigin + approachDir * need;
+    // Do not grow the staircase back into the turning apron.
+    if (Number.isFinite(approachRoadAlong)) {
+      nestOrigin = approachDir > 0
+        ? Math.max(nestOrigin, approachRoadAlong)
+        : Math.min(nestOrigin, approachRoadAlong);
+    }
+  }
+  const nestStep = feederCount > 1
+    ? Math.min(FEEDER_TRENCH_SPACING_FT,
+        Math.max(FEEDER_TRENCH_SPACING_FT * 0.5,
+          ((nestLimit - nestOrigin) * approachDir) / (feederCount - 1)))
+    : FEEDER_TRENCH_SPACING_FT;
+  const nestClimbOf = (gi: number): number => {
+    // Do not reverse west/east rank. After a northbound (or southbound)
+    // climb the bundle turns onto the run: the outside vertical must
+    // turn last onto the inside horizontal (Area 2 highway). Reversing
+    // made the westmost line turn first onto the top run and braid
+    // (Area 3/4 field corners). Station tap stacking is a shared X
+    // and does not use this staircase.
+    const raw = nestOrigin + approachDir * climbOrderOf[gi] * nestStep;
+    return approachDir > 0 ? Math.min(raw, nestLimit) : Math.max(raw, nestLimit);
+  };
+
+  // East/west home run: leave THIS pad onto the road, then ride a unique
+  // clear Y. Peeling at pad X (or riding pad Y across the field) cuts
+  // cans / PCS / DC (Area 3/4). The long ride must sit on a runClear
+  // channel — roads and yard gaps, never through equipment.
+  const horizHomePts = (gi: number, start: Pt, last: PlacedEquipment): Pt[] => {
+    const climbCoord = nestClimbOf(gi);
+    const runY = runCoordOf[gi];
+    const wpX = substation.x - dirX * SUBSTATION_APPROACH_FT;
+    const road = (isTracedYard && !tracedHorizontalRows)
+      ? { x: columnRoadX(last), y: start.y }
+      : pcsRoadToward(last, start);
+    const ownCans: Rect[] = [];
+    for (const e of design.equipment) {
+      if (e.kind !== 'bess' || e.augmented || e.future) continue;
+      if (Math.hypot(e.x - last.x, e.y - last.y) > 90) continue;
+      ownCans.push(equipmentRect(e, 1));
+    }
+    const vertHitsOwn = ownCans.length > 0 && (() => {
+      const a = { x: road.x, y: start.y }, b = { x: road.x, y: runY };
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const n = Math.max(2, Math.ceil(len / 3));
+      for (let s = 1; s < n; s++) {
+        const t = s / n;
+        const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+        if (ownCans.some(r => x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2)) {
+          return true;
+        }
+      }
+      return false;
+    })();
+    // PCS face is still under this pad's CON (Area 4 red at CON0507).
+    // Leave west/east of the cans first, then climb — never north at pad X.
+    if (vertHitsOwn) {
+      const pad = peelPadOf(last);
+      const pastOwn = dirX < 0
+        ? Math.min(pad.x1, ...ownCans.map(r => r.x1)) - 12
+        : Math.max(pad.x2, ...ownCans.map(r => r.x2)) + 12;
+      const turnX = (road.x - pastOwn) * dirX < 0 ? pastOwn : road.x;
+      return stripBacktracks(dedupePts([
+        start,
+        { x: turnX, y: start.y },
+        { x: turnX, y: runY },
+        { x: climbCoord, y: runY },
+        { x: wpX, y: runY },
+        { x: substation.x, y: runY },
+        substation,
+      ]));
+    }
+    return stripBacktracks(dedupePts([
+      start, road,
+      { x: road.x, y: runY },
+      { x: climbCoord, y: runY },
+      { x: wpX, y: runY },
+      { x: substation.x, y: runY },
+      substation,
+    ]));
+  };
 
   // --- Routing-mode resolution (90° corridor comb vs. angled corridor) ----
   // Effective mode per feeder: per-key override beats the design default;
@@ -3046,19 +3198,7 @@ export function generateFeeders(
     const waypointCoord = horizApproach
       ? substation.x - dirX * SUBSTATION_APPROACH_FT
       : substation.y - dirY * SUBSTATION_APPROACH_FT;
-    const climbLimit = waypointCoord - dir * FEEDER_TRENCH_SPACING_FT;
-    // Climb-step compression: with many feeders and a shallow strip between
-    // the fence and the substation, full-spacing climb lines overshoot the
-    // approach and the clamp used to pile every overflowing climb onto ONE
-    // collinear line (reading as a single trench carrying several circuits).
-    // Compress the step just enough that the deepest climb still lands
-    // before the approach — every climb keeps its own line.
-    const climbAvail = (climbLimit - climbOrigin) * dir;
-    const climbStep = feederCount > 1 && climbAvail > 0
-      ? Math.min(FEEDER_TRENCH_SPACING_FT, climbAvail / (feederCount - 1))
-      : FEEDER_TRENCH_SPACING_FT;
-    const climbRaw = climbOrigin + dir * climbOrderOf[gi] * climbStep;
-    const climbCoord = dir > 0 ? Math.min(climbRaw, climbLimit) : Math.max(climbRaw, climbLimit);
+    const climbCoord = nestClimbOf(gi);
     const roadPt = rowExitOf[gi].road ?? nearestRoadWaypoint(start, roadAisles);
     const columnYard = isTracedYard && !tracedHorizontalRows;
     // Aim along the assigned run (row-end outward, or the road-side PCS end).
@@ -3122,14 +3262,7 @@ export function generateFeeders(
     })();
     const peelCoord = horizApproach ? underExit.x : underExit.y;
     const dropJog: Pt = underExit;
-    const driveAlong = horizApproach
-      ? (columnYard
-          ? columnEdgeY(last)
-          : (() => {
-              const face = pcsRoadFaceCoord(last, false);
-              return Math.abs(face - start.y) < 24 ? face : underExit.y;
-            })())
-      : peelCoord;
+    const driveAlong = horizApproach ? runCoord : peelCoord;
     const localStart: Pt = horizApproach
       ? { x: climbCoord, y: driveAlong }
       : { x: localRun, y: peelCoord };
@@ -3145,11 +3278,11 @@ export function generateFeeders(
       : { x: localRun, y: climbCoord };
     // Top of the climb: on the feeder's own lane.
     const laneJoin: Pt = horizApproach
-      ? { x: climbCoord, y: laneCenter + spread }
+      ? { x: climbCoord, y: runCoord }
       : { x: laneCenter + spread, y: climbCoord };
     // Corridor waypoint just short of the substation, still on the lane.
     const waypoint: Pt = horizApproach
-      ? { x: substation.x - dirX * SUBSTATION_APPROACH_FT, y: laneCenter + spread }
+      ? { x: substation.x - dirX * SUBSTATION_APPROACH_FT, y: runCoord }
       : { x: laneCenter + spread, y: substation.y - dirY * SUBSTATION_APPROACH_FT };
     const entry: Pt[] = horizApproach
       ? [{ x: substation.x, y: waypoint.y }, substation]
@@ -3163,11 +3296,7 @@ export function generateFeeders(
     // turn only on the climb line (the road). A Y-leg at underExit.x is
     // still inside the can columns (Area 4 yellow/teal through CON0507).
     const ideal = horizApproach
-      ? dedupePts([
-          start, underExit, { x: underExit.x, y: driveAlong },
-          { x: climbCoord, y: driveAlong },
-          exitPt, laneJoin, waypoint, ...entry,
-        ])
+      ? horizHomePts(gi, start, last)
       : (linesVertical === false && !columnYard)
       ? dedupePts([
           start,
@@ -3382,31 +3511,38 @@ export function generateFeeders(
           (sweepsRow(homePts) || cutsYard(homePts) || alongLaunch || alongLaunchH)) {
         const road = underExit;
         const ride = localRun;
-        const forced = stripBacktracks(dedupePts([
-          start,
-          road,
-          horizApproach ? { x: road.x, y: driveAlong } : { x: ride, y: road.y },
-          horizApproach ? { x: climbCoord, y: driveAlong } : { x: ride, y: climbCoord },
-          exitPt, laneJoin, waypoint, ...entry,
-        ]));
-        if ((!sweepsRow(forced) && !cutsYard(forced)) ||
-            scoreRoute(forced) < scoreRoute(homePts)) homePts = forced;
+        const forced = horizApproach
+          ? horizHomePts(gi, start, last)
+          : stripBacktracks(dedupePts([
+              start,
+              road,
+              { x: ride, y: road.y },
+              { x: ride, y: climbCoord },
+              exitPt, laneJoin, waypoint, ...entry,
+            ]));
+        if (!sweepsRow(forced) && !cutsYard(forced) && clusterHits(forced) === 0 &&
+            (scoreRoute(forced) < scoreRoute(homePts) ||
+             sweepsRow(homePts) || cutsYard(homePts) || clusterHits(homePts) > 0)) {
+          homePts = forced;
+        }
       } else if (columnYard) {
         const roadX = columnRoadX(last);
-        const edgeY = columnEdgeY(last);
         const far = !horizApproach && chain.length >= 2
           ? oppositeChainExit(last, start, feederNodeOf(chain[chain.length - 2]))
           : null;
-        homePts = stripBacktracks(dedupePts(horizApproach
-          ? [start, { x: roadX, y: start.y }, { x: roadX, y: edgeY },
-              { x: climbCoord, y: edgeY }, exitPt, laneJoin, waypoint, ...entry]
-          : far
+        homePts = horizApproach
+          ? (() => {
+              const cand = horizHomePts(gi, start, last);
+              return (clusterHits(cand) === 0 && !cutsYard(cand) && !sweepsRow(cand))
+                ? cand : homePts;
+            })()
+          : stripBacktracks(dedupePts(far
           ? [start, far, { x: roadX, y: far.y },
-              { x: roadX, y: columnTurnY(climbCoord) },
-              { x: runCoord, y: columnTurnY(climbCoord) },
+              { x: roadX, y: climbCoord },
+              { x: runCoord, y: climbCoord },
               laneJoin, waypoint, ...entry]
-          : [start, { x: roadX, y: start.y }, { x: roadX, y: columnTurnY(climbCoord) },
-              { x: runCoord, y: columnTurnY(climbCoord) },
+          : [start, { x: roadX, y: start.y }, { x: roadX, y: climbCoord },
+              { x: runCoord, y: climbCoord },
               laneJoin, waypoint, ...entry]));
       }
     }
@@ -3733,7 +3869,7 @@ export function generateFeeders(
   // substation approach are the one legitimate convergence point and stay
   // untouched.
   {
-    const OVL_FT = 50;   // shared stretch longer than this reads as one trench
+    const OVL_FT = 8;   // any shared stretch reads as one trench (Area 3/4)
     const LAT_FT = 1.5;  // pieces closer than this are "the same line"
     type Piece = { horiz: boolean; c: number; lo: number; hi: number; k: number };
     const piecesOf = (pts: Pt[]): Piece[] => {
@@ -4062,24 +4198,16 @@ export function generateFeeders(
       const waypointCoord = horizApproach
         ? substation.x - dirX * SUBSTATION_APPROACH_FT
         : substation.y - dirY * SUBSTATION_APPROACH_FT;
-      const climbLimit = waypointCoord - dir * FEEDER_TRENCH_SPACING_FT;
-      const climbAvail = (climbLimit - climbOrigin) * dir;
-      const climbStep = feederCount > 1 && climbAvail > 0
-        ? Math.min(FEEDER_TRENCH_SPACING_FT, climbAvail / (feederCount - 1))
-        : FEEDER_TRENCH_SPACING_FT;
-      const climbRaw = climbOrigin + dir * climbOrderOf[gi] * climbStep;
-      const climbCoord = dir > 0
-        ? Math.min(climbRaw, climbLimit)
-        : Math.max(climbRaw, climbLimit);
+      const climbCoord = nestClimbOf(gi);
       const spread = spreadOf(laneRankOf[gi]);
       const exitPt: Pt = horizApproach
         ? { x: climbCoord, y: runCoordOf[gi] }
         : { x: runCoordOf[gi], y: climbCoord };
       const laneJoin: Pt = horizApproach
-        ? { x: climbCoord, y: laneCenter + spread }
+        ? { x: climbCoord, y: runCoordOf[gi] }
         : { x: laneCenter + spread, y: climbCoord };
       const waypoint: Pt = horizApproach
-        ? { x: waypointCoord, y: laneCenter + spread }
+        ? { x: waypointCoord, y: runCoordOf[gi] }
         : { x: laneCenter + spread, y: waypointCoord };
       const entry: Pt[] = horizApproach
         ? [{ x: substation.x, y: waypoint.y }, substation]
@@ -4172,21 +4300,13 @@ export function generateFeeders(
       const waypointCoord = horizApproach
         ? substation.x - dirX * SUBSTATION_APPROACH_FT
         : substation.y - dirY * SUBSTATION_APPROACH_FT;
-      const climbLimit = waypointCoord - dir * FEEDER_TRENCH_SPACING_FT;
-      const climbAvail = (climbLimit - climbOrigin) * dir;
-      const climbStep = feederCount > 1 && climbAvail > 0
-        ? Math.min(FEEDER_TRENCH_SPACING_FT, climbAvail / (feederCount - 1))
-        : FEEDER_TRENCH_SPACING_FT;
-      const climbRaw = climbOrigin + dir * climbOrderOf[gi] * climbStep;
-      const climbCoord = dir > 0
-        ? Math.min(climbRaw, climbLimit)
-        : Math.max(climbRaw, climbLimit);
+      const climbCoord = nestClimbOf(gi);
       const runCoord = runCoordOf[gi];
       const laneJoin: Pt = horizApproach
-        ? { x: climbCoord, y: laneCenter + spread }
+        ? { x: climbCoord, y: runCoordOf[gi] }
         : { x: laneCenter + spread, y: climbCoord };
       const waypoint: Pt = horizApproach
-        ? { x: waypointCoord, y: laneCenter + spread }
+        ? { x: waypointCoord, y: runCoordOf[gi] }
         : { x: laneCenter + spread, y: waypointCoord };
       const entry: Pt[] = horizApproach
         ? [{ x: substation.x, y: waypoint.y }, substation]
@@ -4260,41 +4380,28 @@ export function generateFeeders(
       const waypointCoord = horizApproach
         ? substation.x - dirX * SUBSTATION_APPROACH_FT
         : substation.y - dirY * SUBSTATION_APPROACH_FT;
-      const climbLimit = waypointCoord - dir * FEEDER_TRENCH_SPACING_FT;
-      const climbAvail = (climbLimit - climbOrigin) * dir;
-      const climbStep = feederCount > 1 && climbAvail > 0
-        ? Math.min(FEEDER_TRENCH_SPACING_FT, climbAvail / (feederCount - 1))
-        : FEEDER_TRENCH_SPACING_FT;
-      const climbRaw = climbOrigin + dir * climbOrderOf[gi] * climbStep;
-      const climbCoord = dir > 0
-        ? Math.min(climbRaw, climbLimit)
-        : Math.max(climbRaw, climbLimit);
+      const climbCoord = nestClimbOf(gi);
       const runCoord = runCoordOf[gi];
       const laneJoin: Pt = horizApproach
-        ? { x: climbCoord, y: laneCenter + spread }
+        ? { x: climbCoord, y: runCoordOf[gi] }
         : { x: laneCenter + spread, y: climbCoord };
       const waypoint: Pt = horizApproach
-        ? { x: waypointCoord, y: laneCenter + spread }
+        ? { x: waypointCoord, y: runCoordOf[gi] }
         : { x: laneCenter + spread, y: waypointCoord };
       const entry: Pt[] = horizApproach
         ? [{ x: substation.x, y: waypoint.y }, substation]
         : [{ x: waypoint.x, y: substation.y }, substation];
-      const forced = stripBacktracks(dedupePts(
-        horizApproach
-          ? [
-              start, road, { x: climbCoord, y: road.y },
-              { x: climbCoord, y: runCoord },
-              laneJoin, waypoint, ...entry,
-            ]
-          : [
-              start, road, { x: road.x, y: climbCoord },
-              { x: runCoord, y: climbCoord },
-              laneJoin, waypoint, ...entry,
-            ],
-      ));
-      if (clusterHits(forced) < clusterHits(seg.pts) ||
+      const forced = horizApproach
+        ? horizHomePts(gi, start, pre[gi].launch)
+        : stripBacktracks(dedupePts([
+            start, road, { x: road.x, y: climbCoord },
+            { x: runCoord, y: climbCoord },
+            laneJoin, waypoint, ...entry,
+          ]));
+      if ((clusterHits(forced) === 0 && !cutsYard(forced) && !sweepsRow(forced)) &&
+          (clusterHits(forced) < clusterHits(seg.pts) ||
           ((cutsYard(seg.pts) || fieldComb(seg.pts)) &&
-           !cutsYard(forced) && clusterHits(forced) <= clusterHits(seg.pts))) {
+           !cutsYard(forced) && clusterHits(forced) <= clusterHits(seg.pts)))) {
         seg.pts = forced;
         seg.lengthFt = polyLen(forced);
         refreshElectrical(c);
@@ -4319,21 +4426,13 @@ export function generateFeeders(
       const waypointCoord = horizApproach
         ? substation.x - dirX * SUBSTATION_APPROACH_FT
         : substation.y - dirY * SUBSTATION_APPROACH_FT;
-      const climbLimit = waypointCoord - dir * FEEDER_TRENCH_SPACING_FT;
-      const climbAvail = (climbLimit - climbOrigin) * dir;
-      const climbStep = feederCount > 1 && climbAvail > 0
-        ? Math.min(FEEDER_TRENCH_SPACING_FT, climbAvail / (feederCount - 1))
-        : FEEDER_TRENCH_SPACING_FT;
-      const climbRaw = climbOrigin + dir * climbOrderOf[gi] * climbStep;
-      const climbCoord = dir > 0
-        ? Math.min(climbRaw, climbLimit)
-        : Math.max(climbRaw, climbLimit);
+      const climbCoord = nestClimbOf(gi);
       const runCoord = runCoordOf[gi];
       const laneJoin: Pt = horizApproach
-        ? { x: climbCoord, y: laneCenter + spread }
+        ? { x: climbCoord, y: runCoordOf[gi] }
         : { x: laneCenter + spread, y: climbCoord };
       const waypoint: Pt = horizApproach
-        ? { x: waypointCoord, y: laneCenter + spread }
+        ? { x: waypointCoord, y: runCoordOf[gi] }
         : { x: laneCenter + spread, y: waypointCoord };
       const entry: Pt[] = horizApproach
         ? [{ x: substation.x, y: waypoint.y }, substation]
@@ -4342,37 +4441,18 @@ export function generateFeeders(
       const far = !horizApproach && chainEnd.length >= 2
         ? oppositeChainExit(lastEq, start, feederNodeOf(chainEnd[chainEnd.length - 2]))
         : null;
-      const forced = (isTracedYard && !tracedHorizontalRows)
-        ? stripBacktracks(dedupePts(horizApproach
-          ? [start, { x: columnRoadX(lastEq), y: start.y },
-              { x: columnRoadX(lastEq), y: columnEdgeY(lastEq) },
-              { x: climbCoord, y: columnEdgeY(lastEq) },
-              { x: climbCoord, y: runCoord }, laneJoin, waypoint, ...entry]
-          : far
+      const forced = horizApproach
+        ? horizHomePts(gi, start, lastEq)
+        : (isTracedYard && !tracedHorizontalRows)
+        ? stripBacktracks(dedupePts(far
           ? [start, far, { x: columnRoadX(lastEq), y: far.y },
-              { x: columnRoadX(lastEq), y: columnTurnY(climbCoord) },
-              { x: runCoord, y: columnTurnY(climbCoord) }, laneJoin, waypoint, ...entry]
+              { x: columnRoadX(lastEq), y: climbCoord },
+              { x: runCoord, y: climbCoord }, laneJoin, waypoint, ...entry]
           : [start, { x: columnRoadX(lastEq), y: start.y },
-              { x: columnRoadX(lastEq), y: columnTurnY(climbCoord) },
-              { x: runCoord, y: columnTurnY(climbCoord) }, laneJoin, waypoint, ...entry]))
+              { x: columnRoadX(lastEq), y: climbCoord },
+              { x: runCoord, y: climbCoord }, laneJoin, waypoint, ...entry]))
         : stripBacktracks(dedupePts(
-        horizApproach
-          ? [
-              start, pcsRoadToward(lastEq, start), { x: pcsRoadToward(lastEq, start).x, y: (() => {
-                const road = pcsRoadToward(lastEq, start);
-                const face = pcsRoadFaceCoord(lastEq, !horizApproach);
-                const drive = Math.abs(face - start.y) < 24 ? face : road.y;
-                return drive;
-              })() },
-              { x: climbCoord, y: (() => {
-                const road = pcsRoadToward(lastEq, start);
-                const face = pcsRoadFaceCoord(lastEq, !horizApproach);
-                return Math.abs(face - start.y) < 24 ? face : road.y;
-              })() },
-              { x: climbCoord, y: runCoord },
-              laneJoin, waypoint, ...entry,
-            ]
-          : far
+        far
           ? [
               start, far,
               { x: pcsRoadToward(lastEq, start).x, y: far.y },
@@ -4394,7 +4474,9 @@ export function generateFeeders(
               laneJoin, waypoint, ...entry,
             ],
       ));
-      if (clusterHits(forced) < hits || (hits > 0 && clusterHits(forced) === 0)) {
+      if (horizApproach
+        ? (clusterHits(forced) === 0 && !cutsYard(forced) && !sweepsRow(forced))
+        : (clusterHits(forced) < hits || (hits > 0 && clusterHits(forced) === 0))) {
         seg.pts = forced;
         seg.lengthFt = polyLen(forced);
         refreshElectrical(c);
@@ -4412,11 +4494,6 @@ export function generateFeeders(
     const waypointCoord = horizApproach
       ? substation.x - dirX * SUBSTATION_APPROACH_FT
       : substation.y - dirY * SUBSTATION_APPROACH_FT;
-    const climbLimit = waypointCoord - dir * FEEDER_TRENCH_SPACING_FT;
-    const climbAvail = (climbLimit - climbOrigin) * dir;
-    const climbStep = feederCount > 1 && climbAvail > 0
-      ? Math.min(FEEDER_TRENCH_SPACING_FT, climbAvail / (feederCount - 1))
-      : FEEDER_TRENCH_SPACING_FT;
     for (let gi = 0; gi < circuits.length; gi++) {
       if (customRouted.has(gi) || angledRouted.has(gi)) continue;
       const c = circuits[gi];
@@ -4427,33 +4504,103 @@ export function generateFeeders(
       if (!hitsForeignPcs(home.pts, foreign)) continue;
       const lastEq = pre[gi].launch;
       const start = home.pts[0];
-      const climbRaw = climbOrigin + dir * climbOrderOf[gi] * climbStep;
-      const climbCoord = dir > 0
-        ? Math.min(climbRaw, climbLimit)
-        : Math.max(climbRaw, climbLimit);
+      const climbCoord = nestClimbOf(gi);
       const runCoord = runCoordOf[gi];
       const spread = spreadOf(laneRankOf[gi]);
       const laneJoin: Pt = horizApproach
-        ? { x: climbCoord, y: laneCenter + spread }
+        ? { x: climbCoord, y: runCoordOf[gi] }
         : { x: laneCenter + spread, y: climbCoord };
       const waypoint: Pt = horizApproach
-        ? { x: waypointCoord, y: laneCenter + spread }
+        ? { x: waypointCoord, y: runCoordOf[gi] }
         : { x: laneCenter + spread, y: waypointCoord };
       const entry: Pt[] = horizApproach
         ? [{ x: substation.x, y: waypoint.y }, substation]
         : [{ x: waypoint.x, y: substation.y }, substation];
       const road = columnToward(lastEq, start);
-      const cand = stripBacktracks(dedupePts(horizApproach
-        ? [start, road, { x: road.x, y: columnEdgeY(lastEq) },
-            { x: climbCoord, y: columnEdgeY(lastEq) },
-            { x: climbCoord, y: runCoord }, laneJoin, waypoint, ...entry]
-        : [start, road, { x: road.x, y: columnTurnY(climbCoord) },
-            { x: runCoord, y: columnTurnY(climbCoord) },
-            laneJoin, waypoint, ...entry]));
+      const cand = horizApproach
+        ? horizHomePts(gi, start, lastEq)
+        : stripBacktracks(dedupePts([
+            start, road, { x: road.x, y: climbCoord },
+            { x: laneCenter + spread, y: climbCoord },
+            waypoint, ...entry,
+          ]));
       if (hitsForeignPcs(cand, foreign)) continue;
       if (clusterHits(cand) > clusterHits(home.pts) || cutsYard(cand) || sweepsRow(cand)) {
         continue;
       }
+      home.pts = cand;
+      home.lengthFt = polyLen(cand);
+      refreshElectrical(c);
+    }
+  }
+
+  // East/west: if the home already cuts THIS pad's own cans (Area 4
+  // red through CON0507 / BC505-07), replace only the launch prefix.
+  // A full rewrite to the station is rejected when it clips another
+  // row, which left the original cut in place. Area 2 is N/S.
+  if (horizApproach && isTracedYard) {
+    const hitsBoxes = (pts: Pt[], boxes: Rect[]): boolean => {
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i + 1];
+        const len = Math.hypot(b.x - a.x, b.y - a.y);
+        const n = Math.max(2, Math.ceil(len / 3));
+        for (let s = 1; s < n; s++) {
+          const t = s / n;
+          const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+          if (boxes.some(r => x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    for (let gi = 0; gi < circuits.length; gi++) {
+      if (customRouted.has(gi) || angledRouted.has(gi)) continue;
+      const c = circuits[gi];
+      const home = c.segments[c.segments.length - 1];
+      if (!home || home.pts.length < 2) continue;
+      const lastEq = pre[gi].launch;
+      const ownCans: Rect[] = [];
+      for (const e of design.equipment) {
+        if (e.kind !== 'bess' || e.augmented || e.future) continue;
+        if (Math.hypot(e.x - lastEq.x, e.y - lastEq.y) > 90) continue;
+        ownCans.push(equipmentRect(e, 1));
+      }
+      if (!ownCans.length || !hitsBoxes(home.pts, ownCans)) continue;
+      const start = home.pts[0];
+      const cand = horizHomePts(gi, start, lastEq);
+      if (hitsBoxes(cand, ownCans)) continue;
+      home.pts = cand;
+      home.lengthFt = polyLen(cand);
+      refreshElectrical(c);
+    }
+  }
+
+  // Long N–S legs that sit between the pad edge and the take-off road
+  // cut the turning apron (Area 4 red 05). Slide them onto the road.
+  if (horizApproach && Number.isFinite(approachRoadAlong) &&
+      Number.isFinite(fieldExitAlong)) {
+    const apronLo = Math.min(fieldExitAlong, approachRoadAlong);
+    const apronHi = Math.max(fieldExitAlong, approachRoadAlong);
+    const inApronX = (x: number) => x > apronLo + 2 && x < apronHi - 2;
+    for (let gi = 0; gi < circuits.length; gi++) {
+      if (customRouted.has(gi) || angledRouted.has(gi)) continue;
+      const c = circuits[gi];
+      const home = c.segments[c.segments.length - 1];
+      if (!home || home.pts.length < 3) continue;
+      const pts = home.pts.map(p => ({ x: p.x, y: p.y }));
+      let changed = false;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i + 1];
+        if (Math.abs(a.x - b.x) > 2 || Math.abs(a.y - b.y) < 24) continue;
+        if (!inApronX(a.x) && !inApronX(b.x)) continue;
+        a.x = approachRoadAlong;
+        b.x = approachRoadAlong;
+        changed = true;
+      }
+      if (!changed) continue;
+      const cand = stripBacktracks(dedupePts(pts));
+      if (clusterHits(cand) > 0 || cutsYard(cand) || sweepsRow(cand)) continue;
       home.pts = cand;
       home.lengthFt = polyLen(cand);
       refreshElectrical(c);
@@ -4471,6 +4618,12 @@ export function generateFeeders(
   // CHAMFER_FT stays under the 10 ft lane spacing.
   {
     const CHAMFER_FT = 8;
+    // A chamfer longer than the climb pitch braids the take-off (Area 4).
+    // East/west bundles also miter into each other at the branch.
+    if ((feederCount > 2 && nestStep < CHAMFER_FT + 1) ||
+        (horizApproach && feederCount > 2)) {
+      // skip the whole pass
+    } else {
     const fence = design.fence ?? [];
     const outsideFence = (p: Pt) => fence.length >= 3 && !pointInPoly(p, fence);
     // The miter diagonal must not clip anything the square corner was
@@ -4526,6 +4679,13 @@ export function generateFeeders(
         // chamfers on one shared leg from consuming it (0.4 + 0.4 < 1).
         const isCorner = ((ax && by) || (ay && bx)) && la > 1e-6 && lb > 1e-6;
         const d = Math.min(chamferFt, 0.4 * la, 0.4 * lb);
+        // Miters at the take-off invert a tight bundle (Area 4). Leave
+        // those corners square so the nest stays parallel out of the station.
+        if (isCorner &&
+            Math.hypot(v.x - substation.x, v.y - substation.y) < SUBSTATION_APPROACH_FT + 24) {
+          out.push(v);
+          continue;
+        }
         if (!isCorner || d < 2 || (!adaptiveChamfer && (
             !outsideFence(v) ||
             !outsideFence({ x: (a.x + v.x) / 2, y: (a.y + v.y) / 2 }) ||
@@ -4568,6 +4728,7 @@ export function generateFeeders(
         seg.lengthFt = polyLen(seg.pts);
         refreshElectrical(circuits[gi]);
       }
+    }
     }
   }
 
