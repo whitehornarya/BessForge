@@ -3526,6 +3526,82 @@ async function main() {
         check('[feeder-road] auto-island home runs do not cross each other',
           yardCross === 0 && yardFeeders.every(f => f.routeValid !== false),
           `cross=${yardCross} valid=${yardFeeders.map(f => f.routeValid).join(',')}`);
+        const yardSub = { x: 50, y: 220 };
+        let yardShared = 0;
+        const yardPieces = (pts: Pt[]) => {
+          const out: { horiz: boolean; c: number; lo: number; hi: number }[] = [];
+          for (let k = 0; k < pts.length - 1; k++) {
+            const a = pts[k], b = pts[k + 1];
+            if (Math.abs(a.y - b.y) < 1e-6 && Math.abs(a.x - b.x) > 1e-6) {
+              out.push({ horiz: true, c: a.y, lo: Math.min(a.x, b.x), hi: Math.max(a.x, b.x) });
+            } else if (Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) > 1e-6) {
+              out.push({ horiz: false, c: a.x, lo: Math.min(a.y, b.y), hi: Math.max(a.y, b.y) });
+            }
+          }
+          return out;
+        };
+        const yardHomes = yardFeeders.map(f => f.segments.slice(-1)[0]?.pts ?? []);
+        for (let i = 0; i < yardHomes.length; i++) {
+          for (let j = i + 1; j < yardHomes.length; j++) {
+            for (const p of yardPieces(yardHomes[i])) {
+              for (const q of yardPieces(yardHomes[j])) {
+                if (p.horiz !== q.horiz || Math.abs(p.c - q.c) >= 1.5) continue;
+                const lo = Math.max(p.lo, q.lo), hi = Math.min(p.hi, q.hi);
+                const mid = (lo + hi) / 2;
+                const mx = p.horiz ? mid : p.c, my = p.horiz ? p.c : mid;
+                if (Math.hypot(mx - yardSub.x, my - yardSub.y) < 8) continue;
+                if (hi - lo > 8) yardShared += hi - lo;
+              }
+            }
+          }
+        }
+        check('[feeder-road] autofill homes do not share a collinear trunk',
+          yardFeeders.length >= 2 && yardShared < 1 && throughYard === 0,
+          `shared=${yardShared.toFixed(0)}`);
+
+        const colPcs = [0, 40, 80, 120, 160, 200].map((y, i) => ({
+          id: `inv-c-${i}`, kind: 'inverter' as const, label: `PCS ${i}`,
+          x: 40, y, rotation: Math.PI / 2, length: 22, width: 8,
+        }));
+        const colBess = colPcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + 22, y: p.y + (k === 1 ? -6 : 6),
+          rotation: Math.PI / 2, length: 16, width: 8,
+        })));
+        const colFence: Pt[] = [
+          { x: -80, y: -80 }, { x: 200, y: -80 },
+          { x: 200, y: 400 }, { x: -80, y: 400 },
+        ];
+        const colSub = { x: 40, y: 360 };
+        const colFeeders = generateFeeders({
+          fence: colFence, boundary: { polygon: colFence },
+          equipment: [...colPcs, ...colBess],
+          cables: colPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x - 5, y: p.y }, { x: p.x, y: p.y }],
+          })),
+          aisles: [{ x: 8, y: 100, length: 320, width: 24, rotation: Math.PI / 2 }],
+          roads: [],
+        } as any, colSub, 5, { maxPerFeeder: 3, approach: 'N' });
+        let colShared = 0;
+        const colHomes = colFeeders.map(f => f.segments.slice(-1)[0]?.pts ?? []);
+        for (let i = 0; i < colHomes.length; i++) {
+          for (let j = i + 1; j < colHomes.length; j++) {
+            for (const p of yardPieces(colHomes[i])) {
+              for (const q of yardPieces(colHomes[j])) {
+                if (p.horiz !== q.horiz || Math.abs(p.c - q.c) >= 1.5) continue;
+                const lo = Math.max(p.lo, q.lo), hi = Math.min(p.hi, q.hi);
+                const mid = (lo + hi) / 2;
+                const mx = p.horiz ? mid : p.c, my = p.horiz ? p.c : mid;
+                if (Math.hypot(mx - colSub.x, my - colSub.y) < 8) continue;
+                if (hi - lo > 8) colShared += hi - lo;
+              }
+            }
+          }
+        }
+        check('[feeder-road] autofill column homes do not share a collinear trunk',
+          colFeeders.length >= 2 && colShared < 1,
+          `n=${colFeeders.length} shared=${colShared.toFixed(0)}`);
 
         // Two pads side by side: the east feeder must not ride the west
         // PCS–battery courtyard (08 through 06).
@@ -4195,7 +4271,7 @@ async function main() {
                   const lo = Math.max(p.lo, q.lo), hi = Math.min(p.hi, q.hi);
                   const mid = (lo + hi) / 2;
                   const mx = p.horiz ? mid : p.c, my = p.horiz ? p.c : mid;
-                  if (Math.hypot(mx - sub.x, my - sub.y) < 50) continue;
+                  if (Math.hypot(mx - sub.x, my - sub.y) < 8) continue;
                   if (hi - lo > 8) shared += hi - lo;
                 }
               }
