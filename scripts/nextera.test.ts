@@ -4080,6 +4080,362 @@ async function main() {
           countCanHits(a2wide, a2wideBess) === 0,
           `west=${a2west.toFixed(0)} pads=${a2minX} drift=${(a2minX - a2west).toFixed(0)}`);
 
+        const trunkXNear = (feeders: ReturnType<typeof generateFeeders>, id: string, sub: Pt) => {
+          const home = feeders.find(f => f.inverterIds.includes(id))
+            ?.segments.slice(-1)[0]?.pts ?? [];
+          let best = NaN, bestD = Infinity;
+          for (const p of home) {
+            const d = Math.hypot(p.x - sub.x, p.y - sub.y);
+            if (d < 8) continue;
+            if (d < bestD) { bestD = d; best = p.x; }
+          }
+          return best;
+        };
+        const trunkYNear = (feeders: ReturnType<typeof generateFeeders>, id: string, sub: Pt) => {
+          const home = feeders.find(f => f.inverterIds.includes(id))
+            ?.segments.slice(-1)[0]?.pts ?? [];
+          let best = NaN, bestD = Infinity;
+          for (const p of home) {
+            const d = Math.hypot(p.x - sub.x, p.y - sub.y);
+            if (d < 8) continue;
+            if (d < bestD) { bestD = d; best = p.y; }
+          }
+          return best;
+        };
+        const combNear = {
+          id: 'inv-comb-near', kind: 'inverter' as const, label: 'PCS near',
+          x: 48, y: 72, rotation: 0, length: 22, width: 8,
+        };
+        const combFar = {
+          id: 'inv-comb-far', kind: 'inverter' as const, label: 'PCS far',
+          x: 48, y: 0, rotation: 0, length: 22, width: 8,
+        };
+        const combBess = [combNear, combFar].flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + 22, y: p.y + (k === 1 ? -6 : 6), rotation: 0, length: 16, width: 8,
+        })));
+        const combFence: Pt[] = [
+          { x: -80, y: -60 }, { x: 200, y: -60 },
+          { x: 200, y: 260 }, { x: -80, y: 260 },
+        ];
+        const combDesign = (n: number) => ({
+          fence: combFence, boundary: { polygon: combFence },
+          equipment: [combNear, combFar, ...combBess],
+          cables: [combNear, combFar].map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y }, { x: p.x - 5, y: p.y }],
+          })),
+          aisles: [{ x: 8, y: 36, length: 220, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: n,
+        } as any);
+        const combSub: Pt = { x: 48, y: 220 };
+        for (const approach of ['N', 'S'] as const) {
+          const combFeeders = generateFeeders(combDesign(2), combSub, 5,
+            { maxPerFeeder: 1, approach });
+          const nearX = trunkXNear(combFeeders, 'inv-comb-near', combSub);
+          const farX = trunkXNear(combFeeders, 'inv-comb-far', combSub);
+          check(`[feeder-road] farthest row rides the outside trunk (${approach} pin)`,
+            combFeeders.length >= 2 && Number.isFinite(nearX) && Number.isFinite(farX) &&
+            farX < nearX - 2,
+            `approach=${approach} far=${farX} near=${nearX} n=${combFeeders.length}`);
+        }
+
+        const faceW = {
+          id: 'inv-face-w', kind: 'inverter' as const, label: 'PCS W',
+          x: 20, y: 40, rotation: 0, length: 22, width: 8,
+        };
+        const faceE = {
+          id: 'inv-face-e', kind: 'inverter' as const, label: 'PCS E',
+          x: 80, y: 40, rotation: 0, length: 22, width: 8,
+        };
+        const faceBess = [faceW, faceE].flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: p.y - 22, rotation: 0, length: 16, width: 8,
+        })));
+        const faceFence: Pt[] = [
+          { x: -80, y: -40 }, { x: 200, y: -40 },
+          { x: 200, y: 260 }, { x: -80, y: 260 },
+        ];
+        const faceFeeders = generateFeeders({
+          fence: faceFence, boundary: { polygon: faceFence },
+          equipment: [faceW, faceE, ...faceBess],
+          cables: [faceW, faceE].map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y }, { x: p.x, y: p.y - 5 }],
+          })),
+          aisles: [{ x: -8, y: 40, length: 200, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 2,
+        } as any, { x: 20, y: 220 }, 5, { maxPerFeeder: 1, approach: 'N' });
+        const faceWX = trunkXNear(faceFeeders, 'inv-face-w', { x: 20, y: 220 });
+        const faceEX = trunkXNear(faceFeeders, 'inv-face-e', { x: 20, y: 220 });
+        check('[feeder-road] facing-station row puts the closer feeder outside',
+          faceFeeders.length >= 2 && Number.isFinite(faceWX) && Number.isFinite(faceEX) &&
+          faceWX < faceEX - 2,
+          `closer=${faceWX} farther=${faceEX} n=${faceFeeders.length}`);
+
+        const colNear = {
+          id: 'inv-col-near', kind: 'inverter' as const, label: 'PCS near',
+          x: 40, y: 32, rotation: Math.PI / 2, length: 22, width: 8,
+        };
+        const colFar = {
+          id: 'inv-col-far', kind: 'inverter' as const, label: 'PCS far',
+          x: 140, y: 32, rotation: Math.PI / 2, length: 22, width: 8,
+        };
+        const sfColBess = [colNear, colFar].flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + (k === 1 ? -6 : 6), y: p.y + 22, rotation: Math.PI / 2, length: 16, width: 8,
+        })));
+        const sfColFence: Pt[] = [
+          { x: -220, y: -80 }, { x: 220, y: -80 },
+          { x: 220, y: 160 }, { x: -220, y: 160 },
+        ];
+        const colWFeed = generateFeeders({
+          fence: sfColFence, boundary: { polygon: sfColFence },
+          equipment: [colNear, colFar, ...sfColBess],
+          cables: [colNear, colFar].map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y }, { x: p.x - 5, y: p.y }],
+          })),
+          aisles: [{ x: -20, y: 32, length: 200, width: 24, rotation: 0 }],
+          roads: [], tracedPcsUnits: 2,
+        } as any, { x: -180, y: 32 }, 5, { maxPerFeeder: 1, approach: 'W' });
+        const colNearY = trunkYNear(colWFeed, 'inv-col-near', { x: -180, y: 32 });
+        const colFarY = trunkYNear(colWFeed, 'inv-col-far', { x: -180, y: 32 });
+        const colOutside = Math.abs(colFarY - 32) > Math.abs(colNearY - 32);
+        check('[feeder-road] west takeoff farthest column sits outside at the pin',
+          colWFeed.length >= 2 && Number.isFinite(colNearY) && Number.isFinite(colFarY) &&
+          colOutside,
+          `farY=${colFarY} nearY=${colNearY} n=${colWFeed.length}`);
+
+        const a1col = (
+          x: number, prefix: string, cansEast: boolean,
+        ) => {
+          const pcs = [0, 80].map((y, i) => ({
+            id: `inv-a1o-${prefix}-${i}`, kind: 'inverter' as const,
+            label: `PCS ${prefix} ${i}`,
+            x, y, rotation: Math.PI / 2, length: 22, width: 8,
+          }));
+          const bess = pcs.flatMap(p => [1, 2].map(k => ({
+            id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+            x: p.x + (cansEast ? 22 : -22),
+            y: p.y + (k === 1 ? -6 : 6),
+            rotation: Math.PI / 2, length: 16, width: 8,
+          })));
+          return { pcs, bess };
+        };
+        const a1L = a1col(0, 'L', true);
+        const a1R = a1col(120, 'R', false);
+        const a1oFence: Pt[] = [
+          { x: -80, y: -80 }, { x: 280, y: -80 },
+          { x: 280, y: 280 }, { x: -80, y: 280 },
+        ];
+        const a1oSub: Pt = { x: 60, y: 240 };
+        const a1oFeeders = generateFeeders({
+          fence: a1oFence, boundary: { polygon: a1oFence },
+          equipment: [...a1L.pcs, ...a1L.bess, ...a1R.pcs, ...a1R.bess],
+          cables: [...a1L.pcs, ...a1R.pcs].map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y }, { x: p.x, y: p.y - 5 }],
+          })),
+          aisles: [
+            { x: -24, y: 40, length: 200, width: 24, rotation: Math.PI / 2 },
+            { x: 144, y: 40, length: 200, width: 24, rotation: Math.PI / 2 },
+          ],
+          roads: [], tracedPcsUnits: 4,
+        } as any, a1oSub, 5, { maxPerFeeder: 1, approach: 'N' });
+        const a1LxFar = trunkXNear(a1oFeeders, 'inv-a1o-L-0', a1oSub);
+        const a1LxNear = trunkXNear(a1oFeeders, 'inv-a1o-L-1', a1oSub);
+        const a1RxFar = trunkXNear(a1oFeeders, 'inv-a1o-R-0', a1oSub);
+        const a1RxNear = trunkXNear(a1oFeeders, 'inv-a1o-R-1', a1oSub);
+        check('[feeder-road] Area 1 left-facing column puts farthest feeder left',
+          a1oFeeders.length >= 4 && a1LxFar < a1LxNear - 2,
+          `far=${a1LxFar} near=${a1LxNear}`);
+        check('[feeder-road] Area 1 right-facing column puts closest feeder left',
+          a1oFeeders.length >= 4 && a1RxNear < a1RxFar - 2,
+          `near=${a1RxNear} far=${a1RxFar}`);
+        check('[feeder-road] Area 1 leftmost column sits left of the next column',
+          Math.max(a1LxFar, a1LxNear) < Math.min(a1RxFar, a1RxNear) - 2,
+          `L=${a1LxFar},${a1LxNear} R=${a1RxFar},${a1RxNear}`);
+        const properCrossA1 = (a: Pt, b: Pt, c: Pt, d2: Pt) => {
+          const o = (p: Pt, q: Pt, r: Pt) =>
+            Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+          const o1 = o(a, b, c), o2 = o(a, b, d2), o3 = o(c, d2, a), o4 = o(c, d2, b);
+          return o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4;
+        };
+        const a1RFace = a1col(0, 'RF', false);
+        const a1rfSub: Pt = { x: 0, y: 240 };
+        const a1rfFeeders = generateFeeders({
+          fence: a1oFence, boundary: { polygon: a1oFence },
+          equipment: [...a1RFace.pcs, ...a1RFace.bess],
+          cables: a1RFace.pcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y }, { x: p.x, y: p.y - 5 }],
+          })),
+          aisles: [{ x: 24, y: 40, length: 200, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 2,
+        } as any, a1rfSub, 5, { maxPerFeeder: 1, approach: 'N' });
+        const a1rfNear = a1rfFeeders.find(f => f.inverterIds.includes('inv-a1o-RF-1'))
+          ?.segments.slice(-1)[0]?.pts ?? [];
+        const a1rfFar = a1rfFeeders.find(f => f.inverterIds.includes('inv-a1o-RF-0'))
+          ?.segments.slice(-1)[0]?.pts ?? [];
+        let a1rfCross = 0;
+        for (let i = 0; i < a1rfNear.length - 1; i++) {
+          for (let j = 0; j < a1rfFar.length - 1; j++) {
+            if (properCrossA1(a1rfNear[i], a1rfNear[i + 1], a1rfFar[j], a1rfFar[j + 1])) {
+              a1rfCross++;
+            }
+          }
+        }
+        const a1rfNearX = trunkXNear(a1rfFeeders, 'inv-a1o-RF-1', a1rfSub);
+        const a1rfFarX = trunkXNear(a1rfFeeders, 'inv-a1o-RF-0', a1rfSub);
+        check('[feeder-road] Area 1 facing-right pair does not cross (inner stays inside)',
+          a1rfFeeders.length >= 2 && a1rfCross === 0 && a1rfNearX < a1rfFarX - 2,
+          `cross=${a1rfCross} nearX=${a1rfNearX} farX=${a1rfFarX}`);
+
+        const a2erW = {
+          id: 'inv-a2er-W', kind: 'inverter' as const, label: 'PCS W',
+          x: 40, y: 40, rotation: 0, length: 22, width: 8,
+        };
+        const a2erE = {
+          id: 'inv-a2er-E', kind: 'inverter' as const, label: 'PCS E',
+          x: 100, y: 40, rotation: 0, length: 22, width: 8,
+        };
+        const a2erBess = [a2erW, a2erE].flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x - 22, y: p.y + (k === 1 ? -6 : 6), rotation: 0, length: 16, width: 8,
+        })));
+        const a2erFence: Pt[] = [
+          { x: -40, y: -40 }, { x: 280, y: -40 },
+          { x: 280, y: 260 }, { x: -40, y: 260 },
+        ];
+        const a2erSub: Pt = { x: 70, y: 220 };
+        const a2erFeeders = generateFeeders({
+          fence: a2erFence, boundary: { polygon: a2erFence },
+          equipment: [a2erW, a2erE, ...a2erBess],
+          cables: [a2erW, a2erE].map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y }, { x: p.x, y: p.y - 5 }],
+          })),
+          aisles: [{ x: 160, y: 40, length: 200, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 2,
+        } as any, a2erSub, 5, { maxPerFeeder: 1, approach: 'N' });
+        const a2erWX = trunkXNear(a2erFeeders, 'inv-a2er-W', a2erSub);
+        const a2erEX = trunkXNear(a2erFeeders, 'inv-a2er-E', a2erSub);
+        check('[feeder-road] facing-right pair puts the western feeder left at the pin',
+          a2erFeeders.length >= 2 && Number.isFinite(a2erWX) && Number.isFinite(a2erEX) &&
+          a2erWX < a2erEX - 2,
+          `west=${a2erWX} east=${a2erEX}`);
+        const a2erWHome = a2erFeeders.find(f => f.inverterIds.includes('inv-a2er-W'))
+          ?.segments.slice(-1)[0]?.pts ?? [];
+        const a2erEHome = a2erFeeders.find(f => f.inverterIds.includes('inv-a2er-E'))
+          ?.segments.slice(-1)[0]?.pts ?? [];
+        let a2erCross = 0;
+        for (let i = 0; i < a2erWHome.length - 1; i++) {
+          for (let j = 0; j < a2erEHome.length - 1; j++) {
+            if (properCrossA1(a2erWHome[i], a2erWHome[i + 1], a2erEHome[j], a2erEHome[j + 1])) {
+              a2erCross++;
+            }
+          }
+        }
+        check('[feeder-road] facing-right pair does not cross at the pin',
+          a2erFeeders.length >= 2 && a2erCross === 0,
+          `cross=${a2erCross}`);
+
+        const gapL = {
+          id: 'inv-gap-L', kind: 'inverter' as const, label: 'PCS L',
+          x: 20, y: 40, rotation: 0, length: 22, width: 8,
+        };
+        const gapR = {
+          id: 'inv-gap-R', kind: 'inverter' as const, label: 'PCS R',
+          x: 180, y: 40, rotation: 0, length: 22, width: 8,
+        };
+        const gapBess = [gapL, gapR].flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x - 22, y: p.y + (k === 1 ? -6 : 6), rotation: 0, length: 16, width: 8,
+        })));
+        const gapFence: Pt[] = [
+          { x: -40, y: -40 }, { x: 280, y: -40 },
+          { x: 280, y: 260 }, { x: -40, y: 260 },
+        ];
+        const gapSub: Pt = { x: 100, y: 220 };
+        const gapFeeders = generateFeeders({
+          fence: gapFence, boundary: { polygon: gapFence },
+          equipment: [gapL, gapR, ...gapBess],
+          cables: [gapL, gapR].map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y }, { x: p.x, y: p.y - 5 }],
+          })),
+          aisles: [{ x: 100, y: 40, length: 200, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 2,
+        } as any, gapSub, 5, { maxPerFeeder: 1, approach: 'N' });
+        const gapBox = { x1: 50, x2: 150, y1: 25, y2: 55 };
+        let throughGap = 0;
+        for (const f of gapFeeders) {
+          const home = f.segments.slice(-1)[0]?.pts ?? [];
+          for (let i = 0; i < home.length - 1; i++) {
+            const a = home[i], b = home[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const n = Math.max(2, Math.ceil(len / 4));
+            for (let s = 1; s < n; s++) {
+              const t = s / n;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (x > gapBox.x1 && x < gapBox.x2 && y > gapBox.y1 && y < gapBox.y2) {
+                throughGap++;
+              }
+            }
+          }
+        }
+        check('[feeder-road] facing-right home run does not cut the inter-pad yard',
+          gapFeeders.length >= 1 && throughGap === 0,
+          `through=${throughGap} n=${gapFeeders.length}`);
+
+        const a1xPcs = [0, 80].map((y, i) => ({
+          id: `inv-a1x-${i}`, kind: 'inverter' as const, label: `PCS x ${i}`,
+          x: 0, y, rotation: Math.PI / 2, length: 22, width: 8,
+        }));
+        const a1xBess = a1xPcs.flatMap(p => [1, 2].map(k => ({
+          id: `bess-${p.id}-${k}`, kind: 'bess' as const, label: 'CON',
+          x: p.x + 22, y: p.y + (k === 1 ? -6 : 6),
+          rotation: Math.PI / 2, length: 16, width: 8,
+        })));
+        const a1xConex = [0, 20, 40, 60].map((y, i) => ({
+          id: `conex-a1x-${i}`, kind: 'conex' as const, label: `CONEX ${i}`,
+          x: 70, y, rotation: 0, length: 20, width: 10,
+        }));
+        const a1xFence: Pt[] = [
+          { x: -80, y: -80 }, { x: 200, y: -80 },
+          { x: 200, y: 280 }, { x: -80, y: 280 },
+        ];
+        const a1xFeeders = generateFeeders({
+          fence: a1xFence, boundary: { polygon: a1xFence },
+          equipment: [...a1xPcs, ...a1xBess, ...a1xConex],
+          cables: a1xPcs.map(p => ({
+            id: `mv-drop-${p.id}`, class: 'MV' as const,
+            pts: [{ x: p.x, y: p.y }, { x: p.x, y: p.y - 5 }],
+          })),
+          aisles: [{ x: -24, y: 40, length: 200, width: 24, rotation: Math.PI / 2 }],
+          roads: [], tracedPcsUnits: 2,
+        } as any, { x: 0, y: 240 }, 5, { maxPerFeeder: 1, approach: 'N' });
+        const conexBox = { x1: 40, y1: -10, x2: 90, y2: 75 };
+        let throughConex = 0;
+        for (const f of a1xFeeders) {
+          const home = f.segments.slice(-1)[0]?.pts ?? [];
+          for (let i = 0; i < home.length - 1; i++) {
+            const a = home[i], b = home[i + 1];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            const n = Math.max(2, Math.ceil(len / 4));
+            for (let s = 1; s < n; s++) {
+              const t = s / n;
+              const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+              if (x > conexBox.x1 && x < conexBox.x2 &&
+                  y > conexBox.y1 && y < conexBox.y2) throughConex++;
+            }
+          }
+        }
+        check('[feeder-road] Area 1 home run does not cut the CONEX yard',
+          a1xFeeders.length >= 1 && throughConex === 0,
+          `through=${throughConex} n=${a1xFeeders.length}`);
+
         // Area 4 west takeoff: two PCS rows with cans south of each. The
         // south row's home run must leave west into the road before any
         // northbound — not cut the north row's CON columns (yellow 08).
