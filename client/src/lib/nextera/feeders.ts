@@ -2574,9 +2574,26 @@ export function generateFeeders(
     // Facing right (road east): pin order is left-to-right = west
     // launch first, then closest-to-station. Do not use farthest-row
     // first here — that put a more-eastern red left of a nearer cyan.
-    if (isTracedYard && !horizApproach && peelsEast(a) && peelsEast(b)) {
+    if (isTracedYard && !tracedHorizontalRows && !horizApproach &&
+        peelsEast(a) && peelsEast(b)) {
       if (Math.abs(a.launch.x - b.launch.x) > 8) return a.launch.x - b.launch.x;
       return (ha - hb) || a.gi - b.gi;
+    }
+    // Horizontal rows + east/west pin (Area 4): same walk as Area 1,
+    // rotated. Looking from the pin into the yard, left is north for a
+    // west take-off (south for east). Within a row, road-south (cans
+    // north) → closest first; road-north → farthest first.
+    if (isTracedYard && tracedHorizontalRows && horizApproach) {
+      const rowY = (p: typeof pre[number]) => {
+        const mates = inverters.filter(o => Math.abs(o.y - p.launch.y) < 18);
+        const seed = mates.length ? mates : [p.launch];
+        return seed.reduce((s, e) => s + e.y, 0) / seed.length;
+      };
+      const ya = rowY(a), yb = rowY(b);
+      if (Math.abs(ya - yb) > 12) return dirX < 0 ? yb - ya : ya - yb;
+      const { n, s } = bessVote(a.launch);
+      const facesSouth = n > s;
+      return (facesSouth ? ha - hb : hb - ha) || a.gi - b.gi;
     }
     // Area 1 columns, station north: leftmost column first. Within a
     // column, facing left (road west) → farthest first, then inward.
@@ -2632,8 +2649,21 @@ export function generateFeeders(
   // later feeder can only shift PAST the earlier ones — never back across
   // them — and a monotone bound keeps the assigned coords in exit order.
   const runStep = (horizApproach ? -1 : 1) * FEEDER_TRENCH_SPACING_FT;
+  // A row yard only has to detour around the yard end when something
+  // actually sits between a row and the station. With a single row the
+  // feeder climbs beside its own pad, so keep the direct peel there.
+  const rowYardComb = isTracedYard && tracedHorizontalRows && (() => {
+    const keys = new Set<number>();
+    for (const p of pre) keys.add(Math.round(p.launch.y / ROW_MATE_FT));
+    return keys.size >= 2;
+  })();
   const runCoordOf = new Array<number>(feederCount);
   const peelOffsetOf = new Array<number>(feederCount).fill(0);
+  // Row yards leave along their own drive aisle. Feeders sharing a row
+  // share that aisle line, so each gets a small signed offset from the
+  // road face, nested so a feeder bound for an outer lane never crosses
+  // the vertical of a feeder bound for an inner one.
+  const leaveOffsetOf = new Array<number>(feederCount).fill(0);
   // NOTE: a symmetric minimum-displacement (PAVA) spreading was tried here
   // and reverted: moving a run line BACK past its own launch exit breaks the
   // comb-nesting invariant (a neighbor's launch drop then slices across it),
@@ -2654,7 +2684,20 @@ export function generateFeeders(
       // the short launch drop from the chain end is routed per-feeder and
       // stays within the launch zone. Including it here would never clear —
       // shifting further only makes the drop cross more equipment rows.
-      const runStart: Pt = horizApproach ? { x: startPt.x, y: c } : { x: c, y: startPt.y };
+      // Horizontal-row + E/W pin: the assigned Y is ridden WEST/EAST of
+      // the yard (Area 1 analog). Testing the ride from the PCS would
+      // reject every Y that crosses a neighbor row and walk the comb
+      // out to the parcel edge.
+      const runStart: Pt = horizApproach
+        ? (tracedHorizontalRows && clusterRects.length
+            ? {
+                x: dirX < 0
+                  ? Math.min(...clusterRects.map(r => r.x1)) - 8
+                  : Math.max(...clusterRects.map(r => r.x2)) + 8,
+                y: c,
+              }
+            : { x: startPt.x, y: c })
+        : { x: c, y: startPt.y };
       const exit: Pt = horizApproach ? { x: climbBase, y: c } : { x: c, y: climbBase };
       const ride = [runStart, exit];
       // Foreign-PCS keep-out is for stacked COLUMN yards (Area 1). On
@@ -2842,11 +2885,73 @@ export function generateFeeders(
       // stash seed on peelOffset slot briefly? no, assign after grouping
       runCoordOf[p.gi] = seed;
     }
-    for (const group of Array.from(byRoad.values())) {
+    const packGroups: (typeof pre)[] = [];
+    if (rowYardComb || (isTracedYard && tracedHorizontalRows && horizApproach)) {
+      // Row yards deal ONE comb for the whole area: splitting by road
+      // group made the left-to-right order local, so a near row could
+      // still land left of a far one.
+      packGroups.push(pre.slice());
+    } else {
+      for (const g of Array.from(byRoad.values())) packGroups.push(g);
+    }
+    for (const group of packGroups) {
       group.sort(combCompare);
       const columnNs = isTracedYard && !tracedHorizontalRows && rideX;
-      if (columnNs) {
-        // Left-to-right at the pin follows comb order (west column first).
+      const rowNs = rowYardComb && rideX;
+      const rowEw = isTracedYard && tracedHorizontalRows && horizApproach;
+      if (rowNs) {
+        // Area 2. Walk the comb order (farthest row first; within a row
+        // facing away → farthest feeder first, facing the station →
+        // closest first) and deal lanes from the OUTSIDE in. The first
+        // feeder rides the outermost lane past the yard edge, so every
+        // later feeder joins the bundle on the inside and nothing
+        // crosses. Riding a lane between the rows is what cut the yards.
+        const yardLo = clusterRects.length
+          ? Math.min(...clusterRects.map(r => r.x1)) : runLo;
+        const yardHi = clusterRects.length
+          ? Math.max(...clusterRects.map(r => r.x2)) : runHi;
+        // Exit on the west unless the substation genuinely sits east of the
+        // yard. The comb reads west-to-east at the pin, and nesting forces
+        // the first feeder onto the OUTER lane, so an east-side bundle
+        // would put the farthest row on the right.
+        const sideX = substation.x > yardHi ? 1 : -1;
+        const edge = (sideX < 0 ? yardLo - 12 : yardHi + 12);
+        const n = group.length;
+        const LEAVE_STAGGER_FT = 3;
+        const rows = new Map<number, typeof group>();
+        for (const p of group) {
+          const k = Math.round(p.launch.y / ROW_MATE_FT);
+          rows.set(k, [...(rows.get(k) ?? []), p]);
+        }
+        // Anchor the comb ONCE on the innermost clear line, then step
+        // outward at fixed spacing. Resolving each lane independently let
+        // a blocked seed walk past its neighbours and silently reversed
+        // the whole order (Area 2 read nearest-row-first).
+        const span = (n - 1) * FEEDER_TRENCH_SPACING_FT;
+        let anchor = edge;
+        for (let k = 0; k < 64; k++) {
+          const c = edge + sideX * k * FEEDER_TRENCH_SPACING_FT;
+          if (group.every(p => runClearFor(p.launch)(c))) { anchor = c; break; }
+        }
+        const outer = anchor + sideX * span;
+        if (outer < runLo) anchor += runLo - outer;
+        else if (outer > runHi) anchor -= outer - runHi;
+        group.forEach((p, i) => {
+          runCoordOf[p.gi] = anchor + sideX * (n - 1 - i) * FEEDER_TRENCH_SPACING_FT;
+          peelOffsetOf[p.gi] = i * FEEDER_TRENCH_SPACING_FT;
+          // Nest the shared aisle line: the feeder taking the outer lane
+          // must leave FARTHER from the station than the one taking the
+          // inner lane, or its westward leg clips the inner vertical.
+          const mates = rows.get(Math.round(p.launch.y / ROW_MATE_FT)) ?? [p];
+          const j = mates.indexOf(p);
+          const face = pcsRoadFaceCoord(p.launch, false);
+          const away = Math.sign(face - p.launch.y) || 1;
+          const toward = Math.sign(substation.y - p.launch.y) || 1;
+          const slot = away === toward ? j : mates.length - 1 - j;
+          leaveOffsetOf[p.gi] = away * slot * LEAVE_STAGGER_FT;
+        });
+      } else if (columnNs) {
+        // Left-to-right at the pin follows comb order (west column/row first).
         const west0 = Math.min(...group.map(p => runCoordOf[p.gi]));
         group.forEach((p, i) => {
           const seed = west0 + i * FEEDER_TRENCH_SPACING_FT;
@@ -2854,6 +2959,40 @@ export function generateFeeders(
             seed, FEEDER_TRENCH_SPACING_FT, runClearFor(p.launch));
           peelOffsetOf[p.gi] = i * FEEDER_TRENCH_SPACING_FT;
         });
+      } else if (rowEw) {
+        // Same as Area 1 columns, rotated: each row keeps its own road
+        // face and stacks unique Y outward (away from the cans), so the
+        // long ride never walks through a neighbor row.
+        const rowKey = (p: typeof pre[number]) => Math.round(p.launch.y / 18);
+        const rows = new Map<number, typeof group>();
+        for (const p of group) {
+          const k = rowKey(p);
+          const list = rows.get(k) ?? [];
+          list.push(p);
+          rows.set(k, list);
+        }
+        const rowList = Array.from(rows.values()).sort((A, B) => {
+          const ya = A.reduce((s, p) => s + p.launch.y, 0) / A.length;
+          const yb = B.reduce((s, p) => s + p.launch.y, 0) / B.length;
+          return dirX < 0 ? yb - ya : ya - yb;
+        });
+        let seen = 0;
+        for (const row of rowList) {
+          row.sort(combCompare);
+          for (let j = 0; j < row.length; j++) {
+            const p = row[j];
+            const midY = clusterRects.length
+              ? (Math.min(...clusterRects.map(r => r.y1)) +
+                 Math.max(...clusterRects.map(r => r.y2))) / 2
+              : p.launch.y;
+            const away = Math.sign(p.launch.y - midY) || (dirX < 0 ? 1 : -1);
+            const seed = p.launch.y + away * (28 + j * FEEDER_TRENCH_SPACING_FT);
+            runCoordOf[p.gi] = distinctRunCoord(
+              seed, away * FEEDER_TRENCH_SPACING_FT, runClearFor(p.launch));
+            peelOffsetOf[p.gi] = (seen + j) * FEEDER_TRENCH_SPACING_FT;
+          }
+          seen += row.length;
+        }
       } else {
       // Farthest row (or same-row outside rule) sits on the outside of
       // this road stack. Closest stays on the pad-face channel.
@@ -3014,17 +3153,22 @@ export function generateFeeders(
       return false;
     })();
     // PCS face is still under this pad's CON (Area 4 red at CON0507).
-    // Leave west/east of the cans first, then climb — never north at pad X.
-    if (vertHitsOwn) {
-      const pad = peelPadOf(last);
-      const pastOwn = dirX < 0
-        ? Math.min(pad.x1, ...ownCans.map(r => r.x1)) - 12
-        : Math.max(pad.x2, ...ownCans.map(r => r.x2)) + 12;
-      const turnX = (road.x - pastOwn) * dirX < 0 ? pastOwn : road.x;
+    // Leave on THIS row's road, clear the yard, then ride the assigned
+    // Y (Area 1 own-lane analog, rotated). Do not change Y at pad X.
+    if (vertHitsOwn || (tracedHorizontalRows && clusterRects.length)) {
+      const leaveY = pcsRoadFaceCoord(last, false);
+      const pastYard = clusterRects.length
+        ? (dirX < 0
+            ? Math.min(...clusterRects.map(r => r.x1)) - 12
+            : Math.max(...clusterRects.map(r => r.x2)) + 12)
+        : start.x + (dirX || alongX) * 16;
+      let edgeX = pastYard;
+      if ((edgeX - wpX) * dirX > 0) edgeX = wpX;
       return stripBacktracks(dedupePts([
         start,
-        { x: turnX, y: start.y },
-        { x: turnX, y: runY },
+        { x: start.x, y: leaveY },
+        { x: edgeX, y: leaveY },
+        { x: edgeX, y: runY },
         { x: climbCoord, y: runY },
         { x: wpX, y: runY },
         substation,
@@ -3057,6 +3201,19 @@ export function generateFeeders(
     const last = pre[gi].launch;
     const alongY = Math.sign(substation.y - start.y) || travelY;
     const wpY = substation.y - alongY * SUBSTATION_APPROACH_FT;
+    // Row yard (Area 2): leave along THIS row's drive aisle, then ride
+    // the assigned lane past the yard edge. Climbing at a PCS-side X
+    // walks north through every row above and cuts those yards.
+    if (rowYardComb && clusterRects.length) {
+      const leaveY = pcsRoadFaceCoord(last, false) + leaveOffsetOf[gi];
+      return stripBacktracks(dedupePts([
+        start,
+        { x: start.x, y: leaveY },
+        { x: lane, y: leaveY },
+        { x: lane, y: wpY },
+        substation,
+      ]));
+    }
     const roadX = (isTracedYard && !tracedHorizontalRows)
       ? columnRoadX(last)
       : pcsRoadFaceCoord(last, true);
@@ -4491,9 +4648,10 @@ export function generateFeeders(
       const alongCol = !horizApproach && seg.pts.length >= 2 &&
         Math.abs(seg.pts[0].x - seg.pts[1].x) < 2 &&
         Math.abs(seg.pts[0].y - seg.pts[1].y) > 20;
-      const alongColH = horizApproach && seg.pts.length >= 2 &&
-        Math.abs(seg.pts[0].y - seg.pts[1].y) < 2 &&
-        Math.abs(seg.pts[0].x - seg.pts[1].x) > 20;
+      // First hop along the row (west/east off the pad) is the legal
+      // leave — do not treat it as a courtyard cut the way a first hop
+      // along a column is on Area 1. Rebuilding that hop used to jog Y
+      // at the shared approach X and braid Area 4.
       const start = seg.pts[0];
       const last = pre[gi].launch;
       const chainEnd = pre[gi].chain;
@@ -4504,7 +4662,7 @@ export function generateFeeders(
         Math.hypot(seg.pts[1].x - farExit.x, seg.pts[1].y - farExit.y) < 14);
       if (hits === 0 && !sweepsRow(seg.pts) && !cutsYard(seg.pts) &&
           !fieldComb(seg.pts) &&
-          !(linesVertical === false && ((alongCol && !oppositeEndHop) || alongColH))) continue;
+          !(linesVertical === false && alongCol && !oppositeEndHop)) continue;
       const localRun = !horizApproach
         ? runCoordOf[gi]
         : (() => {
@@ -4520,42 +4678,13 @@ export function generateFeeders(
         }
         return edge + sign * (peelOffsetOf[gi] ?? 0);
       })();
-      const dir = horizApproach ? dirX : dirY;
-      const spread = spreadOf(laneRankOf[gi]);
-      const waypointCoord = horizApproach
-        ? substation.x - dirX * SUBSTATION_APPROACH_FT
-        : substation.y - dirY * SUBSTATION_APPROACH_FT;
-      const climbCoord = nestClimbOf(gi);
-      const runCoord = runCoordOf[gi];
-      const laneJoin: Pt = horizApproach
-        ? { x: climbCoord, y: runCoordOf[gi] }
-        : { x: runCoordOf[gi], y: climbCoord };
-      const waypoint: Pt = horizApproach
-        ? { x: waypointCoord, y: runCoordOf[gi] }
-        : { x: runCoordOf[gi], y: waypointCoord };
-      const entry: Pt[] = [substation];
-      const roadAlong0 = horizApproach
-        ? start.x + dirX * 16
-        : start.y + dirY * 16;
-      const roadAlong = roadAlong0;
-      const along0 = horizApproach ? start.y : start.x;
-      const nearEdge = Math.abs(localRun - along0) < 48;
-      const faceY = pcsRoadFaceCoord(last, false);
-      const driveY = Math.abs(faceY - start.y) < 24 ? faceY : start.y;
       const forced = horizApproach
-        ? stripBacktracks(dedupePts([
-              start,
-              { x: start.x + dirX * 16, y: start.y },
-              { x: start.x + dirX * 16, y: driveY },
-              { x: climbCoord, y: driveY },
-              { x: climbCoord, y: runCoord },
-              laneJoin, waypoint, ...entry,
-            ]))
+        ? horizHomePts(gi, start, last)
         : scanNsHomePts(gi, start, farExit ?? { x: localRun, y: start.y });
       const fh = clusterHits(forced);
       if (fh < hits ||
           (fh === 0 &&
-           (sweepsRow(seg.pts) || cutsYard(seg.pts) || alongCol || alongColH) &&
+           (sweepsRow(seg.pts) || cutsYard(seg.pts) || alongCol) &&
            !sweepsRow(forced) && !cutsYard(forced)) ||
           (fieldComb(seg.pts) && !cutsYard(forced))) {
         seg.pts = forced;
@@ -4759,7 +4888,30 @@ export function generateFeeders(
       refreshElectrical(c);
     }
   }
+
   separateCollinearHomes();
+
+  // After the collinear split: restore the row-yard comb (Areas 2-4) so
+  // that pass cannot jog a shared approach line and braid the bundle.
+  // The lane assignment already encodes the left-to-right pin order, so
+  // the comb shape is the one geometry that honours it.
+  if (isTracedYard && tracedHorizontalRows && (horizApproach || rowYardComb)) {
+    for (let gi = 0; gi < circuits.length; gi++) {
+      if (customRouted.has(gi) || angledRouted.has(gi)) continue;
+      const c = circuits[gi];
+      const home = c.segments[c.segments.length - 1];
+      if (!home || home.pts.length < 2) continue;
+      const start = home.pts[0];
+      const cand = horizApproach
+        ? horizHomePts(gi, start, pre[gi].launch)
+        : scanNsHomePts(gi, start, pcsRoadToward(pre[gi].launch, start));
+      if (sweepsRow(cand)) continue;
+      if (!horizApproach && cutsYard(cand)) continue;
+      home.pts = cand;
+      home.lengthFt = polyLen(cand);
+      refreshElectrical(c);
+    }
+  }
 
   // --- 45° chamfered home-run corners outside the fence (CAR-D-B005-0) ------
   // The issued package miters the substation-corridor bends instead of
