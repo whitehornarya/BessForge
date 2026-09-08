@@ -1113,6 +1113,14 @@ export function generateFeedersPrescan(
     }
     return nH >= inverters.length * 0.7;
   })();
+  // Autofill mirrored islands (the default pre-scan yard): two+ PCS rows
+  // with the station across them. A northbound peel at launch X walks
+  // through every container between this row and the pin. Scan-mode never
+  // enters this file, so this flag cannot touch Big Iron.
+  const autoMultiRow = !isTracedYard && !approachAxis.horizApproach && (() => {
+    const keys = new Set(inverters.map(e => Math.round(e.y / 40)));
+    return keys.size >= 2;
+  })();
   // Static layout routing owns each PCS's local aux-face MV drop onto the
   // under-skid collector. Dynamic feeder circuits own the onward chain/home
   // run to the selected take-off. Join those two layers at the collector end
@@ -2922,19 +2930,64 @@ export function generateFeedersPrescan(
     // axis-aligned hops are re-laid on the feeder's own parallel hop line
     // (hopShiftOf) with short taps back into the two PCS units — otherwise
     // the collinear hop trenches of both circuits read as one shared trench.
+    //
+    // Under-skid joins can wander a few feet across a physical row (pose
+    // deltas, missing mv-drop → PCS center, lane mix). A tiny ΔY on an
+    // otherwise horizontal hop makes routeSegment emit an L with 2 bends.
+    // Snap the whole chain onto one shared across-line so every hop is a
+    // single straight trunk span (same idea as averaged mv-drop joins).
+    // Identical to the scan-path snap in feeders.ts — needed after main's
+    // aux-edge mv-drop move, which this snapshot never received.
+    const ROW_JOG_SNAP_FT = 6;
+    const { hopNodeOf, rowSnapped } = (() => {
+      const nodes = chain.map(e => ({ id: e.id, p: feederNodeOf(e) }));
+      const fallback = { hopNodeOf: feederNodeOf, rowSnapped: false };
+      if (nodes.length < 2) return fallback;
+      let ai = 0, bi = 1, span = -1;
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const d = dist(nodes[i].p, nodes[j].p);
+          if (d > span) { span = d; ai = i; bi = j; }
+        }
+      }
+      if (span < 1) return fallback;
+      const origin = nodes[ai].p;
+      const ux = (nodes[bi].p.x - origin.x) / span;
+      const uy = (nodes[bi].p.y - origin.y) / span;
+      const along = (p: Pt) => (p.x - origin.x) * ux + (p.y - origin.y) * uy;
+      const across = (p: Pt) => -(p.x - origin.x) * uy + (p.y - origin.y) * ux;
+      const meanAcross = nodes.reduce((s, n) => s + across(n.p), 0) / nodes.length;
+      if (nodes.some(n => Math.abs(across(n.p) - meanAcross) > ROW_JOG_SNAP_FT)) {
+        return fallback;
+      }
+      const snapped = new Map<string, Pt>();
+      for (const n of nodes) {
+        const s = along(n.p);
+        snapped.set(n.id, {
+          x: origin.x + ux * s - uy * meanAcross,
+          y: origin.y + uy * s + ux * meanAcross,
+        });
+      }
+      return {
+        hopNodeOf: (e: PlacedEquipment) => snapped.get(e.id) ?? feederNodeOf(e),
+        rowSnapped: true,
+      };
+    })();
     for (let j = 0; j < chain.length - 1; j++) {
       const a = chain[j], b = chain[j + 1];
       const hopObs = autoObs(obstaclesExcept(a.id, b.id)).concat(
-        p.rowGrammar ? [] : clusterRects,
-        p.rowGrammar
+        (p.rowGrammar || rowSnapped) ? [] : clusterRects,
+        (p.rowGrammar || rowSnapped)
           ? []
           : cableKeepOutFrom([...dcRuns, ...priorHops, ...priorHomes], [a, b]));
-      const A = feederNodeOf(a), B = feederNodeOf(b);
+      const A = hopNodeOf(a), B = hopNodeOf(b);
       // Recognized rows land on their canonical under-skid mv-collector
       // through the mv-drop-* endpoints. That collector is the one straight
       // row trunk; handing it to the generic obstacle router may legally
       // return an L-shaped detour, which is forbidden by the row grammar.
-      let pts = p.rowGrammar ? [A, B] : routeSegmentTrenchAware(A, B, hopObs);
+      // Snapped near-row chains get the same straight [A, B] treatment so a
+      // few feet of join stagger cannot reintroduce the 2-bend L-jog.
+      let pts = (p.rowGrammar || rowSnapped) ? [A, B] : routeSegmentTrenchAware(A, B, hopObs);
       // routeSegment keeps its L-route when the grid reroute finds no path —
       // on dense traced yards that used to silently lay a trench straight
       // through other feeders' PCS and the container columns. Per the
@@ -2943,7 +2996,7 @@ export function generateFeedersPrescan(
       // first, and only keep a crossing route with a loud warning when every
       // candidate fails.
       {
-        if (!p.rowGrammar &&
+        if (!p.rowGrammar && !rowSnapped &&
             (feederCrossesObstacle(pts, hopObs, A, B) || crossesForbidden(pts) > 0)) {
           const roadPt = nearestRoadWaypoint(A, roadAisles);
           const cands: Pt[][] = [[A, { x: A.x, y: B.y }, B]];
@@ -3082,6 +3135,12 @@ export function generateFeedersPrescan(
     // south of the whole stack, and the drop at start.x would cut every
     // container row in between (Area 2 F2/F8).
     const toward = (() => {
+      // Autofill multi-row: ride THIS row's road face out to the yard end.
+      // oppositeChainExit / dirY*16 peels toward the station and cuts every
+      // container between this row and the pin (south-row F2/F4/F6).
+      if (autoMultiRow && fieldEdgeRun != null) {
+        return { x: start.x, y: pcsRoadFaceCoord(last, false) };
+      }
       if (chain.length >= 2 && !horizApproach) {
         const far = oppositeChainExit(last, start, feederNodeOf(chain[chain.length - 2]));
         const foreign = foreignPcsRects(...chain.map(e => e.id));
@@ -3164,7 +3223,25 @@ export function generateFeedersPrescan(
     // East/west take-off: finish the west/east exit along the PCS, then
     // turn only on the climb line (the road). A Y-leg at underExit.x is
     // still inside the can columns (Area 4 yellow/teal through CON0507).
-    const ideal = horizApproach
+    const ideal = autoMultiRow
+      ? (() => {
+          const leaveY = pcsRoadFaceCoord(last, false);
+          const xs = inverters.map(e => e.x);
+          const lo = Math.min(...xs) - 12, hi = Math.max(...xs) + 12;
+          let lane = runCoord;
+          if (lane > lo && lane < hi) {
+            lane = (start.x < (lo + hi) / 2) ? lo : hi;
+          }
+          return dedupePts([
+            start,
+            { x: start.x, y: leaveY },
+            { x: lane, y: leaveY },
+            { x: lane, y: climbCoord },
+            { x: laneCoordOf(gi), y: climbCoord },
+            waypoint, ...entry,
+          ]);
+        })()
+      : horizApproach
       ? dedupePts([
           start, underExit, { x: underExit.x, y: driveAlong },
           { x: climbCoord, y: driveAlong },
@@ -3182,13 +3259,13 @@ export function generateFeedersPrescan(
         ? dedupePts([start, dropJog, localStart, localExit, exitPt, laneJoin, waypoint, ...entry])
         : dedupePts([start, dropJog, runStart, exitPt, laneJoin, waypoint, ...entry]));
     let homePts = ideal;
-    if (feederCrossesObstacle(ideal, homeObstaclesAuto, start, substation) ||
+    if (!autoMultiRow && (feederCrossesObstacle(ideal, homeObstaclesAuto, start, substation) ||
         bandCoRunViolations(ideal, crossBands) > 0 ||
         crossesPrior(ideal) > 0 ||
         clusterHits(ideal) > 0 ||
         sweepsRow(ideal) ||
         cutsYard(ideal) ||
-        fieldComb(ideal)) {
+        fieldComb(ideal))) {
       // Only the in-yard run can hit equipment: grid-reroute just that leg
       // and keep the corridor legs (all outside the fence) intact.
       // Prefer reaching the feeder's OWN run line first and riding it to the
@@ -3380,7 +3457,7 @@ export function generateFeedersPrescan(
       const alongLaunchH = horizApproach && homePts.length >= 2 &&
         Math.abs(homePts[0].x - homePts[1].x) < 2 &&
         Math.abs(homePts[0].y - homePts[1].y) > 24;
-      if (!columnYard && linesVertical === false &&
+      if (!autoMultiRow && !columnYard && linesVertical === false &&
           (sweepsRow(homePts) || cutsYard(homePts) || alongLaunch || alongLaunchH)) {
         const road = underExit;
         const ride = localRun;
@@ -4059,7 +4136,8 @@ export function generateFeedersPrescan(
     for (let gi = 0; gi < circuits.length; gi++) {
       const c = circuits[gi];
       const home = c.segments[c.segments.length - 1];
-      if (!home || customRouted.has(gi) || crossingCount(home.pts, earlier) === 0) {
+      if (!home || customRouted.has(gi) || autoMultiRow ||
+          crossingCount(home.pts, earlier) === 0) {
         earlier.push(home?.pts ?? []);
         continue;
       }
@@ -4252,7 +4330,7 @@ export function generateFeedersPrescan(
         refreshElectrical(c);
       }
     }
-  } else if (!(isTracedYard && !tracedHorizontalRows)) {
+  } else if (!autoMultiRow && !(isTracedYard && !tracedHorizontalRows)) {
     for (let gi = 0; gi < circuits.length; gi++) {
       if (customRouted.has(gi) || angledRouted.has(gi)) continue;
       const c = circuits[gi];
@@ -4312,7 +4390,7 @@ export function generateFeedersPrescan(
   // exit. Fail-open L/grid fallbacks used to keep the illegal geometry.
   {
     for (let gi = 0; gi < circuits.length; gi++) {
-      if (customRouted.has(gi) || angledRouted.has(gi)) continue;
+      if (autoMultiRow || customRouted.has(gi) || angledRouted.has(gi)) continue;
       const c = circuits[gi];
       const seg = c.segments[c.segments.length - 1];
       if (!seg || seg.pts.length < 2) continue;
