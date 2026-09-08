@@ -54,7 +54,16 @@ function App() {
         <FeederLegend />
       </div>
       <BusyOverlay />
-      <Toaster position="top-right" richColors />
+      <Toaster
+        theme="dark"
+        position="top-right"
+        closeButton
+        toastOptions={{
+          classNames: {
+            closeButton: "toast-close-btn",
+          },
+        }}
+      />
     </div>
   );
 }

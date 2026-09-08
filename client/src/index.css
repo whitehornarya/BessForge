@@ -28,3 +28,40 @@ canvas {
   height: 100% !important;
   touch-action: none;
 }
+
+/* Toasts: same slate card as the loading overlay (BusyOverlay). */
+[data-sonner-toast][data-styled="true"] {
+  background: rgb(15 23 42 / 0.95) !important;
+  border: 1px solid rgb(71 85 105) !important;
+  color: rgb(241 245 249) !important;
+  box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.4) !important;
+  padding: 0.75rem 2.35rem 0.75rem 1rem !important;
+  gap: 0.65rem;
+}
+[data-sonner-toast] [data-title],
+[data-sonner-toast] [data-content] {
+  color: rgb(241 245 249) !important;
+}
+[data-sonner-toast] [data-description] {
+  color: rgb(148 163 184) !important;
+}
+[data-sonner-toast][data-type="success"] [data-icon] { color: rgb(34 211 238); }
+[data-sonner-toast][data-type="info"] [data-icon] { color: rgb(34 211 238); }
+[data-sonner-toast][data-type="warning"] [data-icon] { color: rgb(251 191 36); }
+[data-sonner-toast][data-type="error"] [data-icon] { color: rgb(248 113 113); }
+[data-sonner-toast] [data-close-button] {
+  left: auto !important;
+  right: 0.45rem !important;
+  top: 0.45rem !important;
+  transform: none !important;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgb(71 85 105) !important;
+  background: rgb(30 41 59) !important;
+  color: rgb(226 232 240) !important;
+}
+[data-sonner-toast] [data-close-button]:hover {
+  background: rgb(51 65 85) !important;
+  color: white !important;
+}
