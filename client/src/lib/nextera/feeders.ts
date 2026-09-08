@@ -2820,6 +2820,12 @@ export function generateFeeders(
         const face = rideX ? columnRoadX(p.launch) : pcsRoadFaceCoord(p.launch, false);
         if (runClearFor(p.launch)(face)) return face;
       }
+      // Stay on this PCS's own drive — a farther gap (the next column's
+      // road) is what pulled teal/red across purple/yellow.
+      if (isTracedYard && !tracedHorizontalRows && rideX) {
+        const face = columnRoadX(p.launch);
+        if (runClearFor(p.launch)(face) && !inCourt(face)) return face;
+      }
       return best;
     };
     const byRoad = new Map<number, typeof pre>();
@@ -2839,8 +2845,7 @@ export function generateFeeders(
     for (const group of Array.from(byRoad.values())) {
       group.sort(combCompare);
       const columnNs = isTracedYard && !tracedHorizontalRows && rideX;
-      const facingRightGroup = group.length >= 2 && group.every(peelsEast);
-      if (columnNs || facingRightGroup) {
+      if (columnNs) {
         // Left-to-right at the pin follows comb order (west column first).
         const west0 = Math.min(...group.map(p => runCoordOf[p.gi]));
         group.forEach((p, i) => {
@@ -2872,27 +2877,6 @@ export function generateFeeders(
             : undefined);
         peelOffsetOf[p.gi] = (n - 1 - i) * FEEDER_TRENCH_SPACING_FT;
       });
-      }
-    }
-    if (!tracedHorizontalRows) {
-      const eastFacing = pre.filter(peelsEast);
-      if (eastFacing.length >= 2) {
-        for (const p of eastFacing) {
-          const idx = usedRunCoords.findIndex(u => Math.abs(u - runCoordOf[p.gi]) < 1e-6);
-          if (idx >= 0) usedRunCoords.splice(idx, 1);
-        }
-        eastFacing.sort(combCompare);
-        let prev = -Infinity;
-        eastFacing.forEach((p, i) => {
-          const local = runCoordOf[p.gi];
-          const seed = local > prev + FEEDER_TRENCH_SPACING_FT - 1e-6
-            ? local
-            : prev + FEEDER_TRENCH_SPACING_FT;
-          runCoordOf[p.gi] = distinctRunCoord(
-            seed, FEEDER_TRENCH_SPACING_FT, runClearFor(p.launch));
-          peelOffsetOf[p.gi] = i * FEEDER_TRENCH_SPACING_FT;
-          prev = runCoordOf[p.gi];
-        });
       }
     }
   }
@@ -3076,8 +3060,6 @@ export function generateFeeders(
     const roadX = (isTracedYard && !tracedHorizontalRows)
       ? columnRoadX(last)
       : pcsRoadFaceCoord(last, true);
-    const peel = { x: roadX, y: start.y };
-    const peelToLane = [start, { x: lane, y: start.y }];
     const peelHitsExtras = (() => {
       for (const e of design.equipment) {
         if (e.kind !== 'conex' && e.kind !== 'manhole' && e.kind !== 'commsCabinet') continue;
@@ -3092,24 +3074,20 @@ export function generateFeeders(
     })();
     const faceRight = pcsFacesRight(last);
     const laneOnFace = faceRight ? lane >= last.x - 2 : lane <= last.x + 2;
-    const shortOwnLane = Math.abs(lane - start.x) <= 48;
+    const shortOwnLane = Math.abs(lane - start.x) <= 40;
     const ownLanePts = [start, { x: lane, y: start.y }, { x: lane, y: wpY }, substation];
-    // Same face as the PCS road: ride THIS feeder's lane from the peel so
-    // orange stays inside yellow. A long sideways at pad Y is the red
-    // cut through the inter-pad yard — only keep the short nest.
+    // Same-face nest (teal inside red) when the lane is this column's
+    // road — never a pad-height cut to another column.
     if (laneOnFace && !peelHitsExtras && shortOwnLane &&
         !sweepsRow(ownLanePts) && !cutsYard(ownLanePts) && !fieldComb(ownLanePts)) {
       return stripBacktracks(dedupePts(ownLanePts));
     }
-    // Shared road, then shift onto the lane past the pads. The lane
-    // farthest from the road turns first so a later neighbor's
-    // south/northbound is already off the road (no braid at the pin).
     const peelSign = Math.sign(lane - roadX) || 1;
     const fartherCount = runCoordOf.filter(c => (c - lane) * peelSign > 1e-6).length;
     const climbY = fieldClearY(start.y) + alongY * fartherCount * FEEDER_TRENCH_SPACING_FT;
     return stripBacktracks(dedupePts([
       start,
-      peel,
+      { x: roadX, y: start.y },
       { x: roadX, y: climbY },
       { x: lane, y: climbY },
       { x: lane, y: wpY },
