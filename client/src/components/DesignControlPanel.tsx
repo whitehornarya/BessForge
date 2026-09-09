@@ -2979,14 +2979,29 @@ export default function DesignControlPanel() {
             </div>
             <div className="flex gap-2 mt-2">
               <button
-                onClick={() => { restoreSession(); toast.success('Session restored'); }}
-                className="flex-1 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-xs font-semibold"
+                disabled={!!busyOverlay}
+                onClick={() => {
+                  void (async () => {
+                    setBusyOverlay({ label: 'Restoring previous session…' });
+                    const paint = () => new Promise<void>(r =>
+                      requestAnimationFrame(() => requestAnimationFrame(() => r())));
+                    await paint();
+                    try {
+                      await restoreSession();
+                      toast.success('Session restored');
+                    } finally {
+                      setBusyOverlay(null);
+                    }
+                  })();
+                }}
+                className="flex-1 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-xs font-semibold"
               >
-                Restore
+                {busyOverlay ? 'Restoring…' : 'Restore'}
               </button>
               <button
                 onClick={dismissSavedSession}
-                className="flex-1 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs"
+                disabled={!!busyOverlay}
+                className="flex-1 py-1.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-60 text-xs"
               >
                 Dismiss
               </button>

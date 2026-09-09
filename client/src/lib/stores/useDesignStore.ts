@@ -4245,7 +4245,7 @@ interface DesignState {
   jumpHistory: (pos: number) => void;
 
   // Session + project files
-  restoreSession: () => void;
+  restoreSession: () => Promise<void>;
   dismissSavedSession: () => void;
   exportProjectJson: () => string | null;
   importProject: (jsonText: string) => string | null; // null = ok, else error message
@@ -8958,7 +8958,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     }
   },
 
-  restoreSession: () => {
+  restoreSession: async () => {
     const s = get().savedSession;
     if (!s) return;
     // Multi-area session: rebuild every footprint and the active pointer.
@@ -9048,46 +9048,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     // the satellite auto-fetch below must stay structurally adjacent to that
     // rebuild, and code wedged in between silently breaks that guarantee.
     const sessionEpoch = ++drawingEpoch;
-    void loadDrawing().then(drawing => {
-      // Obsolete callback (a rollback/clear/new load took ownership): say
-      // nothing — its diagnostics would describe the WRONG site's state.
-      if (drawingEpoch !== sessionEpoch) return;
-      if (!drawing) {
-        // The gated second rebuild below can never run without the drawing —
-        // say so loudly instead of leaving stale traced roads rendering as
-        // bare strips with a clean console (undiagnosable from a screenshot).
-        if (siteHasStaleTracedRoads(get().siteAreas) ||
-            tracedRoadsBelowRules(get().layoutEdits.customRoads)) {
-          console.warn('[traced-heal] restore: no reference drawing found in browser storage, but this save carries traced roads below rules v' + TRACED_ROAD_RULES_V + ' — gate roads render from the stored records as-is. Re-import the site KMZ to restore the drawing.');
-        }
-        return;
-      }
-      set({
-        drawing,
-        drawingLayerVis: { ...defaultDrawingLayerVis(drawing), ...dropAnnotationVis(s.drawingLayerVis) },
-        showDrawing: s.showDrawing !== false,
-      });
-      // Sheet specs arrive AFTER the layout rebuild below: a stale project
-      // saved before traced ratings existed needs one more pass so per-area
-      // MW reflects the client's declared nameplate, not the catalog block
-      // rating. regenerateAreas applies the ratings in-memory; this second
-      // pass is a no-op for projects that already carry them.
-      const st = get();
-      // Stale traced roads re-derive FROM the drawing too, and the
-      // synchronous rebuild below ran before this IndexedDB read resolved —
-      // the heal saw no drawing and no-op'd, so a stale save's broken gate
-      // records would persist forever without this second pass.
-      if ((drawing.sheetSpecs && st.siteAreas.length &&
-          st.siteAreas.some(a => a.kind === 'bess' && editsNeedTracedRatings(a.edits?.layoutEdits))) ||
-          siteHasStaleTracedRoads(st.siteAreas) ||
-          tracedRoadsBelowRules(st.layoutEdits.customRoads)) {
-        console.info(`[traced-heal] restore: reference drawing loaded (${drawing.layers.length} layers) — re-running the layout under rules v${TRACED_ROAD_RULES_V}`);
-        // Single-area sessions have no siteAreas — their roads live in
-        // top-level layoutEdits and regenerateAreas() would be a no-op.
-        if (st.siteAreas.length > 1) get().regenerateAreas();
-        else get().regenerate();
-      }
-    });
+    const drawingP = loadDrawing();
     // Multi-area sessions lay out every footprint, then mirror the saved
     // active one; single-area sessions take the untouched legacy path.
     if (restoredAreas) get().regenerateAreas();
@@ -9096,6 +9057,45 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     // the restored site unless the user has opted out.
     if (get().showSatellite) void get().loadSatellite();
     void get().loadTerrain();
+    const drawing = await drawingP;
+    // Obsolete callback (a rollback/clear/new load took ownership): say
+    // nothing — its diagnostics would describe the WRONG site's state.
+    if (drawingEpoch !== sessionEpoch) return;
+    if (!drawing) {
+      // The gated second rebuild below can never run without the drawing —
+      // say so loudly instead of leaving stale traced roads rendering as
+      // bare strips with a clean console (undiagnosable from a screenshot).
+      if (siteHasStaleTracedRoads(get().siteAreas) ||
+          tracedRoadsBelowRules(get().layoutEdits.customRoads)) {
+        console.warn('[traced-heal] restore: no reference drawing found in browser storage, but this save carries traced roads below rules v' + TRACED_ROAD_RULES_V + ' — gate roads render from the stored records as-is. Re-import the site KMZ to restore the drawing.');
+      }
+      return;
+    }
+    set({
+      drawing,
+      drawingLayerVis: { ...defaultDrawingLayerVis(drawing), ...dropAnnotationVis(s.drawingLayerVis) },
+      showDrawing: s.showDrawing !== false,
+    });
+    // Sheet specs arrive AFTER the layout rebuild below: a stale project
+    // saved before traced ratings existed needs one more pass so per-area
+    // MW reflects the client's declared nameplate, not the catalog block
+    // rating. regenerateAreas applies the ratings in-memory; this second
+    // pass is a no-op for projects that already carry them.
+    const st = get();
+    // Stale traced roads re-derive FROM the drawing too, and the
+    // synchronous rebuild below ran before this IndexedDB read resolved —
+    // the heal saw no drawing and no-op'd, so a stale save's broken gate
+    // records would persist forever without this second pass.
+    if ((drawing.sheetSpecs && st.siteAreas.length &&
+        st.siteAreas.some(a => a.kind === 'bess' && editsNeedTracedRatings(a.edits?.layoutEdits))) ||
+        siteHasStaleTracedRoads(st.siteAreas) ||
+        tracedRoadsBelowRules(st.layoutEdits.customRoads)) {
+      console.info(`[traced-heal] restore: reference drawing loaded (${drawing.layers.length} layers) — re-running the layout under rules v${TRACED_ROAD_RULES_V}`);
+      // Single-area sessions have no siteAreas — their roads live in
+      // top-level layoutEdits and regenerateAreas() would be a no-op.
+      if (st.siteAreas.length > 1) get().regenerateAreas();
+      else get().regenerate();
+    }
   },
 
   dismissSavedSession: () => {
