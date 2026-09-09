@@ -52,7 +52,12 @@ try {
   assert.equal(satellite.status, 502);
   const body = JSON.stringify(await satellite.json());
   assert(!body.includes("CESIUM_ION_TOKEN"), "configuration and credential details must be sanitized");
-
+  assert(!body.includes("access_token"), "upstream query credentials must not appear in client errors");
+  assert(!body.includes("eyJ"), "JWT fragments must not appear in client errors");
+  assert(
+    seen.some(url => url.includes("api.cesium.com")),
+    "bundled Cesium token should authorize the ion imagery request"
+  );
   console.log("proxy-hardening: all assertions passed");
 } finally {
   globalThis.fetch = originalFetch;
