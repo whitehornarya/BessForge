@@ -102,8 +102,8 @@ No need to remove `ROW_JOG_SNAP` once the collector is on centerline.
 
 ## Todos
 
-- [ ] Restore `pcsUnderTap` / auto-row `mv-drop` collector to PCS centerline in `cableRouting.ts` (Direct/dogleg untouched)
-- [ ] Remove `dcRuns` from MV keep-outs / `crossesForbidden` / `cableKeepOutFrom` in **both** `feeders.ts` and `feedersPrescan.ts`
-- [ ] Keep scan comb + pre-scan snap / `autoMultiRow`; do not checkout `f08af7a` `feeders.ts`
-- [ ] Update tests (feeder-comb stays; add or adjust DC-keep-out / under-PCS hop checks)
+- [x] Restore `pcsUnderTap` / auto-row `mv-drop` collector to PCS centerline in `cableRouting.ts` (Direct/dogleg untouched)
+- [x] Remove `dcRuns` from MV keep-outs / `crossesForbidden` / `cableKeepOutFrom` in **both** `feeders.ts` and `feedersPrescan.ts`
+- [x] Keep scan comb + pre-scan snap / `autoMultiRow`; do not checkout `f08af7a` `feeders.ts`
+- [x] Update tests (feeder-comb stays; add or adjust DC-keep-out / under-PCS hop checks)
 - [ ] Smoke-check Big Iron + autofill: hops under PCS, Direct fans still visible
