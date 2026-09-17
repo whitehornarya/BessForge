@@ -1303,9 +1303,9 @@ export function generateFeeders(
     ...(design.aisles ?? []),
     ...(design.roads ?? []),
   ];
-  const dcRuns: Pt[][] = (design.cables ?? [])
-    .filter(c => c.class === 'DC' && !c.ref && (c.pts?.length ?? 0) >= 2)
-    .map(c => c.pts);
+  // Direct DC fans are not MV keep-outs: courtyard clusterRects already
+  // cover the PCS–battery zone, and DC polylines must not block the legal
+  // under-PCS channel.
   // Battery yards are HARD keep-outs for home runs. Built as one box per
   // pad so the 24 ft drive paths BETWEEN pads stay legal corridors. A single
   // site-wide can-box used to swallow those roads, after which the router
@@ -3511,9 +3511,9 @@ export function generateFeeders(
   }
   const angledRouted = new Set<number>();
 
-  // Already-routed trenches + DC (PCS↔battery) runs: fallback candidates are
-  // scored by transversal crossings against these, so a rerouted feeder
-  // turns toward the road instead of cutting a neighbor or a DC fan.
+  // Already-routed MV trenches: fallback candidates are scored by
+  // transversal crossings against these, so a rerouted feeder turns toward
+  // the road instead of cutting a neighbor. Direct DC is not scored here.
   const priorHomes: Pt[][] = [];
   const priorHops: Pt[][] = [];
   const properCross = (a: Pt, b: Pt, c: Pt, d2: Pt): boolean => {
@@ -3524,7 +3524,7 @@ export function generateFeeders(
   };
   const crossesForbidden = (pts: Pt[]): number => {
     let n = 0;
-    for (const other of [...priorHomes, ...priorHops, ...dcRuns]) {
+    for (const other of [...priorHomes, ...priorHops]) {
       for (let i = 0; i < pts.length - 1; i++) {
         for (let j = 0; j < other.length - 1; j++) {
           if (properCross(pts[i], pts[i + 1], other[j], other[j + 1])) n++;
@@ -3719,7 +3719,7 @@ export function generateFeeders(
         (p.rowGrammar || rowSnapped) ? [] : clusterRects,
         (p.rowGrammar || rowSnapped)
           ? []
-          : cableKeepOutFrom([...dcRuns, ...priorHops, ...priorHomes], [a, b]));
+          : cableKeepOutFrom([...priorHops, ...priorHomes], [a, b]));
       const A = hopNodeOf(a), B = hopNodeOf(b);
       // Recognized rows land on their canonical under-skid mv-collector
       // through the mv-drop-* endpoints. That collector is the one straight
@@ -3830,7 +3830,7 @@ export function generateFeeders(
       gateObsFrom(start),
       clusterRects,
       priorHomeKeep,
-      cableKeepOutFrom([...dcRuns, ...priorHops], [last], true));
+      cableKeepOutFrom([...priorHops], [last], true));
     // Run line: the feeder exits the yard from its chain end along its own
     // (staggered) run line, perpendicular to the lane stack.
     const runCoord = runCoordOf[gi];

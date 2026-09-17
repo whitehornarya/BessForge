@@ -3424,17 +3424,17 @@ async function main() {
           tracedPcsUnits: 2,
         } as any;
         const feedersDc = generateFeeders(designDc, { x: 200, y: 40 }, 5);
-        const homeCrossDc = feedersDc.some(f => {
-          const home = f.segments[f.segments.length - 1];
-          return home && polylinesCross(home.pts, dcFan);
-        });
+        const hopsDc = feedersDc.flatMap(f => f.segments.slice(0, -1));
+        const hopUnderRow = hopsDc.length >= 1 && hopsDc.every(seg =>
+          seg.pts.length === 2 &&
+          seg.pts.every(p => Math.abs(p.y) < 1e-6));
         const homesCrossEachOther = feedersDc.length >= 2 &&
           polylinesCross(
             feedersDc[0].segments[feedersDc[0].segments.length - 1].pts,
             feedersDc[1].segments[feedersDc[1].segments.length - 1].pts,
           );
-        check('[feeder-under] home runs do not cross the PCS–battery DC fan',
-          feedersDc.length >= 1 && !homeCrossDc);
+        check('[feeder-under] Direct DC fans do not shove under-PCS hops off the row',
+          feedersDc.length >= 1 && hopUnderRow);
         check('[feeder-under] home runs do not cross each other',
           feedersDc.length < 2 || !homesCrossEachOther);
 

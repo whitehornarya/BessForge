@@ -2484,17 +2484,15 @@ export function generateCableRouting(
     });
     return [world(faceLy), world(faceLy - f * busOffset)];
   };
-  // MV attach: aux-face tap → under-skid near the aux long edge (away from
-  // the container / doorEnd face). Centerline joins sit next to the battery
-  // courtyard, so feeder hops L-bend around bess/cluster keep-outs; an
-  // aux-edge collector keeps the trunk on the free side of the PCS.
+  // MV attach: aux-face tap → under-skid CENTERLINE (ly = 0). Courtyard
+  // clusterRects keep feeder hops out of the cans; do not park the collector
+  // on the aux long edge to dodge Direct DC fans.
   const pcsUnderTap = (inv: PlacedEquipment, endOffset: number): [Pt, Pt] => {
     const m = mirrorOf(inv);
     const f = inv.doorEnd ?? -1;
     const lx = m * (inv.length / 2 - endOffset);
     const faceLy = -f * inv.width / 2;
-    const EDGE_INSET_FT = 0.5;
-    const underLy = -f * (inv.width / 2 - EDGE_INSET_FT);
+    const underLy = 0;
     const cs = Math.cos(inv.rotation), sn = Math.sin(inv.rotation);
     const world = (ly: number): Pt => ({
       x: inv.x + lx * cs - ly * sn,
@@ -2599,8 +2597,7 @@ export function generateCableRouting(
             [fiberTap, fiberBusTap, { x: fiberBusTap.x, y: fiberY }]);
         }
       } else if (!tracedInvIds.has(inv.id)) {
-        // Same aux-edge under-skid join as traced pcsUnderTap — landing at
-        // inv.y (centerline) puts the feeder hop next to the battery yard.
+        // Same under-skid centerline join as traced pcsUnderTap.
         const [mvTap, mvUnder] = pcsUnderTap(inv, 1.2);
         addRun(`mv-drop-${inv.id}`, 'MV', [mvTap, mvUnder]);
         if (!rowVerticalTraced) {
@@ -2615,9 +2612,8 @@ export function generateCableRouting(
   });
 
   // Drawing-traced PCS MV starts on the local aux/MV end opposite the DC fan
-  // and joins a collector under the PCS near the aux long edge (not the
-  // centerline, and not a parallel offset beside the aux face). This pass
-  // replaces the legacy world-Y row buses only for orphan-owned/traced blocks.
+  // and joins a collector under the PCS centerline. This pass replaces the
+  // legacy world-Y row buses only for orphan-owned/traced blocks.
   {
     type MvTap = {
       inv: PlacedEquipment;

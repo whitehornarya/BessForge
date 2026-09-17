@@ -6873,6 +6873,35 @@ export default function DesignScene() {
     setViewModeRaw(m);
     try { localStorage.setItem('nextera-view-mode', m); } catch { /* private mode */ }
   }, []);
+  const setBusyOverlay = useDesignStore(s => s.setBusyOverlay);
+  const busyOverlay = useDesignStore(s => s.busyOverlay);
+  // Toolbar 3D ↔ CAD (and 2D) remounts a lot of scene content. Paint the
+  // shared busy overlay first so the click does not look frozen, then hold
+  // it until loaders settle. Programmatic setViewMode (tours, stills) stays
+  // instant so those sequences are not interrupted.
+  const switchViewMode = useCallback((m: '3d' | '2d' | 'cad') => {
+    if (m === viewMode) return;
+    void (async () => {
+      const label = m === 'cad' ? 'Loading CAD view…'
+        : m === '2d' ? 'Loading 2D plan…'
+        : 'Loading 3D view…';
+      if (useDesignStore.getState().busyOverlay) return;
+      setBusyOverlay({ label });
+      const paint = () => new Promise<void>(r =>
+        requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      await paint();
+      try {
+        if (m !== '3d') useDesignStore.getState().setWalkMode(false);
+        setViewMode(m);
+        await paint();
+        await waitForSceneReady({ settleMs: 250, timeoutMs: 10000 });
+      } finally {
+        if (useDesignStore.getState().busyOverlay?.label === label) {
+          setBusyOverlay(null);
+        }
+      }
+    })();
+  }, [viewMode, setViewMode, setBusyOverlay]);
   // Cinematic tours may temporarily stage CAD groups, but ordinary CAD
   // visibility comes only from the project-wide drawing profile.
   const tourCadLayers = useDesignStore(s => s.tourCadLayers);
@@ -8817,21 +8846,24 @@ export default function DesignScene() {
           </button>
           )}
           <button
-            onClick={() => setViewMode('3d')}
-            className={`px-3 py-1.5 text-xs font-semibold ${viewMode === '3d' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+            onClick={() => switchViewMode('3d')}
+            disabled={!!busyOverlay}
+            className={`px-3 py-1.5 text-xs font-semibold disabled:opacity-60 ${viewMode === '3d' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
           >
             3D
           </button>
           <button
-            onClick={() => { if (walkMode) setWalkMode(false); setViewMode('cad'); }}
+            onClick={() => switchViewMode('cad')}
+            disabled={!!busyOverlay}
             title="CAD drawing view: the exported DXF linework (layers, labels, dims, sheet frame) rendered in the interactive 3D scene — orbit, edit and realistic models all work; exports are unaffected"
-            className={`px-3 py-1.5 text-xs font-semibold border-r border-slate-600 ${viewMode === 'cad' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+            className={`px-3 py-1.5 text-xs font-semibold border-r border-slate-600 disabled:opacity-60 ${viewMode === 'cad' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
           >
             CAD
           </button>
           <button
-            onClick={() => { if (walkMode) setWalkMode(false); setViewMode('2d'); }}
-            className={`px-3 py-1.5 text-xs font-semibold ${viewMode === '2d' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+            onClick={() => switchViewMode('2d')}
+            disabled={!!busyOverlay}
+            className={`px-3 py-1.5 text-xs font-semibold disabled:opacity-60 ${viewMode === '2d' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
           >
             2D Plan
           </button>
