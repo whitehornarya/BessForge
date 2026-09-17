@@ -25,6 +25,14 @@ import { assetUrl } from '../lib/assetUrl';
 import { YARD_TEXTURE_SETS } from '../lib/textureSets';
 import { GE_PCS_GREEN } from '../lib/pcsRecolor';
 import { saveBlob } from '../lib/saveFile';
+import {
+  LEGACY_TEMPLATE_CONTRACT,
+  buildLegacyLayoutExport,
+  legacyArtifactToBlob,
+  LegacyExportValidationError,
+  formatLegacyValidationIssues,
+  type CadExportProfile,
+} from '../lib/nextera/legacyDxfExport';
 import { terrainLocalRect, terrainCoverageBbox, computeSlopeGrid, computeCutFill, findSteepZones, computeGradingTieIn, pickContourInterval, SteepZoneReport, CutFillEstimate } from '../lib/nextera/terrain';
 import { buildFgSurface, ZONE_MIN_SIZE_FT, ZONE_MAX_SIZE_FT } from '../lib/nextera/gradingSurface';
 import { buildDrainageModel, drainageSurfacesFromDesign, DRAINAGE_NUM_LIMITS, DrainageNumericKey, DrainageInputs } from '../lib/nextera/drainage';
@@ -1830,6 +1838,23 @@ export default function DesignControlPanel() {
     warnRoutingGatesForExport();
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
     try {
+      if (cadProfile === LEGACY_TEMPLATE_CONTRACT.id) {
+        const routed = buildLegacyLayoutExport(
+          cadProfile,
+          { design, titleBlock, feeders, substation },
+          { filename: `${exportName}_Legacy_Layout.dxf` },
+        );
+        if (!routed.handled) {
+          toast.error('Legacy DXF routing failed');
+          return;
+        }
+        const saved = await saveBlob(
+          legacyArtifactToBlob(routed.artifact),
+          routed.artifact.filename,
+        );
+        if (saved) toast.success('Legacy DXF exported (page 2 layout)');
+        return;
+      }
       const contours = await computeExportContours(design);
       // DXF string is built in the design worker so a 150+ block sheet
       // (~1 MB of entities) never stalls the UI thread.
@@ -1841,6 +1866,11 @@ export default function DesignControlPanel() {
       if (saved) toast.success(siteExportInput ? `DXF exported — ${exportScopeLabel}` : 'DXF exported');
     } catch (e: any) {
       if (e instanceof SupersededError) return;
+      if (e instanceof LegacyExportValidationError) {
+        console.error(formatLegacyValidationIssues(e.issues));
+        toast.error(e.message, { duration: 12_000 });
+        return;
+      }
       toast.error(`DXF export failed: ${e?.message ?? 'unknown error'}`);
     }
   };
@@ -1879,12 +1909,48 @@ export default function DesignControlPanel() {
         siteExportInput,
         drawingVisibility
       );
+
       const JSZip = (await import('jszip')).default;
       const zip = new JSZip();
+      const { MECH_DRAWING_PAGES } = await import('@/lib/nextera/mechDrawings');
+
+      if (cadProfile === LEGACY_TEMPLATE_CONTRACT.id) {
+        // Cover unchanged + Legacy page-2 layout; specialty SLD/BOM kept when opted in.
+        const coverSheets = sheets.filter(s => s.filename.includes('Cover_Sheet'));
+        const specialty = includeSldBom
+          ? sheets.filter(s =>
+            s.filename.includes('Single_Line_Diagram') ||
+            s.filename.includes('Bill_of_Materials'))
+          : [];
+        const routed = buildLegacyLayoutExport(
+          cadProfile,
+          { design, titleBlock, feeders, substation },
+          { filename: `${exportName}_Legacy_Layout.dxf` },
+        );
+        if (!routed.handled) {
+          toast.error('Legacy DXF routing failed');
+          return;
+        }
+        coverSheets.forEach(s => zip.file(s.filename, s.content));
+        zip.file(`02_${routed.artifact.filename}`, routed.artifact.bytes);
+        specialty.forEach((s, i) => {
+          const n = String(i + 3).padStart(2, '0');
+          const tag = s.filename.replace(/^\d+_/, '');
+          zip.file(`${n}_${tag}`, s.content);
+        });
+        MECH_DRAWING_PAGES.forEach(p =>
+          zip.file(`Reference_Drawings/${p.filename}`, p.jpegBase64, { base64: true })
+        );
+        const blob = await zip.generateAsync({ type: 'blob' });
+        const sheetCount = coverSheets.length + 1 + specialty.length;
+        const saved = await saveBlob(blob, `${exportName}_Legacy_DXF_Package_${new Date().toISOString().slice(0, 10)}.zip`);
+        if (saved) toast.success(`Legacy DXF package exported (${sheetCount} sheets + ${MECH_DRAWING_PAGES.length} reference drawings)`);
+        return;
+      }
+
       sheets.forEach(s => zip.file(s.filename, s.content));
       // Include the ORIGINAL manufacturer mechanical drawing sheets (LG MC01
       // package) as CAD-attachable reference plates alongside the DXFs.
-      const { MECH_DRAWING_PAGES } = await import('@/lib/nextera/mechDrawings');
       MECH_DRAWING_PAGES.forEach(p =>
         zip.file(`Reference_Drawings/${p.filename}`, p.jpegBase64, { base64: true })
       );
@@ -1893,6 +1959,11 @@ export default function DesignControlPanel() {
       if (saved) toast.success(`DXF package exported (${sheets.length} sheets + ${MECH_DRAWING_PAGES.length} reference drawings)`);
     } catch (e: any) {
       if (e instanceof SupersededError) return;
+      if (e instanceof LegacyExportValidationError) {
+        console.error(formatLegacyValidationIssues(e.issues));
+        toast.error(e.message, { duration: 12_000 });
+        return;
+      }
       toast.error(`DXF package export failed: ${e?.message ?? 'unknown error'}`);
     }
   };
@@ -2129,6 +2200,7 @@ export default function DesignControlPanel() {
   // Opt-in: append the SLD + BOM sheets to the one-click DXF package and PDF
   // plot set. OFF by default so both exports stay byte-identical.
   const [includeSldBom, setIncludeSldBom] = useState(false);
+  const [cadProfile, setCadProfile] = useState<CadExportProfile>('current');
   // Opt-in "Issued for 10%" reference-style cover on package / plot exports.
   const [issuedFor10, setIssuedFor10] = useState(false);
   // Per-image label removal for the cover's 3D renders: equipment labels can
@@ -6877,12 +6949,26 @@ export default function DesignControlPanel() {
             </div>
           </div>
         )}
+        <label className="block mb-2 text-sm text-slate-300">
+          <span className="text-xs uppercase tracking-wide text-slate-400">CAD profile</span>
+          <select
+            value={cadProfile}
+            onChange={e => setCadProfile(e.target.value as CadExportProfile)}
+            className="mt-1 w-full rounded bg-slate-800 border border-slate-600 px-2 py-1.5 text-sm text-slate-200"
+            title="Current keeps the BessForge DXF composer. Legacy routes the page-2 BESS layout through the ECI legacy template."
+          >
+            <option value="current">Current BESSForge CAD</option>
+            <option value={LEGACY_TEMPLATE_CONTRACT.id}>{LEGACY_TEMPLATE_CONTRACT.label}</option>
+          </select>
+        </label>
         <button
           onClick={handleExport}
           disabled={!design}
           className="w-full py-2.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed font-semibold text-sm"
         >
-          {siteAreas.length > 1 ? `Export DXF — ${exportScopeLabel}` : 'Export DXF'}
+          {cadProfile === LEGACY_TEMPLATE_CONTRACT.id
+            ? 'Export Legacy DXF (page 2 layout)'
+            : siteAreas.length > 1 ? `Export DXF — ${exportScopeLabel}` : 'Export DXF'}
         </button>
         <button
           onClick={handleExportDxfPdf}

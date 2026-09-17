@@ -1,0 +1,312 @@
+import {
+  CAR_D_B005_1_CALIBRATION_PROFILE,
+} from './constants.js';
+import {
+  CRL_SUBSTATION_TRACE_FACTS,
+  type CrlSubstationLayerKey,
+} from './crlSubstationTrace.js';
+import type { CableClass, TrenchClass } from './types.js';
+import type {
+  LayerDefinition, LineTypeDefinition, TextStyleDefinition,
+} from './writer.js';
+
+export const CAR_D_B005_1_SOURCE_FACTS = Object.freeze({
+  evidenceKind: 'verified-dwg-metadata-and-bound-geometry',
+  archive: Object.freeze({
+    sha256: '44e5a92de04ad5da45d87b69ec7adb0bb37f2fca9248895682859479363eecd4',
+    bytes: 150076875,
+    entries: 80,
+    zipIntegrity: 'passed',
+  }),
+  host: Object.freeze({
+    filename: 'CAR-D-B005-0.dwg',
+    sha256: 'cf2f29d43cbe3a4f51515259daf9723f0190455f151288d1af51aa833b6034b5',
+    bytes: 570115,
+    format: 'AC1032',
+    units: Object.freeze({
+      insertionUnits: 2,
+      insertionUnitName: 'feet',
+      linearUnits: 2,
+      linearPrecision: 3,
+      lineTypeScale: 1,
+      paperSpaceLineTypeScale: 1,
+      tileMode: 0,
+    }),
+    layouts: Object.freeze([
+      'Model', 'CAR-D-B005-0', 'CAR-D-B005-1', 'CAR-D-B005-2', 'B005 basic info',
+    ]),
+  }),
+  xrefs: Object.freeze({
+    bess: Object.freeze({
+      filename: 'CAR BESS - xref.dwg',
+      sha256: '078d532ae4d36740c68eb2a059edbada6b32f24000df0e12b11d67ba9f75b6a5',
+      bytes: 3486159,
+    }),
+    landbase: Object.freeze({
+      filename: 'CAR MAP3D CO83-CF landbase - xref.dwg',
+      sha256: 'ed8288f08c38eff20781e555deadc4adcba4af4ca3b5699d469e9daa807ae008',
+      bytes: 2008622,
+    }),
+  }),
+  boundSources: Object.freeze({
+    crlExistingSubstation: CRL_SUBSTATION_TRACE_FACTS,
+  }),
+  layout: Object.freeze({
+    name: 'CAR-D-B005-1',
+    media: 'ANSI_full_bleed_D_(34.00_x_22.00_Inches)',
+    widthIn: 34,
+    heightIn: 22,
+    widthMm: 863.5999756,
+    heightMm: 558.7999878,
+    marginsIn: Object.freeze({ left: 0, bottom: 0, right: 0, top: 0 }),
+    rotation: 0,
+    plotType: 5,
+    paperUnits: 1,
+    drawingUnits: 1,
+    standardScaleType: 16,
+    paperScale: 1,
+    printer: 'DWG To PDF.pc3',
+    stylesheet: 'ECI D BESS-COLOR.ctb',
+    plotFlags: 752,
+    shadePlotType: 0,
+    shadePlotResolutionLevel: 2,
+    customDpi: 300,
+  }),
+  mainPlanViewport: Object.freeze({
+    centerIn: Object.freeze([14.09216272501403, 12] as const),
+    widthIn: 23.10932545002807,
+    heightIn: 18.8,
+    viewHeightFt: 375.99365776840534,
+    target: Object.freeze([2285513.310256527, 13718055.363680616, 0] as const),
+    paperPlanBoxIn: Object.freeze({
+      left: 2.5375,
+      bottom: 2.6,
+      right: 25.64682545002807,
+      top: 21.4,
+    }),
+  }),
+  legendColumnIn: Object.freeze({ left: 28.5, right: 33.5 }),
+  plottedEvidence: Object.freeze({
+    fonts: Object.freeze(['Arial', 'Arial Italic']),
+    exactPlotParityBlockedByMissingCtb: true,
+  }),
+  provenance: Object.freeze({
+    direct: Object.freeze([
+      'archive integrity, byte sizes, and SHA-256 values',
+      'host DWG format, units, layout names, and CAR-D-B005-1 plot settings',
+      'host and BESS xref LAYER, LTYPE, and STYLE table records',
+      'CAR-D-B005-1 viewport center, size, view height, and geographic target',
+      'bound CRL-XREF EXI block, layer, insert, and model-space entity records from the Carousel layout drawing',
+    ]),
+    derived: Object.freeze([
+      'paperPlanBoxIn is centerIn plus or minus one half of viewport width and height',
+      'normalized logical input classes are mapped onto source table records',
+      'the CRL substation schematic is a normalized 2D trace of the resolved main bound-source cluster',
+    ]),
+    retainedFallbacks: Object.freeze([
+      'sheet border, title block, legend symbols, and north arrow remain package-composed because the project border xref is unresolved',
+      'property, laydown, trench, match-line, callout, and detail layers retain package conventions where no direct source record was established',
+    ]),
+  }),
+  unresolvedDependencies: Object.freeze([
+    'ECI project border.dwg',
+    'CRL-XREF.dwg',
+    'original unbound CRL-XREF EXI.dwg (visible bound geometry recovered from Carousel layout)',
+    'ECI D BESS-COLOR.ctb',
+    'simplex.shx',
+    'romans.shx',
+    'ltypeshp.shx',
+  ]),
+});
+
+export const CAR_D_B005_1_SOURCE_LAYERS = Object.freeze({
+  FRAME: 'TB1',
+  TITLE: 'Title Block',
+  TEXT_SM: 'text-sm',
+  TEXT_MD: 'text-md',
+  TEXT_LG: 'text-lg',
+  FENCE: 'fence',
+  FENCE_ADJACENT: 'fence - adjacent substation',
+  FENCE_PROJECT: '-layout fence - NP',
+  PROPERTY: 'property line',
+  EQUIPMENT: 'EQUIP - equip main overall size',
+  EQUIPMENT_LABEL: 'EQUIP - Labels',
+  FUTURE: 'EQUIP - future augment',
+  FUTURE_INVERTER: 'EQUIP - future project planning',
+  EXCLUSION: 'EQUIP - exclusion zone',
+  LAYDOWN: 'SITE - laydown area',
+  ROAD: 'A - Equipment access',
+  ROAD_HATCH: 'Hatch - road proposed',
+  ROAD_EXISTING: 'Hatch - road exist',
+  SURFACING: 'HATCH',
+  TRENCH_MVAC: 'TRENCH - MVAC',
+  TRENCH_DC: 'TRENCH - DC',
+  TRENCH_AUX: 'TRENCH - AUX FIBER',
+  MATCH: 'MATCH LINE',
+  CALLOUT: 'CALL OUT',
+  DETAIL: 'DETAIL MARKER',
+  FEEDER_14A1: 'conduit - Feeder 14A1',
+  FEEDER_14A2: 'conduit - Feeder 14A2',
+  FEEDER_14B1: 'conduit - Feeder 14B1',
+  FEEDER_14B2: 'conduit - Feeder 14B2',
+  FEEDER_15A1: 'conduit - Feeder 15A1',
+  FEEDER_15A2: 'conduit - Feeder 15A2',
+  FEEDER_15B1: 'conduit - Feeder 15B1',
+  FEEDER_15B2: 'conduit - Feeder 15B2',
+  AUX_FEEDER: 'conduit - Aux Feeder 15C1',
+  DC_NEGATIVE: 'conduit - DC -',
+  DC_POSITIVE: 'conduit - DC +',
+  FIBER: 'conduit - Fiber - 6-COUNT',
+});
+
+export const CAR_D_B005_1_SOURCE_CABLE_LAYERS: Readonly<Record<CableClass, string>> = Object.freeze({
+  'bess-feeder-14a1': CAR_D_B005_1_SOURCE_LAYERS.FEEDER_14A1,
+  'bess-feeder-14a2': CAR_D_B005_1_SOURCE_LAYERS.FEEDER_14A2,
+  'bess-feeder-14b1': CAR_D_B005_1_SOURCE_LAYERS.FEEDER_14B1,
+  'bess-feeder-14b2': CAR_D_B005_1_SOURCE_LAYERS.FEEDER_14B2,
+  'bess-feeder-15a1': CAR_D_B005_1_SOURCE_LAYERS.FEEDER_15A1,
+  'bess-feeder-15a2': CAR_D_B005_1_SOURCE_LAYERS.FEEDER_15A2,
+  'bess-feeder-15b1': CAR_D_B005_1_SOURCE_LAYERS.FEEDER_15B1,
+  'bess-feeder-15b2': CAR_D_B005_1_SOURCE_LAYERS.FEEDER_15B2,
+  'aux-feeder': CAR_D_B005_1_SOURCE_LAYERS.AUX_FEEDER,
+  'dc-negative': CAR_D_B005_1_SOURCE_LAYERS.DC_NEGATIVE,
+  'dc-positive': CAR_D_B005_1_SOURCE_LAYERS.DC_POSITIVE,
+  fiber: CAR_D_B005_1_SOURCE_LAYERS.FIBER,
+});
+
+export const CAR_D_B005_1_SOURCE_TRENCH_LAYERS: Readonly<Record<TrenchClass, string>> = Object.freeze({
+  mvac: CAR_D_B005_1_SOURCE_LAYERS.TRENCH_MVAC,
+  dc: CAR_D_B005_1_SOURCE_LAYERS.TRENCH_DC,
+  'aux-fiber': CAR_D_B005_1_SOURCE_LAYERS.TRENCH_AUX,
+});
+
+export const CAR_D_B005_1_CRL_SUBSTATION_LAYERS: Readonly<Record<CrlSubstationLayerKey, string>> =
+  Object.freeze({
+    fence: 'CRL-XREF EXI$0$fence',
+    'fence-removal': 'CRL-XREF EXI$0$Fence Removal',
+    road: 'CRL-XREF EXI$0$road inside station',
+    foundation: 'CRL-XREF EXI$0$foundation',
+    'foundation-hidden': 'CRL-XREF EXI$0$foundation hidden',
+    conductor: 'CRL-XREF EXI$0$station conductor',
+    'station-bus': 'CRL-XREF EXI$0$station bus low',
+    equipment: 'CRL-XREF EXI$0$station physical equipment',
+    'steel-misc': 'CRL-XREF EXI$0$steel misc',
+    'steel-tubular': 'CRL-XREF EXI$0$steel tubular',
+    'control-house': 'CRL-XREF EXI$0$control house outline',
+    'control-house-stoop': 'CRL-XREF EXI$0$control house stoop',
+    pullbox: 'CRL-XREF EXI$0$pullbox',
+  });
+
+export const CAR_D_B005_1_CRL_SUBSTATION_LINE_TYPES: readonly LineTypeDefinition[] =
+  Object.freeze([
+    Object.freeze({
+      name: 'CRL-XREF EXI$0$HIDDEN2',
+      description: 'Hidden (.5x) _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _',
+      elements: Object.freeze([0.125, -0.0625]),
+    }),
+  ]);
+
+export const CAR_D_B005_1_CRL_SUBSTATION_LAYER_DEFINITIONS: readonly LayerDefinition[] =
+  Object.freeze([
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS.fence, color: 253, lineType: 'Continuous', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS['fence-removal'], color: 253, lineType: 'CRL-XREF EXI$0$HIDDEN2', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS.road, color: 253, lineType: 'Continuous', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS.foundation, color: 253, lineType: 'Continuous', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS['foundation-hidden'], color: 253, lineType: 'CRL-XREF EXI$0$HIDDEN2', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS.conductor, color: 253, lineType: 'Continuous', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS['station-bus'], color: 253, lineType: 'Continuous', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS.equipment, color: 253, lineType: 'Continuous', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS['steel-misc'], color: 253, lineType: 'Continuous', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS['steel-tubular'], color: 253, lineType: 'Continuous', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS['control-house'], color: 253, lineType: 'Continuous', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS['control-house-stoop'], color: 253, lineType: 'Continuous', lineWeight: -3 },
+    { name: CAR_D_B005_1_CRL_SUBSTATION_LAYERS.pullbox, color: 253, lineType: 'Continuous', lineWeight: -3 },
+  ].map(layer => Object.freeze(layer)));
+
+export const CAR_D_B005_1_SOURCE_LINE_TYPES: readonly LineTypeDefinition[] = Object.freeze([
+  Object.freeze({
+    name: 'HIDDEN2',
+    description: '_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _',
+    elements: Object.freeze([0.125, -0.0625]),
+  }),
+  Object.freeze({
+    name: 'DIVIDE2',
+    description: 'Divide (.5x) __..__..__..__..__..__..__..__.._',
+    elements: Object.freeze([0.25, -0.125, 0, -0.125, 0, -0.125]),
+  }),
+]);
+
+export const CAR_D_B005_1_SOURCE_TEXT_STYLES: readonly TextStyleDefinition[] = Object.freeze([
+  Object.freeze({ name: 'ECIS8', fontFile: 'simplex.shx', widthFactor: 0.8, lastHeight: 0.1 }),
+  Object.freeze({
+    name: 'ECIS8-MD',
+    fontFile: 'simplex.shx',
+    widthFactor: 0.8,
+    lastHeight: 0.1,
+  }),
+  Object.freeze({ name: 'Legend', fontFile: 'calibri.ttf', lastHeight: 0.2 }),
+  Object.freeze({ name: 'Stamp Text', fontFile: 'arial.ttf', lastHeight: 0.25 }),
+]);
+
+export const CAR_D_B005_1_SOURCE_LAYER_DEFINITIONS: readonly LayerDefinition[] = Object.freeze([
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FRAME, color: 7, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.TITLE, color: 7, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.TEXT_SM, color: 7, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.TEXT_MD, color: 6, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.TEXT_LG, color: 14, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FENCE, color: 2, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FENCE_ADJACENT, color: 252, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FENCE_PROJECT, color: 2, lineType: 'DASHED2', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.PROPERTY, color: 6, lineType: 'DIVIDE2', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.EQUIPMENT, color: 2, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.EQUIPMENT_LABEL, color: 4, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FUTURE, color: 227, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FUTURE_INVERTER, color: 252, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.EXCLUSION, color: 62, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.LAYDOWN, color: 9, lineType: 'DOT', lineWeight: 13 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.ROAD, color: 4, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.ROAD_HATCH, color: 254, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.ROAD_EXISTING, color: 251, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.SURFACING, color: 4, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.TRENCH_MVAC, color: 8, lineType: 'DASHED', lineWeight: 13 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.TRENCH_DC, color: 8, lineType: 'DASHED2', lineWeight: 13 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.TRENCH_AUX, color: 8, lineType: 'DASHDOT', lineWeight: 13 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.MATCH, color: 7, lineType: 'DASHED', lineWeight: 25 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.CALLOUT, color: 7, lineType: 'Continuous', lineWeight: 13 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.DETAIL, color: 7, lineType: 'Continuous', lineWeight: 18 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FEEDER_14A1, color: 61, lineType: 'HIDDEN2', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FEEDER_14A2, color: 201, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FEEDER_14B1, color: 201, lineType: 'HIDDEN2', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FEEDER_14B2, color: 231, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FEEDER_15A1, color: 161, lineType: 'HIDDEN2', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FEEDER_15A2, color: 131, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FEEDER_15B1, color: 231, lineType: 'HIDDEN2', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FEEDER_15B2, color: 61, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.AUX_FEEDER, color: 21, lineType: 'HIDDEN2', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.DC_NEGATIVE, color: 132, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.DC_POSITIVE, color: 242, lineType: 'Continuous', lineWeight: -3 },
+  { name: CAR_D_B005_1_SOURCE_LAYERS.FIBER, color: 42, lineType: 'HIDDEN2', lineWeight: -3 },
+].map(layer => Object.freeze(layer)));
+
+export const CAR_D_B005_1_SOURCE_PROFILE = Object.freeze({
+  id: CAR_D_B005_1_CALIBRATION_PROFILE,
+  facts: CAR_D_B005_1_SOURCE_FACTS,
+  layers: CAR_D_B005_1_SOURCE_LAYERS,
+  cableLayers: CAR_D_B005_1_SOURCE_CABLE_LAYERS,
+  trenchLayers: CAR_D_B005_1_SOURCE_TRENCH_LAYERS,
+  layerDefinitions: CAR_D_B005_1_SOURCE_LAYER_DEFINITIONS,
+  lineTypes: CAR_D_B005_1_SOURCE_LINE_TYPES,
+  textStyles: CAR_D_B005_1_SOURCE_TEXT_STYLES,
+  textStyleByLayer: Object.freeze({
+    [CAR_D_B005_1_SOURCE_LAYERS.TEXT_SM]: 'ECIS8',
+    [CAR_D_B005_1_SOURCE_LAYERS.TEXT_MD]: 'ECIS8-MD',
+    [CAR_D_B005_1_SOURCE_LAYERS.TEXT_LG]: 'Legend',
+    [CAR_D_B005_1_SOURCE_LAYERS.EQUIPMENT_LABEL]: 'ECIS8',
+  }),
+  statusStampTextStyle: 'Stamp Text',
+  sourceSubstation: Object.freeze({
+    layers: CAR_D_B005_1_CRL_SUBSTATION_LAYERS,
+    layerDefinitions: CAR_D_B005_1_CRL_SUBSTATION_LAYER_DEFINITIONS,
+    lineTypes: CAR_D_B005_1_CRL_SUBSTATION_LINE_TYPES,
+  }),
+});
