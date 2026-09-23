@@ -3338,9 +3338,9 @@ export default function DesignControlPanel() {
           <div className="bg-slate-800 rounded p-3 text-sm">
             {manualYard ? (
               <p className="text-xs text-slate-300 leading-relaxed">
-                The site shows the property line, fence, and imported drawing.
-                Drag the block on the site to move it around. The drag stays on
-                screen for this session.
+                The site shows the property line and fence. Drag the block on
+                the site to move it around. The drag stays on screen for this
+                session.
               </p>
             ) : (
               <p className="text-xs text-slate-300 leading-relaxed">

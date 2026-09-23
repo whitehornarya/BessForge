@@ -23,7 +23,7 @@ Saved projects that do not carry `yardAuthoring: 'manual'` keep today’s auto-l
 ## Decisions
 
 - The palette is individual units: PCS, one battery container, and the existing aux items. Composed islands stay on Edit Layout.
-- After “show all areas,” each BESS footprint is the property line, fence, and imported KMZ linework. No auto equipment or roads.
+- After “show all areas,” each BESS footprint shows the property line and fence only. The imported drawing stays loaded for scan and is hidden during this phase. No auto equipment or roads.
 - The placement chrome lives in the sidebar, not on the scene. The section is **Manual Placement**, same heading style as the other tabs.
 - **Auto-fill from drawing** / **Scan drawing** is duplicated at the bottom of that tab so it reads as the next step. The original control stays on Site Boundary.
 
@@ -31,7 +31,7 @@ Saved projects that do not carry `yardAuthoring: 'manual'` keep today’s auto-l
 
 After a KMZ is uploaded and areas are chosen, the sidebar opens **Manual Placement** in [`DesignControlPanel.tsx`](../client/src/components/DesignControlPanel.tsx) (`PANEL_SECTIONS`). There is no scene toolbar for this step.
 
-New imports set `yardAuthoring: 'manual'` on [`LayoutConstraints`](../client/src/lib/nextera/layoutEngine.ts) for each BESS area, from `applyBoundary` and `chooseAllBoundariesWithProgress` in [`useDesignStore.ts`](../client/src/lib/stores/useDesignStore.ts). [`generateSiteDesign`](../client/src/lib/nextera/layoutEngine.ts) draws the fence and leaves the imported KMZ linework to the existing drawing overlay. It does not run the block packer, interior roads, augmentation, surfacing, DC cables, or MV feeders. Substation areas keep their current yard.
+New imports set `yardAuthoring: 'manual'` on [`LayoutConstraints`](../client/src/lib/nextera/layoutEngine.ts) for each BESS area, from `applyBoundary` and `chooseAllBoundariesWithProgress` in [`useDesignStore.ts`](../client/src/lib/stores/useDesignStore.ts). [`generateSiteDesign`](../client/src/lib/nextera/layoutEngine.ts) draws the fence, and the scene draws the property line. The imported KMZ linework stays loaded for scan but is hidden while `yardAuthoring` is `'manual'`. The layout does not run the block packer, interior roads, augmentation, surfacing, DC cables, or MV feeders. Substation areas keep their current yard.
 
 One placeholder block can be dragged on the site. That drag is local to [`DesignScene.tsx`](../client/src/components/DesignScene.tsx) and does not write `placedEquipment`.
 

@@ -1316,8 +1316,11 @@ function DrawingLayerLines({ layer, color, y }: { layer: DrawingLayer; color: st
 function ImportedDrawingLayers() {
   const drawing = useDesignStore(s => s.drawing);
   const showDrawing = useDesignStore(s => s.showDrawing);
+  const manualYard = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
   const layerVis = useDesignStore(s => s.drawingLayerVis);
-  if (!drawing || !showDrawing) return null;
+  // Manual placement starts as fence + property line only. The drawing stays
+  // loaded so Scan drawing can still read it.
+  if (!drawing || !showDrawing || manualYard) return null;
   return (
     <group>
       {drawing.layers.map((layer, i) =>
