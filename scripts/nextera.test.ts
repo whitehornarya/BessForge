@@ -258,6 +258,38 @@ async function loadBigIronAreas(): Promise<ReturnType<typeof parseKmlAreas>> {
 }
 
 async function main() {
+  {
+    console.log('\n[0] Manual authoring yard');
+    const side = 1600;
+    const h = side / 2;
+    const poly: Pt[] = [{ x: -h, y: -h }, { x: h, y: -h }, { x: h, y: h }, { x: -h, y: h }];
+    const square: SiteBoundary = {
+      name: 'MANUAL SQUARE',
+      polygon: poly,
+      origin: { lat: 29.35, lon: -99.14 },
+      areaAcres: Math.abs(polygonArea(poly)) / 43560,
+    };
+    const cfg = getConfiguration('ge-aux-400');
+    const manual = generateSiteDesign(square, cfg, 100, 400, {
+      hotClimate: true,
+      constraints: { yardAuthoring: 'manual' },
+    });
+    const auto = generateSiteDesign(square, cfg, 20, 80, { hotClimate: true });
+    const fence = fencePolygonFor(poly);
+    check('[manual yard] no equipment', manual.equipment.length === 0, `${manual.equipment.length} items`);
+    check('[manual yard] no roads',
+      manual.roads.length === 0 && manual.aisles.length === 0 && manual.roadNetwork === null && manual.gate === null,
+      `roads ${manual.roads.length}, aisles ${manual.aisles.length}`);
+    check('[manual yard] no cables or surfacing',
+      manual.cables.length === 0 && manual.trench === null && manual.surfacing === null,
+      `cables ${manual.cables.length}`);
+    check('[manual yard] keeps the inset fence',
+      manual.fence.length === fence.length && manual.fence.every((p, i) => p.x === fence[i].x && p.y === fence[i].y),
+      `${manual.fence.length} vertices`);
+    check('[manual yard] leaves an unflagged layout populated', auto.equipment.length > 0 && auto.blocksPlaced > 0,
+      `${auto.blocksPlaced} blocks`);
+  }
+
   const HONDO_KMZ = path.resolve(
     'attached_assets/Hondo_100MW_with_Parcel_-_Final_1784325593748.kmz'
   );
@@ -384,6 +416,22 @@ async function main() {
     `${design.achievedMW} MW / ${design.achievedMWh} MWh`
   );
   check('no capacity warning emitted', !design.warnings.some(w => w.includes('can only fit')), design.warnings.join('; '));
+
+  {
+    const manual = generateSiteDesign(hondo, config, 100, 400, {
+      hotClimate: true,
+      constraints: { yardAuthoring: 'manual' },
+    });
+    check('[manual yard] no equipment', manual.equipment.length === 0, `${manual.equipment.length} items`);
+    check('[manual yard] no roads',
+      manual.roads.length === 0 && manual.aisles.length === 0 && manual.roadNetwork === null && manual.gate === null,
+      `roads ${manual.roads.length}, aisles ${manual.aisles.length}`);
+    check('[manual yard] no cables or surfacing',
+      manual.cables.length === 0 && manual.trench === null && manual.surfacing === null,
+      `cables ${manual.cables.length}`);
+    check('[manual yard] keeps the fence', manual.fence.length >= 3, `${manual.fence.length} vertices`);
+    check('[manual yard] leaves the unflagged layout populated', design.blocksPlaced === expectedBlocks && design.equipment.length > 0);
+  }
 
   // QTY3 is the GE four-hour standard: the battery-backed continuous output
   // is 3.834 MW (15.336 MWh × 0.25C), while 4.02 MW remains PCS capability.

@@ -6807,6 +6807,109 @@ function TraceOverlay() {
   );
 }
 
+/**
+ * One block the drafter can drag around a manual-authoring yard.
+ * Position lives in this component only — it is not placed equipment.
+ */
+function PlacementPlaceholder({ onDraggingChange }: { onDraggingChange: (d: boolean) => void }) {
+  const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const fence = useDesignStore(s => (manual ? s.design?.fence : undefined));
+  const { camera, gl, controls } = useThree();
+  const controlsRef = useRef<{ enabled?: boolean } | null>(null);
+  controlsRef.current = controls as { enabled?: boolean } | null;
+  const dragging = useRef(false);
+  const [pos, setPos] = useState<Pt | null>(null);
+  const raycaster = useRef(new THREE.Raycaster());
+  const ndc = useRef(new THREE.Vector2());
+
+  useEffect(() => { setPos(null); }, [fence]);
+
+  useEffect(() => {
+    const el = gl.domElement;
+    const move = (ev: PointerEvent) => {
+      if (!dragging.current) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      ndc.current.set(
+        ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+        -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      raycaster.current.setFromCamera(ndc.current, camera);
+      const ray = raycaster.current.ray;
+      if (Math.abs(ray.direction.y) < 1e-8) return;
+      const t = -ray.origin.y / ray.direction.y;
+      if (!Number.isFinite(t) || t < 0) return;
+      setPos({
+        x: ray.origin.x + ray.direction.x * t,
+        y: -(ray.origin.z + ray.direction.z * t),
+      });
+    };
+    const up = () => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      onDraggingChange(false);
+      el.style.cursor = '';
+      if (controlsRef.current) controlsRef.current.enabled = true;
+    };
+    el.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    return () => {
+      el.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      el.style.cursor = '';
+    };
+  }, [camera, gl, onDraggingChange]);
+
+  const metrics = useMemo(() => {
+    if (!fence?.length) return null;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let sx = 0, sy = 0;
+    for (const p of fence) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+      sx += p.x;
+      sy += p.y;
+    }
+    const span = Math.min(maxX - minX, maxY - minY);
+    const length = Math.max(30, Math.min(80, span * 0.06));
+    return {
+      center: { x: sx / fence.length, y: sy / fence.length },
+      length,
+      width: length * 0.4,
+      height: 12,
+    };
+  }, [fence]);
+
+  if (!manual || !metrics) return null;
+  const at = pos ?? metrics.center;
+  return (
+    <mesh
+      position={[at.x, metrics.height / 2, -at.y]}
+      onPointerDown={e => {
+        e.stopPropagation();
+        dragging.current = true;
+        onDraggingChange(true);
+        if (controlsRef.current) controlsRef.current.enabled = false;
+        gl.domElement.style.cursor = 'grabbing';
+      }}
+      onPointerOver={e => {
+        e.stopPropagation();
+        if (!dragging.current) gl.domElement.style.cursor = 'grab';
+      }}
+      onPointerOut={() => {
+        if (!dragging.current) gl.domElement.style.cursor = '';
+      }}
+    >
+      <boxGeometry args={[metrics.length, metrics.height, metrics.width]} />
+      <meshStandardMaterial color="#38bdf8" />
+    </mesh>
+  );
+}
+
 export default function DesignScene() {
   const design = useDesignStore(s => s.design);
   const alignRows = useDesignStore(s => s.alignRows);
@@ -8140,6 +8243,7 @@ export default function DesignScene() {
         {design ? (
           <>
             <DesignContent design={design} editMode={editMode} realistic={realisticModels && viewMode !== '2d'} is3D={viewMode === '3d'} cad={viewMode === 'cad'} onDraggingChange={setDragging} editTool={editTool} onEditToolChange={setEditTool} zoneKind={zoneKind} islandPairs={islandPairs} placeKind={placeKind} placeAug={placeAug} placeAuxGear={placeAuxGear} placeEquipType={placeEquipType} placeAngleDeg={placeAngleDeg} placeSnap={placeSnap} roadDrawWidth={roadDrawWidth} onSelectedIslandChange={setSelIsland} onSelectedTargetChange={setNudgeTarget} onSelectedEquipChange={setSelEquip} onRoadSelectionChange={setRoadSelInfo} cadLayerVis={cadLayerVis} onSelectText={setCadSelectedText} />
+            <PlacementPlaceholder onDraggingChange={setDragging} />
             {viewMode !== 'cad' && drawingVisibility.dimensions &&
               <SpacingDimensions design={design} is3D={viewMode === '3d'} />}
           </>

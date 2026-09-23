@@ -361,6 +361,7 @@ export const sanitizeLayoutEdits = (v: unknown): LayoutConstraints => {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
   const e = v as Record<string, unknown>;
   const out: LayoutConstraints = {};
+  if (e.yardAuthoring === 'manual') out.yardAuthoring = 'manual';
   const takeMoveMap = (raw: unknown, intKeys: boolean): Record<string, { dx: number; dy: number }> | null => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const clean: Record<string, { dx: number; dy: number }> = {};
@@ -3452,6 +3453,9 @@ interface DesignState {
   latticeShift: Pt | null;
   gateEdge: GateEdge | null;
   layoutEdits: LayoutConstraints;
+  // Bumped when a KMZ import opens the sidebar Place Material section.
+  // 0 until the first import in this session, so a reload does not jump tabs.
+  placeMaterialEpoch: number;
   // Drafter text-label overrides (position/height/content deltas). Applied to
   // the CAD view and all DXF/PDF exports. Keyed by label fingerprint.
   // Empty map = no overrides (default, keeps all outputs byte-identical).
@@ -4370,6 +4374,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   latticeShift: null,
   gateEdge: null,
   layoutEdits: {},
+  placeMaterialEpoch: 0,
   yardRotationDeg: 0,
   textOverrides: {},
   setTextOverride: (key, ov) => set(s => ({ textOverrides: { ...s.textOverrides, [key]: ov } })),
@@ -4838,6 +4843,13 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       gradingZones: [],
       // Area zones are anchored to a specific parcel — same rule.
       areaZones: [],
+      // A new import is a bare yard: fence and KMZ linework, no auto blocks.
+      // Replaces whatever edits the previous site was carrying.
+      layoutEdits: { yardAuthoring: 'manual' },
+      feeders: [],
+      areaFeeders: {},
+      feederEndpoint: null,
+      placeMaterialEpoch: get().placeMaterialEpoch + 1,
     });
     get().regenerate();
     if (get().showSatellite) void get().loadSatellite();
@@ -4927,13 +4939,21 @@ export const useDesignStore = create<DesignState>((set, get) => ({
         picker.sourceName,
         picker.options.map(o => o.index)
       );
-      const areas: SiteArea[] = boundaries.map((b, i) => ({
-        id: `area-${i}`,
-        name: b.name,
-        kind: inferAreaKind(b.name),
-        design: null,
-        boundary: b,
-      }));
+      const areas: SiteArea[] = boundaries.map((b, i) => {
+        const kind = inferAreaKind(b.name);
+        return {
+          id: `area-${i}`,
+          name: b.name,
+          kind,
+          design: null,
+          boundary: b,
+          // BESS footprints stay empty until the drafter places gear. Substation
+          // yards keep their own generator.
+          ...(kind === 'bess'
+            ? { edits: { layoutEdits: { yardAuthoring: 'manual' as const } } }
+            : {}),
+        };
+      });
       const active = areas.find(a => a.kind === 'bess') ?? areas[0];
       const drawing = parseKmlDrawing(picker.kmlText, picker.sourceName, boundaries[0].origin);
       onProgress(0.08, 'Preparing the active area…');
@@ -9699,6 +9719,16 @@ export const useDesignStore = create<DesignState>((set, get) => ({
 
   recomputeFeeders: () => {
     const { design, substation, configId, feederAssignments, feederSizes, feederMaterial, maxPcsPerFeeder } = get();
+    if (get().layoutEdits.yardAuthoring === 'manual') {
+      const hiddenFeeders = get().hiddenFeeders.size ? new Set<number>() : get().hiddenFeeders;
+      if (design) {
+        design.auxFeeder = null;
+        set({ feeders: [], design: { ...design }, hiddenFeeders, feederEndpoint: null });
+      } else {
+        set({ feeders: [], hiddenFeeders, feederEndpoint: null });
+      }
+      return;
+    }
     // Any feeder recompute (regenerate, import, regrouping, rerouting) can
     // renumber circuits, so the display-only hidden set is always cleared —
     // stale indices must never silently hide a different feeder.
@@ -9793,6 +9823,12 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       // Only BESS yards carry MV feeders; a substation area receives them.
       if (area.kind !== 'bess' || !area.design) return area;
       const ed = area.edits ?? {};
+      // Manual-authoring yards have no PCS to route. Skip the feeder build
+      // so an import does not draw MV circuits onto an empty footprint.
+      if (ed.layoutEdits?.yardAuthoring === 'manual') {
+        nextFeeders[area.id] = [];
+        return { ...area, design: { ...area.design, auxFeeder: null } };
+      }
       const tracedFenceStandard = isTracedBessYard(ed.layoutEdits);
       const healingFence = tracedFenceStandard
         ? fencePolygonForLayout(area.boundary.polygon, ed.layoutEdits, s.fencePlacement)

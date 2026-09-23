@@ -266,6 +266,11 @@ export const ARRANGEMENTS: { id: ArrangementStrategy; label: string; description
 //   size fits nowhere, the size is rejected with a warning (stable prefix the
 //   store checks) and the automatic aspect/shrink search is used instead.
 export interface LayoutConstraints {
+  // Fresh KMZ imports start here: fence and imported linework only. The
+  // block packer, roads, surfacing, cables, and feeders stay off until a
+  // later step fills the yard. Absent on saved projects, which keep the
+  // automatic layout.
+  yardAuthoring?: 'manual';
   rowMoves?: Record<number, { dx: number; dy: number }>;
   // blockMoves: offset (dx, dy) applied to ONE block (its containers, PCS and
   // aug bay as a unit), keyed by the stable 1-based block number. Applied
@@ -1631,6 +1636,48 @@ function roadShortfallReason(design: SiteDesign): string {
   return `The deepest row holds ${widest} blocks and the remaining rows are ` +
     'fence-limited: the parcel narrows before another full island fits.';
 }
+/** True for a just-imported yard the drafter is placing by hand. */
+export function isManualAuthoringYard(constraints?: LayoutConstraints | null): boolean {
+  return constraints?.yardAuthoring === 'manual';
+}
+
+/**
+ * Fence-only site for manual authoring. The imported KMZ linework is a
+ * separate drawing overlay, not part of this design. No equipment, roads,
+ * cables, or surfacing.
+ */
+export function manualAuthoringDesign(
+  boundary: SiteBoundary,
+  targetMW: number,
+  targetMWh: number,
+  fencePlacement?: FencePlacementMode,
+): SiteDesign {
+  return {
+    boundary,
+    fence: fencePolygonFor(boundary.polygon, fencePlacement),
+    equipment: [],
+    augmentationZones: [],
+    reservedZones: [],
+    reserveSummary: null,
+    roads: [],
+    aisles: [],
+    roadNetwork: null,
+    gate: null,
+    cables: [],
+    trench: null,
+    surfacing: null,
+    blockRows: [],
+    rowEditGeom: null,
+    blocksPlaced: 0,
+    blocksRequired: 0,
+    achievedMW: 0,
+    achievedMWh: 0,
+    targetMW,
+    targetMWh,
+    warnings: [],
+  };
+}
+
 export function generateSiteDesign(
   boundary: SiteBoundary,
   config: BessConfiguration,
@@ -1638,6 +1685,9 @@ export function generateSiteDesign(
   targetMWh: number,
   options: LayoutOptions = { hotClimate: true }
 ): SiteDesign {
+  if (isManualAuthoringYard(options.constraints)) {
+    return manualAuthoringDesign(boundary, targetMW, targetMWh, options.fencePlacement);
+  }
   // The island-augmentation rescue (below) may shift a row so an island's
   // aug units fit at its end. That shift becomes part of the AUTO baseline:
   // drafter rowMoves are composed ON TOP of it, so a move computed from the

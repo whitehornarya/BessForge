@@ -654,6 +654,7 @@ const PANEL_SECTION_KEY = 'nextera-panel-section';
 
 const PANEL_SECTIONS = [
   { id: 'site', title: 'Site Boundary (KMZ)' },
+  { id: 'place', title: 'Manual Placement' },
   { id: 'equipment', title: 'Equipment Configuration' },
   { id: 'target', title: 'Target Rating' },
   { id: 'titleblock', title: 'Title Block' },
@@ -698,8 +699,15 @@ function PanelSection({ id, title, discipline, children }: {
 }) {
   const nav = useContext(PanelNavContext);
   const active = nav?.activeId === id;
+  // Manual Placement fills the pane so Auto-fill sits on the bottom edge
+  // when the notes above it are short.
+  const pinBottom = id === 'place';
   return (
-    <section id={`panel-sec-${id}`} className={active ? undefined : 'hidden'} aria-hidden={!active}>
+    <section
+      id={`panel-sec-${id}`}
+      className={active ? (pinBottom ? 'flex flex-1 flex-col min-h-full' : undefined) : 'hidden'}
+      aria-hidden={!active}
+    >
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
           {title}
@@ -708,7 +716,7 @@ function PanelSection({ id, title, discipline, children }: {
           {discipline}
         </span>
       </div>
-      <div>{children}</div>
+      <div className={pinBottom ? 'flex flex-1 flex-col' : undefined}>{children}</div>
     </section>
   );
 }
@@ -2991,6 +2999,13 @@ export default function DesignControlPanel() {
     setPanelActiveIdState(id);
     persistPanelSection(id);
   }, []);
+  const placeMaterialEpoch = useDesignStore(s => s.placeMaterialEpoch);
+  const manualYard = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  // A new KMZ import opens Manual Placement. Later tab changes stay put until
+  // the next import bumps the epoch.
+  useEffect(() => {
+    if (placeMaterialEpoch > 0) setPanelActiveId('place');
+  }, [placeMaterialEpoch, setPanelActiveId]);
   // Fall back to Site Boundary when the active tab is no longer reachable
   // (no KMZ yet, or Edit/Arrangements without a layout).
   useEffect(() => {
@@ -3029,7 +3044,7 @@ export default function DesignControlPanel() {
       <div className="relative flex-1 min-h-0">
       <PanelSectionNav boundaryReady={!!boundary} designReady={!!design} />
       <div className="pl-8 h-full overflow-y-auto flex flex-col">
-      <div className="p-4 space-y-5 flex-1">
+      <div className="p-4 space-y-5 flex-1 flex flex-col min-h-full">
         {/* Saved-session restore banner */}
         {savedSession && !boundary && (
           <div className="bg-cyan-950/60 border border-cyan-700 rounded p-3 text-sm">
@@ -3317,6 +3332,26 @@ export default function DesignControlPanel() {
               </div>
             </div>
           )}
+        </PanelSection>
+
+        <PanelSection id="place" title="Manual Placement" discipline="Layout">
+          <div className="bg-slate-800 rounded p-3 text-sm">
+            {manualYard ? (
+              <p className="text-xs text-slate-300 leading-relaxed">
+                The site shows the property line, fence, and imported drawing.
+                Drag the block on the site to move it around. The drag stays on
+                screen for this session.
+              </p>
+            ) : (
+              <p className="text-xs text-slate-300 leading-relaxed">
+                This yard is a generated layout. Upload a KMZ to open a manual
+                placement site.
+              </p>
+            )}
+          </div>
+          <div className="mt-auto pt-4 pb-4">
+            <ReferenceAutoFill />
+          </div>
         </PanelSection>
 
         {/* Step 2: Configuration */}
