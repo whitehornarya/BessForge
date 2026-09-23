@@ -1,6 +1,7 @@
 import { finalizePdfBlob } from '@/lib/nextera/pdfIdentity';
 import { Fragment, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { toastCaught, friendlyRejectReason } from '../lib/notify';
 import { useDesignStore } from '../lib/stores/useDesignStore';
 import { generateArrangements, ARRANGEMENTS, ArrangementStrategy, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, MANUAL_EQUIPMENT_CATALOG, isManualEquipmentSpec, isTracedBessYard } from '../lib/nextera/layoutEngine';
 import { OptimizeResult, OptimizeCandidate } from '../lib/nextera/optimizer';
@@ -264,7 +265,7 @@ function ReferenceAutoFill() {
         <span className="text-xs font-medium text-slate-200">Auto-fill from drawing</span>
         {!tracePlan && (
           <button
-            onClick={() => { if (!analyzeReferenceTrace()) toast.error(useDesignStore.getState().lastRejection ?? 'Nothing to auto-fill.'); }}
+            onClick={() => { if (!analyzeReferenceTrace()) toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Nothing to auto-fill.')); }}
             className="text-[10px] px-2 py-1 rounded bg-cyan-700 hover:bg-cyan-600 text-white"
           >
             Scan drawing
@@ -346,7 +347,7 @@ function ReferenceAutoFill() {
                         setBusyOverlay({ label, frac });
                       },
                       { equipment: inclEquip, roads: inclRoads });
-                    if (!ok) toast.error(useDesignStore.getState().lastRejection ?? 'Nothing to apply.');
+                    if (!ok) toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Nothing to apply.'));
                     else {
                       const warn = useDesignStore.getState().lastPlacedWarning;
                       if (warn) toast.warning(warn, { duration: 9000 });
@@ -815,7 +816,7 @@ function OfflineDataPanel({ boundary }: {
   const run = async (work: () => Promise<void>, success: string) => {
     setBusy(true);
     try { await work(); toast.success(success); }
-    catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+    catch (e) { toastCaught('Request failed — try again', e); }
     finally { setBusy(false); }
   };
   return (
@@ -845,7 +846,7 @@ function OfflineDataPanel({ boundary }: {
               setResolved(next);
               toast.success('API override applied to subsequent requests.');
             }
-            catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+            catch (e) { toastCaught('Request failed — try again', e); }
           }}
           className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-[10px]"
         >Apply</button>
@@ -857,7 +858,7 @@ function OfflineDataPanel({ boundary }: {
               setResolved(saveApiBaseOverride(''));
               toast.success('API override cleared; runtime/default restored.');
             }
-            catch (e) { toast.error(e instanceof Error ? e.message : String(e)); }
+            catch (e) { toastCaught('Request failed — try again', e); }
           }}
           className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-[10px]"
         >Clear</button>
@@ -1113,7 +1114,7 @@ export default function DesignControlPanel() {
       setDrainageIdf(idf);
       toast.success(`NOAA Atlas 14 IDF loaded (${idf.source})`);
     } catch (e: any) {
-      toast.error(`NOAA Atlas 14 fetch failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('NOAA Atlas 14 fetch failed — try again', e);
     } finally {
       setIdfBusy(false);
     }
@@ -1223,7 +1224,8 @@ export default function DesignControlPanel() {
         setTitleBlock({ location: line });
         toast.success(`Title Block location set from site coordinates: ${line} — edit to override`);
       } catch (e: any) {
-        toast.warning(`Couldn't resolve county/state from coordinates: ${e?.message ?? 'lookup failed'} — Location left as typed`);
+        console.warn('County/state lookup failed', e);
+        toast.warning("Couldn't resolve county/state from coordinates — Location left as typed");
       }
     })();
   }, [boundary, titleBlock.location]);
@@ -1237,10 +1239,10 @@ export default function DesignControlPanel() {
       const k = e.key.toLowerCase();
       if (k === 'z' && !e.shiftKey) {
         e.preventDefault();
-        if (useDesignStore.getState().undoEdit()) toast.success('Undo');
+        useDesignStore.getState().undoEdit();
       } else if (k === 'y' || (k === 'z' && e.shiftKey)) {
         e.preventDefault();
-        if (useDesignStore.getState().redoEdit()) toast.success('Redo');
+        useDesignStore.getState().redoEdit();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -1380,8 +1382,8 @@ export default function DesignControlPanel() {
     const dy = Number.isFinite(dyRaw) ? dyRaw : 0;
     const ok = moveRow(editRow, dx, dy);
     if (!ok) {
-      const why = useDesignStore.getState().lastRejection;
-      toast.error(`Row ${editRow} move rejected — ${why ?? 'validation failed'}. Previous layout kept.`, {
+      const why = friendlyRejectReason(useDesignStore.getState().lastRejection, 'validation failed');
+      toast.error(`Row ${editRow} move rejected — ${why}. Previous layout kept.`, {
         duration: 8000,
         action: {
           label: 'Override',
@@ -1392,18 +1394,14 @@ export default function DesignControlPanel() {
           },
         },
       });
-    } else if (!dx && !dy) {
-      toast.success(`Row ${editRow} restored to its automatic position`);
-    } else {
-      toast.success(`Row ${editRow} moved — site re-optimized around it`);
     }
+    // Success: scene already shows the new row position — no toast.
   };
 
   const handleApplyTrenchPin = () => {
     const v = trenchInput.trim();
     if (v === '') {
       setTrenchPin(null);
-      toast.success('Trench corridor set back to automatic');
       return;
     }
     const x = Number(v);
@@ -1414,8 +1412,6 @@ export default function DesignControlPanel() {
     const ok = setTrenchPin(x);
     if (!ok) {
       toast.error(`Trench corridor at x = ${x} ft rejected — it would leave the fenced yard. Previous layout kept.`);
-    } else {
-      toast.success(`Trench pinned at x = ${x} ft — cables and buses rerouted`);
     }
   };
 
@@ -1442,7 +1438,6 @@ export default function DesignControlPanel() {
         (done, total) => setOptProgress({ done, total })
       );
       if (result.cancelled) {
-        toast.info('Optimization cancelled');
         setOptResult(null);
       } else {
         setOptResult(result);
@@ -1452,9 +1447,9 @@ export default function DesignControlPanel() {
       }
     } catch (e: any) {
       if (e instanceof SupersededError) {
-        toast.info('Optimization cancelled');
+        // Cancelled — no toast.
       } else {
-        toast.error(`Optimization failed: ${e?.message ?? 'unknown error'}`);
+        toastCaught('Optimization failed — try again', e);
       }
     } finally {
       setOptRunning(false);
@@ -1485,7 +1480,6 @@ export default function DesignControlPanel() {
       );
       if (!fresh()) return;
       if (result.cancelled) {
-        toast.info('Feeder routing search cancelled');
         setFrResult(null);
       } else {
         setFrResult(result);
@@ -1495,8 +1489,7 @@ export default function DesignControlPanel() {
       }
     } catch (e: any) {
       if (!fresh()) return;
-      if (e instanceof SupersededError) toast.info('Feeder routing search cancelled');
-      else toast.error(`Feeder routing search failed: ${e?.message ?? 'unknown error'}`);
+      if (!(e instanceof SupersededError)) toastCaught('Feeder routing search failed — try again', e);
     } finally {
       if (frAliveRef.current) {
         setFrRunning(false);
@@ -1542,16 +1535,13 @@ export default function DesignControlPanel() {
         (done, total) => setGradProgress({ done, total })
       );
       if (result.cancelled) {
-        toast.info('Grading sweep cancelled');
         setGradResult(null);
       } else {
         setGradResult(result);
       }
     } catch (e: any) {
-      if (e instanceof SupersededError) {
-        toast.info('Grading sweep cancelled');
-      } else {
-        toast.error(`Grading sweep failed: ${e?.message ?? 'unknown error'}`);
+      if (!(e instanceof SupersededError)) {
+        toastCaught('Grading sweep failed — try again', e);
       }
     } finally {
       setGradRunning(false);
@@ -1563,7 +1553,7 @@ export default function DesignControlPanel() {
     setYardRotation(deg);
     const err = useDesignStore.getState().error;
     if (err) {
-      toast.error(`Rotation ${deg}° failed to regenerate: ${err} — use Undo to go back.`);
+      toastCaught(`Yard rotation to ${deg}° failed — use Undo to go back`, err);
     } else if (deg === 0) {
       toast.success('Yard rotation reset to 0° (original orientation)');
     } else {
@@ -1575,7 +1565,7 @@ export default function DesignControlPanel() {
     applyOptimizedLayout(cand.params);
     const err = useDesignStore.getState().error;
     if (err) {
-      toast.error(`Could not apply layout: ${err}`);
+      toastCaught('Could not apply that layout', err);
     } else {
       toast.success(`Optimized layout applied — ${cand.stats.blocksPlaced} blocks, ${cand.stats.achievedMWh.toFixed(0)} MWh. Undo with Ctrl+Z.`);
     }
@@ -1628,7 +1618,6 @@ export default function DesignControlPanel() {
 
   const handlePickArrangement = (s: ArrangementStrategy) => {
     if (s === arrangement && !hasEdits) {
-      toast.info('This arrangement is already the active baseline');
       return;
     }
     if (hasEdits || shortfallVsDefault(s) > 0) {
@@ -1676,7 +1665,7 @@ export default function DesignControlPanel() {
     }
     await loadKmz(file);
     const st = useDesignStore.getState();
-    if (st.error) toast.error(st.error);
+    if (st.error) toastCaught('Could not load the site boundary', st.error);
     else if (!st.boundaryPicker) toast.success('Site boundary loaded');
   };
 
@@ -1687,12 +1676,12 @@ export default function DesignControlPanel() {
   const computeExportContours = async (d: NonNullable<typeof design>) => {
     if (!exportContoursDxf) return null;
     if (!terrainYard) {
-      toast.warning('No elevation data loaded — exporting without contour lines');
+      console.warn('No elevation data loaded — exporting without contour lines');
       return null;
     }
     const { contoursForDxf } = await import('../lib/nextera/terrain');
     const contours = contoursForDxf(terrainYard, d.boundary.origin, contourIntervalFt);
-    if (!contours) toast.warning('Site has no measurable relief — exporting without contour lines');
+    if (!contours) console.warn('Site has no measurable relief — exporting without contour lines');
     return contours;
   };
 
@@ -1712,7 +1701,7 @@ export default function DesignControlPanel() {
     try {
       vicinity = await fetchVicinityMap(boundary.origin.lat, boundary.origin.lon);
     } catch (e: any) {
-      toast.warning(`Vicinity map unavailable: ${e?.message ?? 'fetch failed'} — cover exports without it`);
+      console.warn('Vicinity map unavailable — cover exports without it', e);
     }
     const hours = targetMW > 0 ? targetMWh / targetMW : 0;
     const hoursTxt = Number.isInteger(hours) ? `${hours}` : hours.toFixed(1);
@@ -1759,7 +1748,7 @@ export default function DesignControlPanel() {
     const st = useDesignStore.getState();
     if (!st.coverCaptureReady) {
       if (opts?.required) throw new Error(NO_3D_SCENE);
-      toast.info('2D/CAD view active — cover uses the vector key plan (switch to 3D for the model render)');
+      console.info('2D/CAD view active — cover uses the vector key plan');
       return null;
     }
     // Force full-detail GLB models for the capture: if the drafter's
@@ -1785,7 +1774,7 @@ export default function DesignControlPanel() {
         if (r && r.n === n) finish(r.topDown || r.hero ? { topDown: r.topDown, hero: r.hero } : null);
       });
       const timer = setTimeout(() => {
-        if (!opts?.required) toast.warning('3D cover render timed out — cover uses the vector key plan');
+        if (!opts?.required) console.warn('3D cover render timed out — cover uses the vector key plan');
         finish(opts?.required ? { __timeout: true } : null);
       }, 8000);
       });
@@ -1868,10 +1857,10 @@ export default function DesignControlPanel() {
       if (e instanceof SupersededError) return;
       if (e instanceof LegacyExportValidationError) {
         console.error(formatLegacyValidationIssues(e.issues));
-        toast.error(e.message, { duration: 12_000 });
+        toast.error('Legacy DXF could not be built — check the console for validation details', { duration: 12_000 });
         return;
       }
-      toast.error(`DXF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('DXF export failed — try again', e);
     }
   };
 
@@ -1961,10 +1950,10 @@ export default function DesignControlPanel() {
       if (e instanceof SupersededError) return;
       if (e instanceof LegacyExportValidationError) {
         console.error(formatLegacyValidationIssues(e.issues));
-        toast.error(e.message, { duration: 12_000 });
+        toast.error('Legacy DXF package could not be built — check the console for validation details', { duration: 12_000 });
         return;
       }
-      toast.error(`DXF package export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('DXF package export failed — try again', e);
     }
   };
 
@@ -1989,7 +1978,7 @@ export default function DesignControlPanel() {
       const satImg = await loadSatellite();
       if (!satImg) {
         const reason = useDesignStore.getState().satelliteError;
-        toast.warning(`Cover satellite imagery unavailable${reason ? `: ${reason}` : ''} — exporting without it`);
+        console.warn('Cover satellite imagery unavailable', reason);
       }
       // Yield a frame so the busy state paints before the synchronous render.
       await new Promise(res => setTimeout(res, 30));
@@ -2041,7 +2030,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Plot_Set_${new Date().toISOString().slice(0, 10)}.pdf`);
       if (saved) toast.success(`PDF plot set exported (${includeSldBom ? '10' : '7'} sheets + 9 mechanical drawing plates, ANSI D)`);
     } catch (e: any) {
-      toast.error(`PDF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('PDF export failed — try again', e);
     } finally {
       setPdfBusy(false);
     }
@@ -2183,7 +2172,7 @@ export default function DesignControlPanel() {
       if (saved) toast.success(`10% Package exported (${sheets.length} DXF sheets + PDF plot set with site render page)`);
     } catch (e: any) {
       if (e instanceof SupersededError) return;
-      toast.error(`10% Package export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('10% Package export failed — try again', e);
     } finally {
       if (pkg10NearLease) useDesignStore.getState().releaseForceRealisticNear();
       setPkg10Busy(false);
@@ -2241,7 +2230,7 @@ export default function DesignControlPanel() {
       );
       if (saved) toast.success('Single-line diagram DXF exported');
     } catch (e: any) {
-      toast.error(`SLD export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('SLD export failed — try again', e);
     }
   };
 
@@ -2269,7 +2258,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Single_Line_Diagram_${new Date().toISOString().slice(0, 10)}.pdf`);
       if (saved) toast.success('Single-line diagram PDF exported (1 page, ANSI D, vector)');
     } catch (e: any) {
-      toast.error(`SLD PDF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('SLD PDF export failed — try again', e);
     } finally {
       setSldPdfBusy(false);
     }
@@ -2298,7 +2287,7 @@ export default function DesignControlPanel() {
       }
       if (saved) toast.success('Bill of materials DXF exported (2 sheets, B018 template)');
     } catch (e: any) {
-      toast.error(`BOM sheet export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('BOM sheet export failed — try again', e);
     }
   };
 
@@ -2320,7 +2309,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Bill_of_Materials_${new Date().toISOString().slice(0, 10)}.pdf`);
       if (saved) toast.success('Bill of materials PDF exported (2 pages, B018 template, ANSI D, vector)');
     } catch (e: any) {
-      toast.error(`BOM sheet PDF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('BOM sheet PDF export failed — try again', e);
     } finally {
       setBomPdfBusy(false);
     }
@@ -2359,7 +2348,7 @@ export default function DesignControlPanel() {
       );
       if (saved) toast.success('Grading plan DXF exported (screening — not for construction)');
     } catch (e: any) {
-      toast.error(`Grading plan export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Grading plan export failed — try again', e);
     }
   };
 
@@ -2395,7 +2384,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Grading_Plan_${new Date().toISOString().slice(0, 10)}.pdf`);
       if (saved) toast.success('Grading plan PDF exported (1 page, ANSI D, vector)');
     } catch (e: any) {
-      toast.error(`Grading plan PDF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Grading plan PDF export failed — try again', e);
     } finally {
       setGradingPdfBusy(false);
     }
@@ -2426,7 +2415,7 @@ export default function DesignControlPanel() {
       );
       if (saved) toast.success('Cross-sections DXF exported (screening — not for construction)');
     } catch (e: any) {
-      toast.error(`Cross-sections export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Cross-sections export failed — try again', e);
     }
   };
 
@@ -2456,7 +2445,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Grading_Sections_${new Date().toISOString().slice(0, 10)}.pdf`);
       if (saved) toast.success('Cross-sections PDF exported (1 page, ANSI D, vector)');
     } catch (e: any) {
-      toast.error(`Cross-sections PDF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Cross-sections PDF export failed — try again', e);
     } finally {
       setSectionsPdfBusy(false);
     }
@@ -2481,7 +2470,7 @@ export default function DesignControlPanel() {
       );
       if (saved) toast.success('Drainage area map DXF exported (screening — not for construction)');
     } catch (e: any) {
-      toast.error(`Drainage map export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Drainage map export failed — try again', e);
     }
   };
 
@@ -2509,7 +2498,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Drainage_Map_${new Date().toISOString().slice(0, 10)}.pdf`);
       if (saved) toast.success('Drainage area map PDF exported (1 page, ANSI D, vector)');
     } catch (e: any) {
-      toast.error(`Drainage map PDF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Drainage map PDF export failed — try again', e);
     } finally {
       setDrainagePdfBusy(false);
     }
@@ -2534,7 +2523,7 @@ export default function DesignControlPanel() {
       );
       if (saved) toast.success('Drainage details DXF exported (screening — not for construction)');
     } catch (e: any) {
-      toast.error(`Drainage details export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Drainage details export failed — try again', e);
     }
   };
 
@@ -2562,7 +2551,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Drainage_Details_${new Date().toISOString().slice(0, 10)}.pdf`);
       if (saved) toast.success('Drainage details PDF exported (1 page, ANSI D, vector)');
     } catch (e: any) {
-      toast.error(`Drainage details PDF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Drainage details PDF export failed — try again', e);
     } finally {
       setDrainage2PdfBusy(false);
     }
@@ -2588,7 +2577,7 @@ export default function DesignControlPanel() {
       );
       if (saved) toast.success('LandXML FG surface exported (local site coordinates, feet)');
     } catch (e: any) {
-      toast.error(`LandXML export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('LandXML export failed — try again', e);
     }
   };
 
@@ -2614,7 +2603,7 @@ export default function DesignControlPanel() {
         const satImg = await loadSatellite();
         if (!satImg) {
           const reason = useDesignStore.getState().satelliteError;
-          toast.warning(`Cover satellite imagery unavailable${reason ? `: ${reason}` : ''} — exporting without it`);
+          console.warn('Cover satellite imagery unavailable', reason);
         }
         const { satelliteLocalRect } = await import('../lib/nextera/satellite');
         coverExtras = {
@@ -2661,7 +2650,7 @@ export default function DesignControlPanel() {
           ? `Design PDF plot exported — ${exportScopeLabel}`
           : issuedFor10 ? 'Design PDF plot exported (10% cover + plan, ANSI D, vector)' : 'Design PDF plot exported (1 page, ANSI D, vector)');
     } catch (e: any) {
-      toast.error(`PDF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('PDF export failed — try again', e);
     } finally {
       setDxfPdfBusy(false);
     }
@@ -2688,7 +2677,7 @@ export default function DesignControlPanel() {
       );
       if (saved) toast.success('Relay one-line DXF exported (screening placeholders — verify with protection study)');
     } catch (e: any) {
-      toast.error(`Relay one-line export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Relay one-line export failed — try again', e);
     }
   };
 
@@ -2715,7 +2704,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Relay_One_Line_${new Date().toISOString().slice(0, 10)}.pdf`);
       if (saved) toast.success('Relay one-line PDF exported (1 page, ANSI D, vector)');
     } catch (e: any) {
-      toast.error(`Relay one-line PDF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Relay one-line PDF export failed — try again', e);
     } finally {
       setRelayPdfBusy(false);
     }
@@ -2738,7 +2727,7 @@ export default function DesignControlPanel() {
       const saved = await exportLgiaPdf(model, `${exportName}_LGIA_Data_Sheet_${new Date().toISOString().slice(0, 10)}.pdf`);
       if (saved) toast.success('LGIA-style facility data sheet PDF exported');
     } catch (e: any) {
-      toast.error(`LGIA data sheet export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('LGIA data sheet export failed — try again', e);
     } finally {
       setLgiaBusy(false);
     }
@@ -2836,7 +2825,7 @@ export default function DesignControlPanel() {
       );
       if (saved) toast.success('Permit packet PDF exported');
     } catch (e: any) {
-      toast.error(`Permit packet export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Permit packet export failed — try again', e);
     } finally {
       setPermitBusy(false);
     }
@@ -2859,7 +2848,7 @@ export default function DesignControlPanel() {
       const saved = await exportPoiPdf(model, `${exportName}_POI_Data_Sheet_${new Date().toISOString().slice(0, 10)}.pdf`);
       if (saved) toast.success('POI data sheet PDF exported');
     } catch (e: any) {
-      toast.error(`POI data sheet export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('POI data sheet export failed — try again', e);
     } finally {
       setPoiBusy(false);
     }
@@ -2876,7 +2865,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(new Blob([json], { type: 'application/json;charset=utf-8' }), `${exportName}.bessforge.json`);
       if (saved) toast.success('Project file saved');
     } catch (e: any) {
-      toast.error(`Save failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Save failed — try again', e);
     }
   };
 
@@ -2884,7 +2873,7 @@ export default function DesignControlPanel() {
     if (!file) return;
     const text = await file.text();
     const err = importProject(text);
-    if (err) toast.error(err);
+    if (err) toastCaught('Could not open that project file', err);
     else toast.success('Project loaded');
     if (projectFileRef.current) projectFileRef.current.value = '';
   };
@@ -2915,7 +2904,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${exportName}_BOM.csv`);
       if (saved) toast.success('BOM CSV exported');
     } catch (e: any) {
-      toast.error(`BOM export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('BOM export failed — try again', e);
     }
   };
 
@@ -2956,7 +2945,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${exportName}_Cable_Schedule.csv`);
       if (saved) toast.success('Cable schedule CSV exported');
     } catch (e: any) {
-      toast.error(`Cable schedule export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Cable schedule export failed — try again', e);
     }
   };
 
@@ -2975,7 +2964,7 @@ export default function DesignControlPanel() {
       );
       if (saved) toast.success('Cable schedule DXF exported');
     } catch (e: any) {
-      toast.error(`Cable schedule DXF export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Cable schedule DXF export failed — try again', e);
     }
   };
 
@@ -2993,7 +2982,7 @@ export default function DesignControlPanel() {
       const saved = await saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${exportName}_Full_BOM.csv`);
       if (saved) toast.success('Full BOM CSV exported');
     } catch (e: any) {
-      toast.error(`Full BOM export failed: ${e?.message ?? 'unknown error'}`);
+      toastCaught('Full BOM export failed — try again', e);
     }
   };
 
@@ -3142,7 +3131,7 @@ export default function DesignControlPanel() {
                         setBusyOverlay({ label, frac });
                       });
                       const err = useDesignStore.getState().error;
-                      if (err) toast.error(err);
+                      if (err) toastCaught('Could not load all site areas', err);
                       else {
                         const n = useDesignStore.getState().siteAreas.length;
                         toast.success(`Whole site loaded — ${n} areas`);
@@ -3166,7 +3155,7 @@ export default function DesignControlPanel() {
                     onClick={() => {
                       chooseBoundary(o.index);
                       const err = useDesignStore.getState().error;
-                      if (err) toast.error(err);
+                      if (err) toastCaught('Could not load that site area', err);
                       else toast.success(`${o.name} loaded`);
                     }}
                     className="text-left text-xs px-2 py-1.5 rounded bg-slate-900 hover:bg-slate-700 border border-slate-600 text-slate-200 transition-colors"
@@ -3266,7 +3255,7 @@ export default function DesignControlPanel() {
                         value={t.servesAreaId ?? ''}
                         onChange={e => {
                           const why = setTakeoffServes(t.id, e.target.value || null);
-                          if (why) toast.warning(why);
+                          if (why) toast.warning(friendlyRejectReason(why));
                         }}
                         className="flex-1 bg-slate-800 border border-slate-600 rounded px-1.5 py-1 text-xs text-slate-100"
                       >
@@ -3279,7 +3268,7 @@ export default function DesignControlPanel() {
                         value={t.dir}
                         onChange={e => {
                           const why = aimTakeoff(t.id, e.target.value as TakeoffDirection);
-                          if (why) toast.warning(why);
+                          if (why) toast.warning(friendlyRejectReason(why));
                         }}
                         title="Direction the feeders travel as they land here"
                         className="bg-slate-800 border border-slate-600 rounded px-1.5 py-1 text-xs text-slate-100"
@@ -3303,7 +3292,7 @@ export default function DesignControlPanel() {
                       <button
                         onClick={() => {
                           const why = removeTakeoff(t.id);
-                          if (why) toast.warning(why);
+                          if (why) toast.warning(friendlyRejectReason(why));
                         }}
                         className="text-[11px] px-2 py-1 rounded bg-slate-700 hover:bg-red-800 text-slate-200"
                       >
@@ -3316,7 +3305,7 @@ export default function DesignControlPanel() {
               <button
                 onClick={() => {
                   const why = addTakeoff(null);
-                  if (why) toast.warning(why);
+                  if (why) toast.warning(friendlyRejectReason(why));
                 }}
                 className="w-full mt-2 text-[11px] px-2 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
               >
@@ -3554,7 +3543,6 @@ export default function DesignControlPanel() {
                   key={ts.id}
                   onClick={() => {
                     setTextureSetId(ts.id);
-                    toast.success(`Yard textures: ${ts.label}`);
                   }}
                   title={ts.source}
                   className={`flex items-center gap-2 px-2 py-1.5 rounded border text-left text-xs transition-colors ${
@@ -4905,7 +4893,6 @@ export default function DesignControlPanel() {
           <button
             onClick={() => {
               requestInspectTrench();
-              toast.success('Flying camera to the 480V aux & fiber trench');
             }}
             disabled={!design?.trench}
             title="Fly the 3D camera to a low close-up of the 480V aux & fiber trench to inspect the recessed channel, blue LVAC and orange fiber conductors — 3D preview only, DXF/PDF unaffected"
@@ -4916,7 +4903,6 @@ export default function DesignControlPanel() {
           <button
             onClick={() => {
               useDesignStore.getState().setWalkMode(true);
-              toast.success('Walking the site — the gate is swinging open. WASD or arrow keys to walk, Shift to jog, click the view to look around');
             }}
             disabled={!design?.gate}
             title="Drop to eye level at the site entrance: the gate swings open and you can walk the roads and yard in first person (WASD/arrows + mouse look) — 3D preview only, DXF/PDF unaffected"
@@ -4927,7 +4913,6 @@ export default function DesignControlPanel() {
           <button
             onClick={() => {
               requestOverview();
-              toast.success('Flying camera back to the full-site overview');
             }}
             disabled={!design}
             title="Fly the 3D camera back to the default full-site view with the whole parcel in frame — 3D preview only, DXF/PDF unaffected"
@@ -5032,8 +5017,7 @@ export default function DesignControlPanel() {
                       onClick={() => {
                         const target = curSide === 'east' ? 'west' : 'east';
                         const why = setIslandAugEnd(key, target);
-                        if (why === null) toast.success(`Island ${isl.n} augmentation moved to the ${target} end`);
-                        else toast.error(`Swap rejected — ${why}`, { duration: 8000 });
+                        if (why !== null) toast.error(`Swap rejected — ${friendlyRejectReason(why)}`, { duration: 8000 });
                       }}
                     >
                       ⇄ Swap end
@@ -5057,7 +5041,7 @@ export default function DesignControlPanel() {
                         disabled={blockCount <= 1}
                         onClick={() => {
                           const err = adjustIslandBlocks(isl.n, -1);
-                          if (err) toast.error(`Remove block: ${err}`);
+                          if (err) toast.error(`Could not remove block — ${friendlyRejectReason(err)}`);
                         }}
                       >
                         −
@@ -5066,7 +5050,7 @@ export default function DesignControlPanel() {
                         className="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600"
                         onClick={() => {
                           const err = adjustIslandBlocks(isl.n, 1);
-                          if (err) toast.error(`Add block: ${err}`);
+                          if (err) toast.error(`Could not add block — ${friendlyRejectReason(err)}`);
                         }}
                       >
                         +
@@ -5819,7 +5803,7 @@ export default function DesignControlPanel() {
                             const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Energy_Simulation_${new Date().toISOString().slice(0, 10)}.pdf`);
                             if (saved) toast.success('Energy simulation report PDF exported');
                           } catch (err) {
-                            toast.error(`Energy report failed: ${err instanceof Error ? err.message : String(err)}`);
+                            toastCaught('Energy report failed — try again', err);
                           }
                         }}
                         className="w-full mt-1 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
@@ -5932,7 +5916,7 @@ export default function DesignControlPanel() {
                   <button
                     onClick={() => {
                       setLaydownPin(null);
-                      toast.success('Laydown area set back to automatic placement');
+                      
                     }}
                     className="w-full py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
                   >
@@ -5965,9 +5949,6 @@ export default function DesignControlPanel() {
                       onChange={e => {
                         const v = e.target.value;
                         setBlockDcRouting(dcBlockN, v === 'default' ? null : (v as 'orthogonal' | 'direct'));
-                        toast.success(v === 'default'
-                          ? `Block ${dcBlockN} DC runs follow the design default again`
-                          : `Block ${dcBlockN} DC runs set to ${v === 'direct' ? 'direct straight-line' : '90° trench'} routing`);
                       }}
                       className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
                     >
@@ -5985,7 +5966,7 @@ export default function DesignControlPanel() {
                         <button
                           onClick={() => {
                             setBlockDcRouting(Number(n), null);
-                            toast.success(`Block ${n} DC runs follow the design default again`);
+                            
                           }}
                           className="shrink-0 px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
                         >
@@ -6005,7 +5986,7 @@ export default function DesignControlPanel() {
                       <button
                         onClick={() => {
                           moveBlock(Number(n), 0, 0);
-                          toast.success(`Block ${n} restored to its automatic position`);
+                          
                         }}
                         className="shrink-0 px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
                       >
@@ -6026,7 +6007,7 @@ export default function DesignControlPanel() {
                       <button
                         onClick={() => {
                           moveEquipment(id, 0, 0);
-                          toast.success('Equipment restored to its automatic position');
+                          
                         }}
                         className="shrink-0 px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
                       >
@@ -6050,11 +6031,10 @@ export default function DesignControlPanel() {
                     const augTxt = p.aug === false ? 'no augmentation' : 'with augmentation';
                     const nudge = (dx: number, dy: number) => {
                       const reason = useDesignStore.getState().movePlacedIsland(p.id, dx, dy);
-                      if (reason) toast.error(`Move rejected: ${reason}`);
+                      if (reason) toast.error(`Move rejected — ${friendlyRejectReason(reason)}`);
                       else {
                         const warn = useDesignStore.getState().lastPlacedWarning;
                         if (warn) toast.warning(`Island moved with warning: ${warn}`);
-                        else toast.success('Island moved — roads, feeders and trenching regenerated');
                       }
                     };
                     return (
@@ -6072,11 +6052,10 @@ export default function DesignControlPanel() {
                             <button
                               onClick={() => {
                                 const reason = useDesignStore.getState().rotatePlacedIsland(p.id);
-                                if (reason) toast.error(`Rotate rejected: ${reason}`);
+                                if (reason) toast.error(`Rotate rejected — ${friendlyRejectReason(reason)}`);
                                 else {
                                   const warn = useDesignStore.getState().lastPlacedWarning;
                                   if (warn) toast.warning(`Island rotated 90° with warning: ${warn}`);
-                                  else toast.success('Island rotated 90° — roads, feeders and trenching regenerated');
                                 }
                               }}
                               title="Rotate this island 90° about its own center (horizontal ⟷ vertical)"
@@ -6087,7 +6066,7 @@ export default function DesignControlPanel() {
                             <button
                               onClick={() => {
                                 useDesignStore.getState().removePlacedIsland(p.id);
-                                toast.success('Placed island removed — site regenerated');
+                                
                               }}
                               className="px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-xs font-semibold text-white"
                             >
@@ -6126,11 +6105,10 @@ export default function DesignControlPanel() {
                     const nudgeEq = (dx: number, dy: number) => {
                       const reason = useDesignStore.getState().updatePlacedEquipment(
                         pe.id, { x: pe.x + dx, y: pe.y + dy });
-                      if (reason) toast.error(`Move rejected: ${reason}`);
+                      if (reason) toast.error(`Move rejected — ${friendlyRejectReason(reason)}`);
                       else {
                         const warn = useDesignStore.getState().lastPlacedWarning;
                         if (warn) toast.warning(`${cat.short} moved with warning: ${warn}`);
-                        else toast.success(`${cat.short} moved — routes, trenching and exports regenerated`);
                       }
                     };
                     return (
@@ -6144,11 +6122,10 @@ export default function DesignControlPanel() {
                             <button
                               onClick={() => {
                                 const reason = useDesignStore.getState().rotatePlacedEquipment(pe.id);
-                                if (reason) toast.error(`Rotate rejected: ${reason}`);
+                                if (reason) toast.error(`Rotate rejected — ${friendlyRejectReason(reason)}`);
                                 else {
                                   const warn = useDesignStore.getState().lastPlacedWarning;
                                   if (warn) toast.warning(`${cat.short} rotated 90° with warning: ${warn}`);
-                                  else toast.success(`${cat.short} rotated 90°`);
                                 }
                               }}
                               title="Rotate this item 90° about its own center"
@@ -6159,7 +6136,7 @@ export default function DesignControlPanel() {
                             <button
                               onClick={() => {
                                 useDesignStore.getState().removePlacedEquipment(pe.id);
-                                toast.success(`${cat.short} removed — site regenerated`);
+                                
                               }}
                               className="px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-xs font-semibold text-white"
                             >
@@ -6203,9 +6180,7 @@ export default function DesignControlPanel() {
                           const warn = useDesignStore.getState().removeGeneratedRoad(a.id!);
                           if (warn) {
                             toast.warning(`Road removed, but access is now broken: ${warn}`, { duration: 10000 });
-                          } else {
-                            toast.success('Road removed — road network, surfacing and exports rebuilt');
-                          }
+                          } 
                         }}
                         className="shrink-0 px-2 py-1 rounded bg-red-800 hover:bg-red-700 text-xs font-semibold text-slate-100"
                       >
@@ -6229,7 +6204,7 @@ export default function DesignControlPanel() {
                       <button
                         onClick={() => {
                           useDesignStore.getState().restoreGeneratedRoad(id);
-                          toast.success('Generated road restored — road network and exports rebuilt');
+                          
                         }}
                         className="shrink-0 px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
                       >
@@ -6252,7 +6227,7 @@ export default function DesignControlPanel() {
                     <button
                       onClick={() => {
                         useDesignStore.getState().restoreAllRoadCuts();
-                        toast.success('All deleted road areas restored — road network and exports rebuilt');
+                        
                       }}
                       className="shrink-0 px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-[10px] font-semibold text-slate-100"
                     >
@@ -6265,7 +6240,7 @@ export default function DesignControlPanel() {
                       <button
                         onClick={() => {
                           useDesignStore.getState().restoreRoadCut(c.id);
-                          toast.success('Road restored — road network, surfacing and exports rebuilt');
+                          
                         }}
                         className="shrink-0 px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
                       >
@@ -6287,7 +6262,7 @@ export default function DesignControlPanel() {
                         <button
                           onClick={() => {
                             useDesignStore.getState().removeCustomRoad(r.id);
-                            toast.success('Drawn road removed — road network rebuilt');
+                            
                           }}
                           className="shrink-0 px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
                         >
@@ -6314,7 +6289,7 @@ export default function DesignControlPanel() {
                       <button
                         onClick={() => {
                           useDesignStore.getState().unpaveTracedRoad(t);
-                          toast.success('Override removed — the strip returns to reference linework');
+                          
                         }}
                         className="shrink-0 px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
                       >
@@ -6352,7 +6327,7 @@ export default function DesignControlPanel() {
                       <button
                         onClick={() => {
                           setFutureAugPin(zoneId, null);
-                          toast.success(`${name} set back to automatic placement`);
+                          
                         }}
                         className="shrink-0 px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
                       >
@@ -6373,7 +6348,7 @@ export default function DesignControlPanel() {
             <div className="space-y-2 text-xs text-slate-400">
               <div className="grid grid-cols-2 gap-2">
                 <button
-                  onClick={() => { if (undoEdit()) toast.success('Undo'); }}
+                  onClick={() => { undoEdit(); }}
                   disabled={undoStack.length === 0}
                   className="py-1.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-semibold text-slate-100"
                   title="Ctrl+Z"
@@ -6381,7 +6356,7 @@ export default function DesignControlPanel() {
                   ↶ Undo{undoStack.length ? ` (${undoStack.length})` : ''}
                 </button>
                 <button
-                  onClick={() => { if (redoEdit()) toast.success('Redo'); }}
+                  onClick={() => { redoEdit(); }}
                   disabled={redoStack.length === 0}
                   className="py-1.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-semibold text-slate-100"
                   title="Ctrl+Y"
@@ -6399,7 +6374,7 @@ export default function DesignControlPanel() {
               {showHistory && (
                 <div className="rounded border border-slate-700 bg-slate-950/60 max-h-56 overflow-y-auto text-xs divide-y divide-slate-800">
                   <button
-                    onClick={() => { jumpHistory(0); toast.success('Jumped to start of history'); }}
+                    onClick={() => { jumpHistory(0); }}
                     disabled={undoStack.length === 0}
                     className={`w-full text-left px-2 py-1.5 hover:bg-slate-800 disabled:cursor-default ${
                       undoStack.length === 0 ? 'text-cyan-300 font-semibold' : 'text-slate-400'
@@ -6419,7 +6394,7 @@ export default function DesignControlPanel() {
                         onClick={() => {
                           if (isCurrent) return;
                           jumpHistory(i + 1);
-                          toast.success(`Jumped to: ${label}`);
+                          
                         }}
                         className={`w-full text-left px-2 py-1.5 hover:bg-slate-800 ${
                           isCurrent
@@ -6461,7 +6436,6 @@ export default function DesignControlPanel() {
                         setConfirmRemoveAll(false);
                         const n = useDesignStore.getState().removeAllEquipment();
                         if (n) toast.success(`All equipment removed (${n} item${n === 1 ? '' : 's'}) — one Ctrl+Z restores everything`);
-                        else toast.info('The yard is already empty — nothing to remove');
                       }}
                       className="py-1.5 rounded bg-red-700 hover:bg-red-600 text-xs font-semibold text-slate-100"
                     >
@@ -6480,7 +6454,6 @@ export default function DesignControlPanel() {
                 <button
                   onClick={() => {
                     if (!hasEdits) {
-                      toast.info('No layout edits to reset — the automatic baseline layout is already shown');
                       return;
                     }
                     setConfirmReset(true);

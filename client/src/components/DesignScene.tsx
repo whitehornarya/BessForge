@@ -2,6 +2,7 @@ import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, 
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Line, PerspectiveCamera, OrthographicCamera, Text, Billboard, useTexture } from '@react-three/drei';
 import { toast } from 'sonner';
+import { toastCaught, friendlyRejectReason } from '../lib/notify';
 import { nexteraLabel } from '../lib/nextera/dxfExport';
 import { COVER10_PANEL_ASPECT } from '../lib/nextera/dxfSheets';
 import * as THREE from 'three';
@@ -1998,7 +1999,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
     setFdDraw({ idx: f.idx, launch: { x: launch.x, y: launch.y } });
     setFdPts([]); setFdCursor(null);
     if (tool !== 'move') onToolChange('move');
-    toast.info(`Drawing route for feeder #${feederDisplayName(f)} — click waypoints, Enter or double-click to apply, Esc to cancel.`);
+    
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [feederDrawRequest]);
   // Legend → scene bridge: an AUX FEEDER row click requests aux draw mode.
@@ -2010,7 +2011,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
     setAuxFdDraw(true);
     setAuxFdPts([]); setAuxFdCursor(null);
     if (tool !== 'move') onToolChange('move');
-    toast.info('Drawing aux feeder route — click waypoints, Enter or double-click to apply, Esc to cancel.');
+    
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auxFeederDrawRequest]);
 
@@ -2072,7 +2073,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
       toast.success('Aux feeder rerouted — trench geometry and exports updated');
     } else {
       const why = useDesignStore.getState().lastRejection;
-      toast.error(`Aux feeder route rejected — ${why ?? 'validation failed'}. Automatic route kept.`, {
+      toast.error(`Aux feeder route rejected — ${friendlyRejectReason(why, 'validation failed')}. Automatic route kept.`, {
         duration: 8000,
         action: {
           label: 'Override',
@@ -2102,7 +2103,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
       toast.success(`Feeder #${nm} rerouted — lengths, voltage drop, trenches and exports updated`);
     } else {
       const why = useDesignStore.getState().lastRejection;
-      toast.error(`Feeder #${nm} route rejected — ${why ?? 'validation failed'}. Automatic route kept.`, {
+      toast.error(`Feeder #${nm} route rejected — ${friendlyRejectReason(why, 'validation failed')}. Automatic route kept.`, {
         duration: 8000,
         action: {
           label: 'Override',
@@ -2197,7 +2198,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
       }
     }
     setRoadSel([]);
-    if (done) toast.success(`${done} road${done === 1 ? '' : 's'} deleted — road network, surfacing, cables, feeders and exports rebuilt`);
+    if (done) 
     if (notes.length) toast.warning(notes[0], { duration: 10000 });
   };
 
@@ -2235,7 +2236,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
         setSpanPt(roadSel[0].pt);
         setSpanCursor(roadSel[0].pt);
         setRoadSel([]);
-        toast.info('Click the far end of the stretch to delete — the cut follows the road between your two clicks. Esc cancels.');
+        
       },
       spanArmed: spanPt !== null,
       ...(paveable ? {
@@ -2244,7 +2245,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           if (ok) {
             toast.warning('Traced strip paved as drawn (drafter override) — it still fails the gate-apron rule, so verify the entrance approach in detailed design.', { duration: 10000 });
           } else {
-            toast.error(useDesignStore.getState().lastRejection ?? 'Could not pave this road as drawn.');
+            toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Could not pave this road as drawn.'));
           }
           setRoadSel([]);
         },
@@ -2365,7 +2366,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           const ok = moveBlock(target.n, total.dx, total.dy, false, ckey);
           if (!ok) {
             const why = useDesignStore.getState().lastRejection;
-            toast.error(`PCS block nudge rejected — ${why ?? 'validation failed'}. Position kept.`, {
+            toast.error(`PCS block nudge rejected — ${friendlyRejectReason(why, 'validation failed')}. Position kept.`, {
               duration: 6000,
               action: {
                 label: 'Override',
@@ -2390,7 +2391,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           if (!spec) return;
           const why = movePlacedIsland(spec.id, dx, dy, ckey);
           if (why !== null) {
-            toast.error(`Island nudge rejected — ${why}. Position kept.`, { duration: 6000 });
+            toast.error(`Island nudge rejected — ${friendlyRejectReason(why)}. Position kept.`, { duration: 6000 });
           }
         } else {
           // An automatic island can share a row.  Move precisely its own
@@ -2406,7 +2407,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           const ok = moves.length > 0 && moveBlocksGroup(moves, false, ckey);
           if (!ok) {
             const why = useDesignStore.getState().lastRejection;
-            toast.error(`Island nudge rejected — ${why ?? 'validation failed'}. Position kept.`, {
+            toast.error(`Island nudge rejected — ${friendlyRejectReason(why, 'validation failed')}. Position kept.`, {
               duration: 6000,
               action: {
                 label: 'Override',
@@ -2439,7 +2440,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           const ok = rotateEquipment(sel.eqId);
           if (!ok) {
             const why = useDesignStore.getState().lastRejection;
-            toast.error(`Rotation rejected — ${why ?? 'validation failed'}. Orientation kept.`, {
+            toast.error(`Rotation rejected — ${friendlyRejectReason(why, 'validation failed')}. Orientation kept.`, {
               duration: 6000,
               action: {
                 label: 'Override',
@@ -2450,13 +2451,13 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
                 },
               },
             });
-          } else toast.success('Rotated 90° — cables and drawings regenerated');
+          }
         } else if (selNudgeTarget?.kind === 'block') {
           const n = selNudgeTarget.n;
           const ok = rotateBlock(n);
           if (!ok) {
             const why = useDesignStore.getState().lastRejection;
-            toast.error(`PCS block rotation rejected — ${why ?? 'validation failed'}. Orientation kept.`, {
+            toast.error(`PCS block rotation rejected — ${friendlyRejectReason(why, 'validation failed')}. Orientation kept.`, {
               duration: 6000,
               action: {
                 label: 'Override',
@@ -2467,7 +2468,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
                 },
               },
             });
-          } else toast.success(`PCS block ${n} rotated 90° — cables and drawings regenerated`);
+          }
         } else if (selNudgeTarget?.kind === 'island') {
           const info = selNudgeTarget.island;
           if (info.placed) {
@@ -2479,11 +2480,10 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
               .sort((a, b) => a.d - b.d)[0]?.p;
             if (spec) {
               const why = rotatePlacedIsland(spec.id);
-              if (why !== null) toast.error(`Rotation rejected — ${why}. Orientation kept.`, { duration: 8000 });
+              if (why !== null) toast.error(`Rotation rejected — ${friendlyRejectReason(why)}. Orientation kept.`, { duration: 8000 });
               else {
                 const warn = useDesignStore.getState().lastPlacedWarning;
                 if (warn) toast.warning(`Rotated 90° with warning: ${warn}`, { duration: 8000 });
-                else toast.success('Rotated 90° — roads, feeders and trenching regenerated');
               }
             }
           } else {
@@ -2498,12 +2498,10 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
             const ok = blockNs.length ? rotateBlocksGroup(blockNs) : false;
             if (blockNs.length && !ok) {
               toast.error(
-                `Island rotation rejected — ${useDesignStore.getState().lastRejection ?? 'validation failed'}. ` +
+                `Island rotation rejected — ${friendlyRejectReason(useDesignStore.getState().lastRejection, 'validation failed')}. ` +
                 `Orientation kept.`,
                 { duration: 8000 });
-            } else if (blockNs.length) {
-              toast.success(`Island ${info.n} rotated 90° — cables and drawings regenerated`);
-            }
+            } 
           }
         }
         return;
@@ -2520,8 +2518,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
         if (tool !== 'move') onToolChange('move');
       } else if (e.key === 'Enter' && tool === 'road' && roadPts.length >= 2) {
         const ok = addCustomRoad(roadPts, roadDrawWidth !== 24 ? roadDrawWidth : undefined);
-        if (ok) toast.success(`${roadDrawWidth} ft access road added — road network, surfacing and DXF updated`);
-        else toast.error(useDesignStore.getState().lastRejection ?? 'Road could not be added.');
+        if (!ok) toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Road could not be added.'));
         setRoadPts([]); setRoadCursor(null);
         onToolChange('move');
       } else if (e.key === 'Enter' && fdDraw && fdPts.length >= 1) {
@@ -2538,7 +2535,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
         setSpanPt(roadSel[0].pt);
         setSpanCursor(roadSel[0].pt);
         setRoadSel([]);
-        toast.info('Click the far end of the stretch to delete — the cut follows the road between your two clicks. Esc cancels.');
+        
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && !drag && hover && /^azone(?:-h)?-azone-\d+/.test(hover)) {
         // Delete the hovered area zone (body, band, or corner handle). The
         // guard tests the hover STRING — a bare `hover` here would swallow the
@@ -2549,8 +2546,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           const z = azones.find(a => a.id === m[1]);
           if (z) {
             const err = setAreaZones(azones.filter(a => a.id !== z.id));
-            if (err) toast.error(err, { duration: 8000 });
-            else toast.success(`${AREA_ZONE_LABELS[z.kind]} removed — drawings and exports updated`);
+            if (err) toast.error(friendlyRejectReason(err), { duration: 8000 });
             setHover(null);
           }
         }
@@ -2568,7 +2564,6 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
             equipment: multiSel.filter(m => m.kind === 'equip').map(m => (m as { id: string }).id),
             placedIslandIds: multiSel.filter(m => m.kind === 'pisland').map(m => (m as { id: string }).id),
           });
-          if (deleted) toast.success(`${deleted} item${deleted === 1 ? '' : 's'} deleted in one step — layout, feeders, trenching and exports updated. Ctrl+Z restores them all.`);
           if (notes.length) toast.warning(notes[0], { duration: 8000 });
           setMultiSel([]); setGroupSel([]); setSel(null);
         } else if (selNudgeTarget?.kind === 'island') {
@@ -2581,7 +2576,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
               Math.abs(p.x - (isl.cx ?? NaN)) < 0.51 && Math.abs(p.y - (isl.cy ?? NaN)) < 0.51);
             if (spec) {
               removePlacedIsland(spec.id);
-              toast.success('Hand-placed island deleted — site regenerated');
+              
               setSel(null);
             } else {
               toast.error('Could not identify that hand-placed island — use the ✕ handle above it.');
@@ -2593,20 +2588,16 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
             // One transaction: the whole island regenerates the site once and
             // costs exactly one Ctrl+Z, not one per member block.
             const { deleted, note } = deleteAutoIsland(ns);
-            if (deleted) toast.success(`Island ${isl.n} deleted (${deleted} block${deleted === 1 ? '' : 's'}) — layout, feeders, trenching and exports updated`);
-            else if (!note) toast.info(`Island ${isl.n} is already deleted.`);
             if (note) toast.warning(note, { duration: 8000 });
             setSel(null);
           }
         } else if (selNudgeTarget?.kind === 'block') {
           const note = deleteBlock(selNudgeTarget.n);
           if (note) toast.warning(note, { duration: 8000 });
-          else toast.success(`Block ${selNudgeTarget.n} deleted — layout, feeders, trenching and exports updated`);
           setSel(null);
         } else if (sel) {
           const note = deleteEquipment(sel.eqId);
           if (note) toast.warning(note, { duration: 8000 });
-          else toast.success(`${sel.eqId} deleted — layout, trenching and exports updated`);
           setSel(null);
         }
       }
@@ -3066,7 +3057,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
   // the same move with force=true (the engine keeps it with a warning).
   const rejectToast = (what: string, retryForced: () => boolean) => {
     const why = useDesignStore.getState().lastRejection;
-    toast.error(`${what} rejected — ${why ?? 'validation failed'}. Snapped back.`, {
+    toast.error(`${what} rejected — ${friendlyRejectReason(why, 'validation failed')}. Snapped back.`, {
       duration: 8000,
       action: {
         label: 'Override',
@@ -3096,14 +3087,13 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
             ? 'Single PCS module placement'
             : 'Island placement';
       toast.error(
-        `${rejectedWhat} rejected — ${why}.`,
+        `${rejectedWhat} rejected — ${friendlyRejectReason(why)}.`,
         { duration: 10000 });
       return;
     }
     const warn = useDesignStore.getState().lastPlacedWarning;
     if (isMove) {
       if (warn) toast.warning(`Placed with warning: ${warn}`, { duration: 8000 });
-      else toast.success('Island moved — roads, feeders and trenching regenerated');
       return;
     }
     const augTxt = live.aug ? 'with augmentation' : 'no augmentation';
@@ -3114,11 +3104,6 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
       ? `single PCS module (1 PCS + ${live.kind === 'single2' ? 2 : 3} BESS, ${augTxt})`
       : `${nPairs === ISLAND_PCS_PER_SIDE ? '' : 'partial '}island (${nPairs * 2} PCS blocks, ${augTxt})`;
     if (warn) toast.warning(`Placed with warning: ${warn}`, { duration: 8000 });
-    else {
-      const liveAngleDeg = live.angleDeg;
-      const liveOrientLabel = liveAngleDeg === 0 ? 'horizontal' : liveAngleDeg === 90 ? 'vertical' : `${liveAngleDeg}°`;
-      toast.success(`Placed a ${liveOrientLabel} ${what} — roads, feeders and trenching regenerated`);
-    }
     onToolChange('move');
   };
 
@@ -3152,8 +3137,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
       if (drag.dx !== 0 || drag.dy !== 0) {
         const total = composeRowMove(layoutEdits.rowMoves?.[drag.index], drag.dx, drag.dy);
         const ok = moveRow(drag.index, total.dx, total.dy);
-        if (ok) toast.success(`Row ${drag.index} moved — site re-optimized around it`);
-        else rejectToast(`Row ${drag.index} move`, () => moveRow(drag.index, total.dx, total.dy, true));
+        if (!ok) rejectToast(`Row ${drag.index} move`, () => moveRow(drag.index, total.dx, total.dy, true));
       } else if (drag.srcEqId) {
         cycleScope(drag.srcEqId);
       }
@@ -3164,22 +3148,19 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
         const inward = drag.side === 'n' ? -drag.d : drag.side === 's' ? drag.d : drag.side === 'e' ? -drag.d : drag.d;
         const total = (layoutEdits.ringOffsets?.[drag.side] ?? 0) + inward;
         const why = moveRingEdge(drag.side, total);
-        if (why === null) toast.success('Perimeter road edge moved — ring, surfacing and cables regenerated');
-        else toast.error(`Ring edge move rejected — ${why}. Snapped back.`, { duration: 8000 });
+        if (why !== null) toast.error(`Ring edge move rejected — ${friendlyRejectReason(why)}. Snapped back.`, { duration: 8000 });
       }
     } else if (drag.kind === 'aisle') {
       if (drag.dy !== 0) {
         const total = (layoutEdits.aisleMoves?.[drag.index] ?? 0) + drag.dy;
         const ok = moveAisle(drag.index, total);
-        if (ok) toast.success(`Drive aisle ${drag.index} moved — rows shifted with it; roads, surfacing and cables regenerated`);
-        else rejectToast(`Drive aisle ${drag.index} move`, () => moveAisle(drag.index, total, true));
+        if (!ok) rejectToast(`Drive aisle ${drag.index} move`, () => moveAisle(drag.index, total, true));
       }
     } else if (drag.kind === 'block') {
       if (drag.dx !== 0 || drag.dy !== 0) {
         const total = composeRowMove(layoutEdits.blockMoves?.[drag.n], drag.dx, drag.dy);
         const ok = moveBlock(drag.n, total.dx, total.dy);
-        if (ok) toast.success(`Block ${drag.n} moved — cables rerouted, roads unchanged`);
-        else rejectToast(`Block ${drag.n} move`, () => moveBlock(drag.n, total.dx, total.dy, true));
+        if (!ok) rejectToast(`Block ${drag.n} move`, () => moveBlock(drag.n, total.dx, total.dy, true));
       } else if (drag.srcEqId) {
         cycleScope(drag.srcEqId);
       }
@@ -3218,9 +3199,9 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
       const bulkTag = useDesignStore.getState().bulkTag;
       if (bulkTag) {
         const err = useDesignStore.getState().applyBulkTagRegion({ minX, minY, maxX, maxY });
-        if (err) toast.error(err);
+        if (err) toast.error(friendlyRejectReason(err));
         else {
-          toast.success('Drawn shapes tagged and added to the design');
+          
           useDesignStore.getState().setBulkTag(null);
           onToolChange('move');
         }
@@ -3232,8 +3213,6 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
         .map(b => b.n);
       setGroupSel(ns);
       onToolChange('move');
-      if (ns.length) toast.success(`${ns.length} block${ns.length > 1 ? 's' : ''} selected — drag any of them to move the group together, Esc to deselect`);
-      else toast.info('No blocks inside the selected area');
     } else if (drag.kind === 'group') {
       if (drag.dx !== 0 || drag.dy !== 0) {
         const moves = drag.ns.map(n => {
@@ -3241,15 +3220,13 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           return { n, dx: total.dx, dy: total.dy };
         });
         const ok = moveBlocksGroup(moves);
-        if (ok) toast.success(`${drag.ns.length} blocks moved together — cables rerouted, access roads updated`);
-        else rejectToast('Group move', () => moveBlocksGroup(moves, true));
+        if (!ok) rejectToast('Group move', () => moveBlocksGroup(moves, true));
       }
     } else if (drag.kind === 'equip') {
       if (drag.dx !== 0 || drag.dy !== 0) {
         const total = composeRowMove(layoutEdits.equipMoves?.[drag.id], drag.dx, drag.dy);
         const ok = moveEquipment(drag.id, total.dx, total.dy);
-        if (ok) toast.success(`Equipment moved — cables rerouted, roads unchanged`);
-        else rejectToast('Equipment move', () => moveEquipment(drag.id, total.dx, total.dy, true));
+        if (!ok) rejectToast('Equipment move', () => moveEquipment(drag.id, total.dx, total.dy, true));
       } else if (drag.srcEqId) {
         cycleScope(drag.srcEqId);
       }
@@ -3258,8 +3235,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
         const nx = snapToGrid(laydown.x + drag.dx, 1);
         const ny = snapToGrid(laydown.y + drag.dy, 1);
         const ok = setLaydownPin({ x: nx, y: ny });
-        if (ok) toast.success('Laydown area pinned — site regenerated around it');
-        else toast.error('Laydown spot rejected — clearances to fence, equipment, or roads. Snapped back.');
+        if (!ok) toast.error('Laydown spot rejected — clearances to fence, equipment, or roads. Snapped back.');
       }
     } else if (drag.kind === 'laydown-resize') {
       if (laydown && (drag.dx !== 0 || drag.dy !== 0)) {
@@ -3268,8 +3244,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           { x: snapToGrid(r.x, 1), y: snapToGrid(r.y, 1) },
           { length: Math.round(r.length), width: Math.round(r.width) }
         );
-        if (ok) toast.success(`Laydown resized to ${Math.round(r.length)} x ${Math.round(r.width)} ft — site regenerated`);
-        else toast.error('Laydown size rejected — clearances to fence, equipment, or roads. Snapped back.');
+        if (!ok) toast.error('Laydown size rejected — clearances to fence, equipment, or roads. Snapped back.');
       }
     } else if (drag.kind === 'futureAug') {
       const zone = futureBlocks.find(z => z.id === drag.id);
@@ -3287,8 +3262,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           ? `Island ${mIsl[1]} augmentation unit ${mIsl[2]}`
           : `Future BESS block ${zone.id.replace('future-blk-', '')}`;
         const ok = setFutureAugPin(zone.id, { x: nx, y: ny });
-        if (ok) toast.success(`${name} pinned — site regenerated around it`);
-        else toast.error(`${name} spot rejected — clearances or the 100 ft NFPA setback. Snapped back.`);
+        if (!ok) toast.error(`${name} spot rejected — clearances or the 100 ft NFPA setback. Snapped back.`);
       }
     } else if (drag.kind === 'gate') {
       if (design.gate && (drag.dx !== 0 || drag.dy !== 0)) {
@@ -3297,15 +3271,14 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           toast.error('No fence segment can hold the gate opening.');
         } else {
           const ok = setGatePin({ x: Math.round(snap.x * 10) / 10, y: Math.round(snap.y * 10) / 10 });
-          if (ok) toast.success('Entrance gate moved — entrance road re-routed');
-          else toast.error('Gate spot rejected — too far from the fence or the opening does not fit. Snapped back.');
+          if (!ok) toast.error('Gate spot rejected — too far from the fence or the opening does not fit. Snapped back.');
         }
       }
     } else if (drag.kind === 'zone-place') {
       const w = Math.abs(drag.cur.x - drag.start.x);
       const h = Math.abs(drag.cur.y - drag.start.y);
       if (w < 5 && h < 5) {
-        toast.info('Drag a rectangle where the area zone should go.');
+        
       } else {
         // Next free numeric suffix so ids stay unique across deletes.
         const maxIdx = azones.reduce((m, z) => {
@@ -3321,9 +3294,9 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
           widthFt: Math.max(AREA_ZONE_MIN_SIZE_FT, Math.round(h)),
         };
         const err = setAreaZones([...azones, cand]);
-        if (err) toast.error(err, { duration: 8000 });
+        if (err) toast.error(friendlyRejectReason(err), { duration: 8000 });
         else {
-          toast.success(`${AREA_ZONE_LABELS[drag.zkind]} added (${cand.lengthFt} x ${cand.widthFt} ft) — drawings and exports updated`);
+          
           onToolChange('move');
         }
       }
@@ -3337,17 +3310,14 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
               return { ...z, x: snapToGrid(r.x, 1), y: snapToGrid(r.y, 1), lengthFt: Math.round(r.lengthFt), widthFt: Math.round(r.widthFt) };
             })();
         const err = setAreaZones(azones.map(a => (a.id === z.id ? cand : a)));
-        if (err) toast.error(`${err} Snapped back.`, { duration: 8000 });
-        else toast.success(drag.kind === 'azone'
-          ? `${AREA_ZONE_LABELS[z.kind]} moved — drawings and exports updated`
-          : `${AREA_ZONE_LABELS[z.kind]} resized to ${cand.lengthFt} x ${cand.widthFt} ft — drawings and exports updated`);
+        if (err) toast.error(`${friendlyRejectReason(err)} Snapped back.`, { duration: 8000 });
+        /* zone edit applied */
       } else if (z && drag.kind === 'azone') {
         // Click without dragging: cycle the zone through the four types.
         const order = AREA_ZONE_KIND_ORDER;
         const next = order[(order.indexOf(z.kind) + 1) % order.length];
         const err = setAreaZones(azones.map(a => (a.id === z.id ? { ...a, kind: next } : a)));
-        if (err) toast.error(err, { duration: 8000 });
-        else toast.success(`Zone type changed to ${AREA_ZONE_LABELS[next]}`);
+        if (err) toast.error(friendlyRejectReason(err), { duration: 8000 });
       }
     } else if (drag.kind === 'gzone' || drag.kind === 'gzone-resize') {
       const z = gzones.find(g => g.id === drag.id);
@@ -3359,26 +3329,22 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
               return { ...z, x: snapToGrid(r.x, 1), y: snapToGrid(r.y, 1), lengthFt: Math.round(r.lengthFt), widthFt: Math.round(r.widthFt) };
             })();
         const err = setGradingZones(gzones.map(g => (g.id === z.id ? cand : g)));
-        if (err) toast.error(`${err} Snapped back.`);
-        else toast.success(drag.kind === 'gzone'
-          ? `Grading zone "${z.name}" moved — pad surface recomputed`
-          : `Grading zone "${z.name}" resized to ${cand.lengthFt} x ${cand.widthFt} ft — pad surface recomputed`);
+        if (err) toast.error(`${friendlyRejectReason(err)} Snapped back.`);
+        /* grading zone edit applied */
       }
     } else if (drag.kind === 'feederCorridor') {
       if (corridor && drag.d !== 0) {
         const nc = snapToGrid(corridor.center + drag.d, 1);
         const ok = setFeederCorridorPin(nc);
-        if (ok) toast.success(`Feeder corridor pinned at ${nc} ft — all home-run lanes shifted together`);
-        else {
+        if (!ok) {
           const why = substation ? feederCorridorRejectReason(design, substation, nc, maxPcsPerFeeder) : null;
-          toast.error(`Feeder corridor rejected${why ? `: ${why}` : ''} — automatic position kept. Snapped back.`);
+          toast.error(`Feeder corridor rejected${why ? `: ${friendlyRejectReason(why)}` : ''} — automatic position kept. Snapped back.`);
         }
       }
     } else if (trench && drag.dx !== 0) {
       const nx = snapToGrid(trench.x + drag.dx, 1);
       const ok = setTrenchPin(nx);
-      if (ok) toast.success(`Trench pinned at x = ${nx} ft — cables and buses rerouted`);
-      else toast.error('Trench corridor rejected — it would leave the fenced yard. Snapped back.');
+      if (!ok) toast.error('Trench corridor rejected — it would leave the fenced yard. Snapped back.');
     }
     setDragging(null);
   };
@@ -4450,11 +4416,10 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
                 e.stopPropagation();
                 document.body.style.cursor = '';
                 const reason = rotatePlacedIsland(p.id);
-                if (reason) toast.error(`Rotate rejected: ${reason}`);
+                if (reason) toast.error(`Rotate rejected — ${friendlyRejectReason(reason)}`);
                 else {
                   const warn = useDesignStore.getState().lastPlacedWarning;
                   if (warn) toast.warning(`Island rotated 90° with warning: ${warn}`);
-                  else toast.success('Island rotated 90° — roads, feeders and trenching regenerated');
                 }
               }}
             >
@@ -4475,7 +4440,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
                 e.stopPropagation();
                 document.body.style.cursor = '';
                 removePlacedIsland(p.id);
-                toast.success('Placed island removed — site regenerated');
+                
               }}
             >
               ✕
@@ -4502,11 +4467,10 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
                 e.stopPropagation();
                 document.body.style.cursor = '';
                 const reason = rotatePlacedEquipment(pe.id);
-                if (reason) toast.error(`Rotate rejected: ${reason}`);
+                if (reason) toast.error(`Rotate rejected — ${friendlyRejectReason(reason)}`);
                 else {
                   const warn = useDesignStore.getState().lastPlacedWarning;
                   if (warn) toast.warning(`Rotated 90° with warning: ${warn}`);
-                  else toast.success('Rotated 90° — routes and drawings regenerated');
                 }
               }}
             >
@@ -4527,7 +4491,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
                 e.stopPropagation();
                 document.body.style.cursor = '';
                 removePlacedEquipment(pe.id);
-                toast.success('Placed equipment removed — site regenerated');
+                
               }}
             >
               ✕
@@ -4680,7 +4644,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
                   document.body.style.cursor = '';
                   setFdDraw({ idx: f.idx, launch: { x: launch.x, y: launch.y } });
                   setFdPts([]); setFdCursor(null);
-                  toast.info(`Drawing route for feeder #${feederDisplayName(f)} — click waypoints, Enter or double-click to apply, Esc to cancel.`);
+                  
                 }}
               >
                 <boxGeometry args={[len, 1.5, 6]} />
@@ -4868,9 +4832,8 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
               }
               const warn = cutRoadArea(poly, 'Road stretch');
               const rejected = useDesignStore.getState().lastRejection;
-              if (rejected) toast.error(rejected);
+              if (rejected) toast.error(friendlyRejectReason(rejected));
               else if (warn) toast.warning(`Road stretch deleted, but vehicle access is now broken: ${warn}`, { duration: 10000 });
-              else toast.success('Road stretch deleted — road network, surfacing, cables, feeders and exports rebuilt');
               return;
             }
             const piece = roadPieceAt(p, design.aisles, design.roads, layoutEdits.customRoads ?? []);
@@ -5023,8 +4986,7 @@ function LayoutEditLayer({ design, onDraggingChange, tool, onToolChange, zoneKin
             e.stopPropagation();
             if (roadPts.length >= 2) {
               const ok = addCustomRoad(roadPts, roadDrawWidth !== 24 ? roadDrawWidth : undefined);
-              if (ok) toast.success(`Access road added (${roadDrawWidth} ft wide) — road network, surfacing and DXF updated`);
-              else toast.error(useDesignStore.getState().lastRejection ?? 'Road could not be added.');
+              if (!ok) toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Road could not be added.'));
             }
             setRoadPts([]); setRoadCursor(null);
             onToolChange('move');
@@ -5493,13 +5455,13 @@ function DesignContent({ design, editMode, realistic, is3D, cad, onDraggingChang
             // neighbour) is refused with its reason and the take-off stays
             // exactly where it was — never silently moved or dropped.
             const why = moveTakeoff(placingTakeoffId, { x: e.point.x, y: -e.point.z });
-            if (why) toast.warning(why);
+            if (why) toast.warning(friendlyRejectReason(why));
             return;
           }
           if (!placingSubstation) return;
           e.stopPropagation();
           const notice = placeSubstation({ x: e.point.x, y: -e.point.z });
-          if (notice) toast.warning(notice);
+          if (notice) toast.warning(friendlyRejectReason(notice));
         }}
       >
         <planeGeometry args={[groundSize, groundSize]} />
@@ -6832,7 +6794,7 @@ function TraceOverlay() {
             e.stopPropagation();
             const kind = gearPlacement.kind;
             const why = addPlacedGear(kind, Math.round(e.point.x), Math.round(-e.point.z));
-            if (why) toast.error(why);
+            if (why) toast.error(friendlyRejectReason(why));
           }}
         >
           <planeGeometry args={[200000, 200000]} />
@@ -7641,12 +7603,12 @@ export default function DesignScene() {
           const saved = await saveBlob(out, 'marketing-stills.zip');
           if (saved) toast.success(`Marketing stills saved (${files.length} images)`);
         } else if (cancelled) {
-          toast.info('Marketing stills capture cancelled');
+          
         } else {
           toast.error('Marketing stills capture produced no images');
         }
       } catch (err) {
-        toast.error(`Marketing stills capture failed: ${err instanceof Error ? err.message : String(err)}`);
+        toastCaught('Marketing stills capture failed — try again', err);
       } finally {
         window.removeEventListener('keydown', onKey);
         stillsBusy.current = false;
@@ -8111,7 +8073,7 @@ export default function DesignScene() {
             // Consumed here so unrelated renders can never re-toast off a
             // stale attempt count.
             r.recoveredMount = false;
-            toast.success('3D view recovered');
+            
           }
           // A context that stays alive for a while proves the GPU is healthy
           // again; reset the auto-retry budget for the next incident.
@@ -8147,7 +8109,7 @@ export default function DesignScene() {
             if (!gl.domElement.isConnected) return; // detached canvas: ignore
             r.stableTimer = setTimeout(() => { r.attempts = 0; }, 10000);
             invalidate();
-            toast.success('3D view recovered');
+            
           });
         }}
       >
@@ -8534,24 +8496,16 @@ export default function DesignScene() {
                         const dir = m === 'left' ? 'W' as const : 'E' as const;
                         const ok = compactIsland(dir, island);
                         const reason = useDesignStore.getState().lastRejection;
-                        if (ok) toast.success(`Island ${island} compacted ${dir === 'W' ? 'west' : 'east'}`);
-                        else toast.info(reason
-                          ? `Compact rejected: ${reason}`
+                        if (!ok) toast.info(reason
+                          ? `Compact rejected — ${friendlyRejectReason(reason)}`
                           : `Island ${island} is already at its ${dir === 'W' ? 'west' : 'east'} limit — nothing to move`);
                         return;
                       }
                       const ok = island !== null ? alignIsland(island, m) : alignRows(m);
                       const reason = useDesignStore.getState().lastRejection;
-                      if (ok) {
-                        const base = island !== null
-                          ? (m === 'center' ? `Island ${island} centered in the yard` : `Island ${island} aligned ${m}`)
-                          : (m === 'center' ? 'Rows centered in the yard' : `Rows aligned ${m}`);
-                        toast.success(
-                          base + (reason ? ` — some rows kept their automatic position: ${reason}` : '')
-                        );
-                      } else {
+                      if (!ok) {
                         toast.info(reason
-                          ? `Alignment rejected: ${reason}`
+                          ? `Alignment rejected — ${friendlyRejectReason(reason)}`
                           : (island !== null
                               ? `Island ${island} is already aligned — nothing to move`
                               : 'Rows are already aligned — nothing to move'));
@@ -8577,21 +8531,12 @@ export default function DesignScene() {
                       if (ok) {
                         const st = useDesignStore.getState();
                         const aislesAfter = st.design?.aisles.length ?? aislesBefore;
-                        const base = island !== null
-                          ? `Island ${island} compacted ${word}`
-                          : `Rows compacted ${word} — roads rebuilt around the new positions`;
-                        toast.success(
-                          base + (reason ? ` — some rows kept their position: ${reason}` : '')
-                        );
-                        // Road character changed (an interior drive aisle was
-                        // absorbed or added): point at the existing ring
-                        // choices instead of changing anything silently.
                         if (island === null && aislesAfter !== aislesBefore) {
                           toast.info('The drive-aisle layout changed with the compact. Review the perimeter ring style (Full fence / Shrink to fit / Hybrid) and per-side road offsets in the Roads panel if the ring should follow the new cluster.');
                         }
                       } else {
                         toast.info(reason
-                          ? `Compact rejected: ${reason}`
+                          ? `Compact rejected — ${friendlyRejectReason(reason)}`
                           : (island !== null
                               ? `Island ${island} is already at its ${word} limit — nothing to move`
                               : `Rows are already compacted ${word} — nothing to move`));
@@ -8613,9 +8558,8 @@ export default function DesignScene() {
                     }
                     const ok = vcenterIsland(target);
                     const reason = useDesignStore.getState().lastRejection;
-                    if (ok) toast.success(`Island ${target} centered between its north/south limits`);
-                    else toast.info(reason
-                      ? `Vertical centering rejected: ${reason}`
+                    if (!ok) toast.info(reason
+                      ? `Vertical centering rejected — ${friendlyRejectReason(reason)}`
                       : `Island ${target} is already vertically centered — nothing to move`);
                   }}
                   title={target !== null
@@ -8640,9 +8584,8 @@ export default function DesignScene() {
                         const reason = useDesignStore.getState().lastRejection;
                         const what = nudgeTarget.kind === 'block'
                           ? `PCS block ${nudgeTarget.n}` : `Island ${nudgeTarget.n}`;
-                        if (ok) toast.success(`${what} centered in its available space`);
-                        else toast.info(reason
-                          ? `Centering rejected: ${reason}`
+                        if (!ok) toast.info(reason
+                          ? `Centering rejected — ${friendlyRejectReason(reason)}`
                           : `${what} is already centered — nothing to move`);
                       }}
                       title="Center the selected block or island midway between its real clearance limits (fence, roads, NFPA setbacks and neighbouring equipment)"
@@ -8654,11 +8597,7 @@ export default function DesignScene() {
                       <button
                         onClick={() => {
                           const ns = nudgeTarget.kind === 'block' ? [nudgeTarget.n] : nudgeTarget.blockNs;
-                          const ok = restoreAutoPosition(ns);
-                          const what = nudgeTarget.kind === 'block'
-                            ? `PCS block ${nudgeTarget.n}` : `Island ${nudgeTarget.n}`;
-                          if (ok) toast.success(`${what} restored to its automatic position`);
-                          else toast.info(`${what} is already at its automatic position — nothing to restore`);
+                          restoreAutoPosition(ns);
                         }}
                         title="Discard manual moves for the selected block or island and return it to the automatically generated position"
                         className="px-3 py-1.5 text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 border-l border-slate-600"
@@ -8674,7 +8613,6 @@ export default function DesignScene() {
                         if (nudgeTarget.kind === 'block') {
                           const note = deleteBlock(nudgeTarget.n);
                           if (note) toast.warning(note, { duration: 8000 });
-                          else toast.success(`PCS block ${nudgeTarget.n} deleted — layout, feeders, trenching and exports updated`);
                           return;
                         }
                         if (nudgeTarget.placed) {
@@ -8682,7 +8620,7 @@ export default function DesignScene() {
                             .find(p => nudgeTarget.placedId ? p.id === nudgeTarget.placedId : false);
                           if (spec) {
                             removePlacedIsland(spec.id);
-                            toast.success('Hand-placed island deleted — site regenerated');
+                            
                           } else {
                             toast.error('Could not identify that hand-placed island — use the ✕ handle above it.');
                           }
@@ -8691,8 +8629,6 @@ export default function DesignScene() {
                         // Same single transaction the Delete key runs: one
                         // regeneration and one undo step for the whole island.
                         const { deleted, note } = deleteAutoIsland(nudgeTarget.blockNs);
-                        if (deleted) toast.success(`Island ${nudgeTarget.n} deleted (${deleted} block${deleted === 1 ? '' : 's'}) — layout, feeders, trenching and exports updated`);
-                        else if (!note) toast.info(`Island ${nudgeTarget.n} is already deleted.`);
                         if (note) toast.warning(note, { duration: 8000 });
                       }}
                       title={nudgeTarget.kind === 'block'
@@ -8716,12 +8652,11 @@ export default function DesignScene() {
                       onClick={() => {
                         if (selEquip.placedId) {
                           removePlacedIsland(selEquip.placedId);
-                          toast.success('Hand-placed island deleted — site regenerated');
+                          
                           return;
                         }
                         const note = deleteEquipment(selEquip.id);
                         if (note) toast.warning(note, { duration: 8000 });
-                        else toast.success(`${selEquip.label} deleted — layout, trenching and exports updated`);
                       }}
                       title={selEquip.placedId
                         ? `${selEquip.label} belongs to hand-placed island ${selEquip.placedIslandN}. Deleting removes the whole placement — it is placed as one unit. Undoable.`
@@ -8782,9 +8717,8 @@ export default function DesignScene() {
                       const island = target ?? islandNs[islandNs.length - 1];
                       const ok = mirrorAlignIsland(island);
                       const reason = useDesignStore.getState().lastRejection;
-                      if (ok) toast.success(`Island ${island} mirror-aligned with its neighbor island`);
-                      else toast.info(reason
-                        ? `Mirror alignment rejected: ${reason}`
+                      if (!ok) toast.info(reason
+                        ? `Mirror alignment rejected — ${friendlyRejectReason(reason)}`
                         : `Island ${island} is already aligned with its neighbor — nothing to move`);
                     }}
                     title={target !== null

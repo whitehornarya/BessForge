@@ -8,8 +8,8 @@
 //
 // [662] Text-label editing: each text label gets an invisible click target.
 // Clicking selects it (calls onSelectText); dragging repositions it via a
-// large invisible drag-capture plane. Overlapping label pairs are highlighted
-// in red. Overrides are stored in textOverrides (store) and applied to both
+// large invisible drag-capture plane. The selected label gets a yellow
+// outline. Overrides are stored in textOverrides (store) and applied to both
 // the CAD view and all DXF/PDF exports.
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import * as THREE from 'three';
@@ -161,7 +161,7 @@ interface TextOp {
   curDx: number; curDy: number;
   /** Original generated text and height (before any override). */
   origText: string; origH: number;
-  /** Approximate AABB half-widths for overlap detection (in layout feet). */
+  /** Approximate AABB half-widths for click/selection rings (in layout feet). */
   halfW: number; halfH: number;
   /** False for labels belonging to a non-active area on a multi-area site:
    *  they render, but they cannot be selected or dragged. */
@@ -414,33 +414,7 @@ function signedArea(pts: number[][]): number {
   return s / 2;
 }
 
-// [662] Compute which text indices overlap (naive AABB pairwise check).
-// Returns a Set of indices that overlap with at least one other label.
-function computeOverlapIndices(texts: TextOp[]): Set<number> {
-  const overlapping = new Set<number>();
-  for (let i = 0; i < texts.length; i++) {
-    // Overlap flagging is an editing aid for the yard being edited. On a
-    // multi-area site the other areas' labels are reference linework the
-    // drafter cannot move here, so flagging them would paint most of the
-    // drawing red with collisions they cannot act on.
-    if (texts[i].editable === false) continue;
-    for (let j = i + 1; j < texts.length; j++) {
-      if (texts[j].editable === false) continue;
-      const a = texts[i], b = texts[j];
-      const axMin = a.x - a.halfW, axMax = a.x + a.halfW;
-      const ayMin = a.y - a.halfH, ayMax = a.y + a.halfH;
-      const bxMin = b.x - b.halfW, bxMax = b.x + b.halfW;
-      const byMin = b.y - b.halfH, byMax = b.y + b.halfH;
-      if (axMax > bxMin && bxMax > axMin && ayMax > byMin && byMax > ayMin) {
-        overlapping.add(i);
-        overlapping.add(j);
-      }
-    }
-  }
-  return overlapping;
-}
-
-// [662] Highlight ring rendered around a selected or overlapping text label.
+// [662] Highlight ring rendered around the selected text label.
 // Rendered as a THREE.LineLoop (closed rectangle outline) at TEXT_Y + epsilon.
 function TextHighlightRing({ t, color, yOffset = 0 }: { t: TextOp; color: string; yOffset?: number }) {
   const pad = t.h * 0.15;
@@ -555,9 +529,6 @@ export default function CadLinework({ design, vis, onSelectText, onDraggingChang
       onSelectText?.(null);
     }
   }, [built.texts, selectedKey, onSelectText]);
-
-  // Overlap indices (recomputed whenever texts change).
-  const overlapIndices = useMemo(() => computeOverlapIndices(built.texts), [built.texts]);
 
   // Resolve effective visibility (default: all groups on).
   const v = vis ?? CAD_LAYER_VIS_DEFAULT;
@@ -676,13 +647,6 @@ export default function CadLinework({ design, vis, onSelectText, onDraggingChang
           ? <TextHighlightRing key={`sel${selectedKey}`} t={built.texts[idx]} color="#f0d060" />
           : null;
       })()}
-
-      {/* [662] Overlap highlight rings (red) */}
-      {Array.from(overlapIndices).map(i => {
-        const t = built.texts[i];
-        if (!t || t.key === selectedKey || !visText(t.group)) return null;
-        return <TextHighlightRing key={`ov${t.key}${i}`} t={t} color="#ff4444" yOffset={0.01} />;
-      })}
 
       {/* [662] Large invisible drag-capture plane — only present while dragging.
           Covers the entire yard so pointer-move events stay captured even when

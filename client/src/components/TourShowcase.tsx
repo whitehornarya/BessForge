@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { toastCaught } from '../lib/notify';
 import { useDesignStore } from '../lib/stores/useDesignStore';
 import { SiteDesign } from '../lib/nextera/types';
 import { getEffectiveConfiguration } from '../lib/nextera/catalog';
@@ -547,7 +548,7 @@ export default function TourShowcase({
           if (bail()) return;
         }
       } catch (err) {
-        toast.error(`Tour showcase failed: ${err instanceof Error ? err.message : String(err)}`);
+        toastCaught('Tour showcase failed — try again', err);
       } finally {
         window.removeEventListener('keydown', onKey);
         setOverlayOn(false);

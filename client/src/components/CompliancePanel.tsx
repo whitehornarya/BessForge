@@ -4,6 +4,7 @@
 // report as PDF or CSV.
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { toastCaught } from '../lib/notify';
 import { useDesignStore } from '../lib/stores/useDesignStore';
 import { getEffectiveConfiguration } from '../lib/nextera/catalog';
 import {
@@ -237,7 +238,7 @@ export default function CompliancePanel() {
                   const saved = await exportCompliancePdf(report, `${fileBase}-compliance-report.pdf`);
                   if (saved) toast.success('Compliance report PDF downloaded');
                 } catch (err) {
-                  toast.error(`PDF export failed: ${err instanceof Error ? err.message : String(err)}`);
+                  toastCaught('Compliance PDF export failed — try again', err);
                 }
               }}
               className="py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 text-xs font-semibold text-slate-100"
@@ -249,7 +250,7 @@ export default function CompliancePanel() {
                 const csv = complianceReportToCsv(report);
                 void saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${fileBase}-compliance-findings.csv`)
                   .then(saved => { if (saved) toast.success('Compliance findings CSV downloaded'); })
-                  .catch(err => toast.error(`CSV export failed: ${err instanceof Error ? err.message : String(err)}`));
+                  .catch(err => toastCaught('Compliance CSV export failed — try again', err));
               }}
               className="py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
             >

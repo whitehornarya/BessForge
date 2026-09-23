@@ -6,6 +6,7 @@
 // as the optimizer (undo with Ctrl+Z).
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { toastCaught } from '../lib/notify';
 import { useDesignStore } from '../lib/stores/useDesignStore';
 import { ARRANGEMENTS } from '../lib/nextera/layoutEngine';
 import { Scenario, ScenarioResult, Scorecard } from '../lib/nextera/scenarios';
@@ -141,7 +142,6 @@ export default function ScenarioComparePanel() {
       // already cleared the cards and cancelled the worker).
       if (runTokenRef.current !== token) return;
       if (r.cancelled) {
-        toast.info('Scenario comparison cancelled');
         setResult(null);
       } else {
         setResult(r);
@@ -152,9 +152,9 @@ export default function ScenarioComparePanel() {
     } catch (e: any) {
       if (runTokenRef.current !== token) return;
       if (e instanceof SupersededError) {
-        toast.info('Scenario comparison cancelled');
+        // User cancelled — no toast.
       } else {
-        toast.error(`Scenario comparison failed: ${e?.message ?? 'unknown error'}`);
+        toastCaught('Scenario comparison failed — try again', e);
       }
     } finally {
       setRunning(false);
@@ -166,7 +166,7 @@ export default function ScenarioComparePanel() {
     applyOptimizedLayout(s.candidate.params);
     const err = useDesignStore.getState().error;
     if (err) {
-      toast.error(`Could not apply scenario: ${err}`);
+      toastCaught('Could not apply that scenario', err);
     } else {
       setAppliedId(s.candidate.id);
       toast.success(
