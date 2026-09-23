@@ -516,7 +516,7 @@ const KIND_COLORS: Record<PlacedEquipment['kind'], string> = {
   auxTransformer: '#27ae60',
   auxSwitchgear: '#16a085',
   auxSwitchPanel: '#1f3fbf',
-  fiberPatchPanel: '#e67e22',
+  fiberPatchPanel: '#a3e635',
   fireControlPanel: '#d35400',
   conex: '#7f8c8d',
   manhole: '#566573',
@@ -540,8 +540,10 @@ const CABLE_COLORS: Record<string, string> = {
   MV: '#29b6d8',
   LVAC: '#c93bc9',        // aux distribution 0.480 kV — thin magenta (spec §2)
   AUXPWR: '#8e44ad',      // aux power LV — thin purple (spec §2)
-  FIBER: '#f39c12',       // 6-count row drops — orange dashed
-  FIBER_TRUNK: '#e67e22', // 144-count trunk — orange solid
+  // Lime — distinct from every feeder palette hue (feeders claim orange ACI 30
+  // and gold ACI 40, which previously made fiber read as a yellow feeder).
+  FIBER: '#a3e635',       // 6-count row drops — lime dashed
+  FIBER_TRUNK: '#84cc16', // 144-count trunk — lime solid
   CATL: '#20d5c8',        // CATL container ring — cyan dashed (teal vs MV)
 };
 
@@ -5896,7 +5898,7 @@ function DesignContent({ design, editMode, realistic, is3D, cad, onDraggingChang
 
 // One-click "inspect trench" camera preset: flies the perspective camera to a
 // low oblique close-up of the 480V aux + fiber trench band so the recessed
-// channel and the blue LVAC / orange fiber conductors are visible. 3D preview
+// channel and the blue LVAC / lime fiber conductors are visible. 3D preview
 // only — no effect on layout or exports.
 function TrenchFlyCamera({ trench }: { trench: NonNullable<SiteDesign['trench']> }) {
   const camera = useThree(s => s.camera);

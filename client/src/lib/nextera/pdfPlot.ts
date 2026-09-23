@@ -52,6 +52,7 @@ const ACI_RGB: Record<number, [number, number, number]> = {
   30: [214, 117, 0],   // orange
   33: [219, 206, 195], // dry pond light tan fill (reference CK1 legend)
   40: [229, 216, 178], // beige land fill (vicinity map atlas palette)
+  60: [100, 140, 0],   // lime (fiber — darkened for white paper)
   150: [59, 122, 247], // wet pond border blue (reference CK1 wet pond edge)
   151: [189, 210, 252],// wet pond light blue fill (reference CK1 legend)
   200: [130, 60, 180], // purple

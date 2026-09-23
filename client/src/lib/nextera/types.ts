@@ -266,9 +266,9 @@ export interface RoadCut {
 // DC = red(+)/blue(−) pair, MV = cyan dash-dot,
 // LVAC = aux distribution 0.480 kV (thin magenta, AUXSWB → equipment aux
 // panels along rows and island center), AUXPWR = aux power LV (thin purple,
-// AUXT → AUXSWB and local aux equipment), FIBER = 6-count row drops (orange
+// AUXT → AUXSWB and local aux equipment), FIBER = 6-count row drops (lime
 // dashed, FJB daisy chain along PCS rows), FIBER_TRUNK = 144-count trunk
-// (orange solid, control enclosure → one FJB per island), CATL = container
+// (lime solid, control enclosure → one FJB per island), CATL = container
 // comms network 6-count (cyan dashed closed ring per container cluster).
 export type CableClass =
   | 'DC' | 'MV' | 'LVAC' | 'AUXPWR' | 'FIBER' | 'FIBER_TRUNK' | 'CATL';

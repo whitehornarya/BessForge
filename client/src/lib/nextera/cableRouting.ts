@@ -5,7 +5,7 @@
 //                  a central spine to the aux switchgear (or a POI stub)
 //   LVAC (blue):   480V feed from the aux transformer / aux switch panel up the
 //                  spine onto per-row LVAC buses with drops to each inverter
-//   FIBER (orange): fiber patch panel up the spine onto per-row fiber buses
+//   FIBER (lime): fiber patch panel up the spine onto per-row fiber buses
 //                  with drops to each inverter; fire control panel tied in
 // The spine runs inside the "480V Aux and Fiber Trench" band placed in a gap
 // between block columns. Augmentation equipment gets reference-only DC stubs

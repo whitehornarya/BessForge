@@ -42,6 +42,7 @@ const ACI_HEX: Record<number, string> = {
   32: '#d98e56',   // brown-orange (index contours)
   34: '#c9a06a',   // tan (crushed rock)
   40: '#e6c229',   // gold
+  60: '#a3e635',   // lime (fiber cables — distinct from feeder orange/gold)
   84: '#63c76a',   // muted green (grounding)
   140: '#7dd3fc',  // sky blue
   150: '#3b7af7',  // wet pond border blue (reference wet pond edge)

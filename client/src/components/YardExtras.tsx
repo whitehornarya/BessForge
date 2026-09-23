@@ -38,8 +38,8 @@ const FENCE_PANEL_FT = 10; // texture tile width in feet
 const TRENCH_CONDUCTORS: { color: string; dx: number; depth: number; r: number }[] = [
   { color: '#1f3fbf', dx: -0.9, depth: 2.45, r: 0.22 }, // LVAC run A
   { color: '#1f3fbf', dx: -0.3, depth: 2.45, r: 0.22 }, // LVAC run B
-  { color: '#f39c12', dx: 0.5, depth: 2.2, r: 0.12 },  // fiber
-  { color: '#f39c12', dx: 0.85, depth: 2.2, r: 0.12 }, // fiber spare
+  { color: '#a3e635', dx: 0.5, depth: 2.2, r: 0.12 },  // fiber
+  { color: '#a3e635', dx: 0.85, depth: 2.2, r: 0.12 }, // fiber spare
 ];
 
 // Open excavated channel for the 480V aux + fiber trench: earthen side
@@ -73,7 +73,7 @@ export function TrenchChannel({ trench }: { trench: NonNullable<SiteDesign['tren
           <meshStandardMaterial color="#5c4a30" side={THREE.DoubleSide} />
         </mesh>
       ))}
-      {/* cable conductors lying in the trench (LVAC deep blue, fiber orange) */}
+      {/* cable conductors lying in the trench (LVAC deep blue, fiber lime) */}
       {TRENCH_CONDUCTORS.map((c, i) => (
         <mesh key={`c${i}`} position={[trench.x + c.dx, -c.depth, zMid]} rotation={[Math.PI / 2, 0, 0]}>
           <cylinderGeometry args={[c.r, c.r, len - 0.5, 10]} />

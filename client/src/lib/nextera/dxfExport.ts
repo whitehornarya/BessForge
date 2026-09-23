@@ -180,8 +180,9 @@ export const COLORS = {
   CABLE_MV: 4,    // cyan
   CABLE_LVAC: 6,  // thin magenta — aux distribution 0.480 kV (spec §2)
   CABLE_AUXPWR: 200, // thin purple — aux power, AUXT to AUXSWB (spec §2)
-  CABLE_FIBER: 30, // orange dashed — 6-count row drops
-  CABLE_FIBER_TRUNK: 30, // orange solid — 144-count trunk to FJBs
+  // Lime (ACI 60) — distinct from feeder orange (ACI 30) and gold (ACI 40).
+  CABLE_FIBER: 60, // lime dashed — 6-count row drops
+  CABLE_FIBER_TRUNK: 60, // lime solid — 144-count trunk to FJBs
   CABLE_CATL: 4,  // cyan dashed — CATL container comms ring
   TRENCH: 5,      // deep blue band
   FEEDER: 6,      // magenta
@@ -206,8 +207,9 @@ export const LINETYPE_PATTERNS: Record<string, number[]> = {
   DASHDOT: [12, -3, 0, -3],
   // Dotted — aux power LV (AUXT -> AUXSWB local links).
   DOT: [0, -2.5],
-  // Medium dash — 6-count fiber row drops ("orange dashed" per spec §2),
-  // shorter than DASHED2 so LVAC and fiber stay distinct in grayscale.
+  // Medium dash — 6-count fiber row drops (lime dashed; ACI distinct from
+  // feeder orange/gold), shorter than DASHED2 so LVAC and fiber stay
+  // distinct in grayscale.
   DASHED3: [4, -2],
   // Long-short dash — CATL container comms ring ("cyan dashed" per spec §2);
   // longer than DASHED2 so it never reads as LVAC at plot scale.
@@ -3162,7 +3164,7 @@ export function drawTrench(dxf: DxfWriter, design: SiteDesign) {
 }
 
 // Cable runs per Sheets 3-4: open LWPOLYLINEs, one layer per cable class
-// (DC (+) red / DC (−) blue pairs, MV cyan / LVAC blue / fiber orange),
+// (DC (+) red / DC (−) blue pairs, MV cyan / LVAC blue / fiber lime),
 // 1:1 from layout feet.
 // Reference-only runs (augmentation stubs) go on a dedicated DASHED layer
 // so CAD output distinguishes conceptual stubs from installed conduit.

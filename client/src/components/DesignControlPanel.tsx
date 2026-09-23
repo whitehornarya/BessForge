@@ -4895,7 +4895,7 @@ export default function DesignControlPanel() {
               requestInspectTrench();
             }}
             disabled={!design?.trench}
-            title="Fly the 3D camera to a low close-up of the 480V aux & fiber trench to inspect the recessed channel, blue LVAC and orange fiber conductors — 3D preview only, DXF/PDF unaffected"
+            title="Fly the 3D camera to a low close-up of the 480V aux & fiber trench to inspect the recessed channel, blue LVAC and lime fiber conductors — 3D preview only, DXF/PDF unaffected"
             className="w-full mt-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100 disabled:opacity-40 disabled:hover:bg-slate-700"
           >
             Inspect trench up close (3D)
