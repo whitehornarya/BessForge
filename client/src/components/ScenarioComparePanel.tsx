@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { toastCaught } from '../lib/notify';
+import { paintThen } from '../lib/busy';
 import { useDesignStore } from '../lib/stores/useDesignStore';
 import { ARRANGEMENTS } from '../lib/nextera/layoutEngine';
 import { Scenario, ScenarioResult, Scorecard } from '../lib/nextera/scenarios';
@@ -163,16 +164,18 @@ export default function ScenarioComparePanel() {
   };
 
   const handleApply = (s: Scenario) => {
-    applyOptimizedLayout(s.candidate.params);
-    const err = useDesignStore.getState().error;
-    if (err) {
-      toastCaught('Could not apply that scenario', err);
-    } else {
-      setAppliedId(s.candidate.id);
-      toast.success(
-        `${s.def.label} scenario applied — ${s.scorecard.blockCount} blocks, ${s.scorecard.achievedMWh.toFixed(0)} MWh. Undo with Ctrl+Z.`
-      );
-    }
+    void paintThen(() => {
+      applyOptimizedLayout(s.candidate.params);
+      const err = useDesignStore.getState().error;
+      if (err) {
+        toastCaught('Could not apply that scenario', err);
+      } else {
+        setAppliedId(s.candidate.id);
+        toast.success(
+          `${s.def.label} scenario applied — ${s.scorecard.blockCount} blocks, ${s.scorecard.achievedMWh.toFixed(0)} MWh. Undo with Ctrl+Z.`
+        );
+      }
+    });
   };
 
   // Arrow keys move focus between scenario cards; Enter/Space applies.

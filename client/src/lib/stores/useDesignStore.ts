@@ -2394,6 +2394,10 @@ const buildTraceCommitPhases = (
           bucketEquip.get(activeKey) ?? [],
           bucketRoads.get(activeKey) ?? []
         );
+        // Leaving manual authoring: Apply fills a normal traced yard (equipment
+        // / roads / feeders), not the fence-only bare site. Slice 2: leave the
+        // Manual Placement chrome and render the scan the way it works today.
+        delete nextEdits.yardAuthoring;
         set({
           layoutEdits: nextEdits,
           ...(roadAdds.length ? { roadMode: 'compact' as RoadMode } : {}),
@@ -2412,7 +2416,10 @@ const buildTraceCommitPhases = (
             if (!adds.length && !rds.length && cleaned === prev0) return a;
             touchedOthers = true;
             const prev = cleaned;
-            return { ...a, edits: { ...(a.edits ?? {}), layoutEdits: extendEdits(prev, adds, rds) } };
+            const extended = extendEdits(prev, adds, rds);
+            // Areas that receive traced content leave manual authoring too.
+            if (adds.length || rds.length) delete extended.yardAuthoring;
+            return { ...a, edits: { ...(a.edits ?? {}), layoutEdits: extended } };
           });
           if (touchedOthers) set({ siteAreas: nextAreas });
         }
@@ -5004,6 +5011,8 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     // is regenerated with, not without, the drafter's current changes.
     const siteAreas = commitActiveAreaEdits(s);
     if (siteAreas.length === 0) return;
+    set({ computing: true });
+    try {
     // Project-wide options. Per-area options (gate edge, arrangement, lattice
     // shift, constraints, exclusion zones) come from each area's own edits, so
     // editing one footprint never re-poses another.
@@ -5188,6 +5197,9 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     // layout (or none at all), and compliance/permit exports describe
     // trenches that no longer exist.
     if (next.length >= 2 && !opts?.skipFeederRecompute) get().recomputeAllAreaFeeders();
+    } finally {
+      set({ computing: false });
+    }
   },
 
   setActiveArea: (id: string) => {
@@ -6360,6 +6372,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     // token may apply its result, so a sync regenerate supersedes any
     // in-flight worker run and stale worker results are discarded.
     const token = ++regenToken;
+    set({ computing: true });
     const apply = (design: SiteDesign, prevOverride?: SiteDesign | null) => {
       if (token !== regenToken) return; // superseded
       // Keep feeder grouping overrides when the inverter set is unchanged
@@ -6481,7 +6494,6 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       }
       return;
     }
-    set({ computing: true });
     generateDesignInWorker(boundary, configId, targetMW, targetMWh, options)
       .then(apply)
       .catch((e: any) => {

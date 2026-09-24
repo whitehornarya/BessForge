@@ -7,13 +7,14 @@
 // drawing. Display only — nothing here feeds back into layout math or
 // exports (vector DXF/PDF exports are worker/CPU-side and never needed
 // WebGL in the first place).
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { SiteDesign } from '../lib/nextera/types';
 import { DxfWriter, composeDesignDxf, DisplayOp, LINETYPE_PATTERNS } from '../lib/nextera/dxfExport';
 import { composeSiteDxf } from '../lib/nextera/siteCompose';
 import { ansi37Segments } from '../lib/nextera/hatchPatterns';
 import { getEffectiveConfiguration } from '../lib/nextera/catalog';
 import { useDesignStore } from '../lib/stores/useDesignStore';
+import { paintFrame } from '../lib/busy';
 import { aciHex } from './CadLinework';
 
 const BG = '#101418'; // same dark drawing background as the WebGL CAD view
@@ -168,31 +169,52 @@ export default function PlanFallback2D({ design, onRetry3d }: { design: SiteDesi
   const siteAreas = useDesignStore(s => s.siteAreas);
   const activeAreaId = useDesignStore(s => s.activeAreaId);
   const areaFeeders = useDesignStore(s => s.areaFeeders);
+  const setBusyOverlay = useDesignStore(s => s.setBusyOverlay);
 
   // Same composition (and parameters) the DXF download / PDF plot / WebGL
   // CAD view use, so this fallback can never drift from the deliverable.
   // Multi-area sites compose every footprint through the SAME shared helper
-  // the WebGL CAD view calls, so the two views cannot diverge.
-  const dxf = useMemo(() => {
-    const config = getEffectiveConfiguration(configId, containersPerPcs);
-    const projName = titleBlock.projectName.trim() || boundary?.name || 'Site';
-    const w = new DxfWriter(drawingVisibility);
-    composeSiteDxf(w, {
-      areas: siteAreas,
-      activeAreaId,
-      design,
-      projectName: projName,
-      config,
-      meta: titleBlock,
-      feeders,
-      substation,
-      areaFeeders,
-      areaZones: areaZones.length ? areaZones : undefined,
-      sheetExtras: eciLegend ? { eciLegend: true } : undefined,
+  // the WebGL CAD view calls, so the two views cannot diverge. Defer behind
+  // a paint; show BusyOverlay only if compose is still running after ~120ms.
+  const [dxf, setDxf] = useState(() => new DxfWriter());
+  const composeGen = useRef(0);
+  useEffect(() => {
+    const id = ++composeGen.current;
+    let overlayShown = false;
+    const showTimer = window.setTimeout(() => {
+      if (composeGen.current !== id) return;
+      overlayShown = true;
+      setBusyOverlay({ label: 'Building CAD view…' });
+    }, 120);
+    void paintFrame().then(() => {
+      if (composeGen.current !== id) return;
+      const config = getEffectiveConfiguration(configId, containersPerPcs);
+      const projName = titleBlock.projectName.trim() || boundary?.name || 'Site';
+      const w = new DxfWriter(drawingVisibility);
+      composeSiteDxf(w, {
+        areas: siteAreas,
+        activeAreaId,
+        design,
+        projectName: projName,
+        config,
+        meta: titleBlock,
+        feeders,
+        substation,
+        areaFeeders,
+        areaZones: areaZones.length ? areaZones : undefined,
+        sheetExtras: eciLegend ? { eciLegend: true } : undefined,
+      });
+      if (composeGen.current !== id) return;
+      window.clearTimeout(showTimer);
+      setDxf(w);
+      if (overlayShown) setBusyOverlay(null);
     });
-    return w;
+    return () => {
+      window.clearTimeout(showTimer);
+      if (overlayShown) setBusyOverlay(null);
+    };
   }, [design, configId, containersPerPcs, titleBlock, boundary, feeders, substation, areaZones,
-      eciLegend, drawingVisibility, siteAreas, activeAreaId, areaFeeders]);
+      eciLegend, drawingVisibility, siteAreas, activeAreaId, areaFeeders, setBusyOverlay]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewRef = useRef<View | null>(null);

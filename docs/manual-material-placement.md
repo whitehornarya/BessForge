@@ -26,6 +26,7 @@ Saved projects that do not carry `yardAuthoring: 'manual'` keep today’s auto-l
 - After “show all areas,” each BESS footprint shows the property line and fence only. The imported drawing stays loaded for scan and is hidden during this phase. No auto equipment or roads.
 - The placement chrome lives in the sidebar, not on the scene. The section is **Manual Placement**, same heading style as the other tabs.
 - **Auto-fill from drawing** / **Scan drawing** is duplicated at the bottom of that tab so it reads as the next step. The original control stays on Site Boundary.
+- Manual palette options (slice 3): PCS, battery container, road, and the existing aux items. Buttons select only; arming and drop are later slices.
 
 ## Slice 1 — Placement indicator (done)
 
@@ -37,18 +38,19 @@ One placeholder block can be dragged on the site. That drag is local to [`Design
 
 Applying a scan in this slice still leaves the bare yard empty. Filling the yard from the scan is slice 2.
 
-## Slice 2 — Scan, then today’s UI
+## Slice 2 — Scan, then today’s UI (done)
 
 **Scan drawing** on Manual Placement uses the existing [`ReferenceAutoFill`](../client/src/components/DesignControlPanel.tsx) path (`analyzeReferenceTrace` / `applyReferenceTrace`). Before apply, the user is still on the bare yard.
 
-After apply, leave the placement chrome and render the site the way a scan does today: traced equipment and roads, the current panel sections, and the existing 3D / CAD / 2D views. No new post-scan layout. `commitTraceAdds` keeps appending. It must not rewrite poses of anything already stored with `source: 'manual'` once later slices commit real blocks.
+After apply, leave the placement chrome and render the site the way a scan does today: traced equipment and roads, the current panel sections, and the existing 3D / CAD / 2D views. No new post-scan layout. Apply clears `yardAuthoring` so regenerate builds a normal traced yard instead of the fence-only bare site. `commitTraceAdds` keeps appending. It must not rewrite poses of anything already stored with `source: 'manual'` once later slices commit real blocks.
 
-## Slice 3 — Buttons only
+## Slice 3 — Buttons only (done)
 
 Add one button per manual option in the **Manual Placement** section. Labels and nothing else:
 
 - PCS
 - Battery container
+- Road
 - Aux transformer, aux switchgear, comms cabinet, aux switch panel, fiber patch panel, fire control panel
 
 Buttons are visible and selectable as UI. They do not place catalog gear yet. The placeholder from slice 1 can stay until slice 5 replaces it.

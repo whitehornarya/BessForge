@@ -12,6 +12,7 @@
 // outline. Overrides are stored in textOverrides (store) and applied to both
 // the CAD view and all DXF/PDF exports.
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import { paintFrame } from '../lib/busy';
 import * as THREE from 'three';
 import { Text } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
@@ -463,6 +464,8 @@ interface Props {
   onDraggingChange?: (dragging: boolean) => void;
 }
 
+const EMPTY_BUILT: Built = { lines: [], lineGroups: [], hatches: [], hatchGroups: [], texts: [] };
+
 export default function CadLinework({ design, vis, onSelectText, onDraggingChange }: Props) {
   const boundary = useDesignStore(s => s.boundary);
   const configId = useDesignStore(s => s.configId);
@@ -483,45 +486,76 @@ export default function CadLinework({ design, vis, onSelectText, onDraggingChang
   // collection system instead of only the yard being edited.
   const areaFeeders = useDesignStore(s => s.areaFeeders);
   const invalidate = useThree(s => s.invalidate);
+  const setBusyOverlay = useDesignStore(s => s.setBusyOverlay);
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragRef = useRef<DragRef | null>(null);
+  const [built, setBuilt] = useState<Built>(EMPTY_BUILT);
+  const composeGen = useRef(0);
+  const builtRef = useRef(built);
+  builtRef.current = built;
 
-  const built = useMemo<Built>(() => {
-    const config = getEffectiveConfiguration(configId, containersPerPcs);
-    const projName = titleBlock.projectName.trim() || boundary?.name || 'Site';
-    const dxf = new DxfWriter(drawingVisibility);
-    // Same composition (and parameters) the DXF download / PDF plot use, so
-    // the on-screen drawing can never drift from the deliverable. On a
-    // multi-area site this composes EVERY area into the shared frame; a
-    // single-area project delegates to the identical legacy call.
-    const ranges = composeSiteDxf(dxf, {
-      areas: siteAreas,
-      activeAreaId,
-      design,
-      projectName: projName,
-      config,
-      meta: titleBlock,
-      feeders,
-      substation,
-      areaFeeders,
-      areaZones: areaZones.length ? areaZones : undefined,
-      sheetExtras: eciLegend ? { eciLegend: true } : undefined,
-    });
-    return buildObjects(dxf, textOverrides, ranges);
-  }, [design, configId, containersPerPcs, titleBlock, boundary, feeders, substation, areaZones,
-      eciLegend, drawingVisibility, textOverrides, siteAreas, activeAreaId, areaFeeders]);
-
-  // Dispose replaced geometry/materials; demand frameloop needs an explicit
-  // repaint whenever the built objects change.
+  // Defer composeSiteDxf behind a paint so BusyOverlay can appear; only show
+  // the overlay when compose is still running after ~120ms (avoids flash on
+  // every micro-edit). Same composition (and parameters) the DXF download /
+  // PDF plot use, so the on-screen drawing can never drift from the deliverable.
   useEffect(() => {
-    invalidate();
+    const id = ++composeGen.current;
+    let overlayShown = false;
+    const showTimer = window.setTimeout(() => {
+      if (composeGen.current !== id) return;
+      overlayShown = true;
+      setBusyOverlay({ label: 'Building CAD view…' });
+    }, 120);
+    void paintFrame().then(() => {
+      if (composeGen.current !== id) return;
+      const config = getEffectiveConfiguration(configId, containersPerPcs);
+      const projName = titleBlock.projectName.trim() || boundary?.name || 'Site';
+      const dxf = new DxfWriter(drawingVisibility);
+      // On a multi-area site this composes EVERY area into the shared frame; a
+      // single-area project delegates to the identical legacy call.
+      const ranges = composeSiteDxf(dxf, {
+        areas: siteAreas,
+        activeAreaId,
+        design,
+        projectName: projName,
+        config,
+        meta: titleBlock,
+        feeders,
+        substation,
+        areaFeeders,
+        areaZones: areaZones.length ? areaZones : undefined,
+        sheetExtras: eciLegend ? { eciLegend: true } : undefined,
+      });
+      const next = buildObjects(dxf, textOverrides, ranges);
+      if (composeGen.current !== id) {
+        for (const l of next.lines) { l.geometry.dispose(); (l.material as THREE.Material).dispose(); }
+        for (const m of next.hatches) { m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
+        return;
+      }
+      window.clearTimeout(showTimer);
+      const prev = builtRef.current;
+      setBuilt(next);
+      for (const l of prev.lines) { l.geometry.dispose(); (l.material as THREE.Material).dispose(); }
+      for (const m of prev.hatches) { m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
+      if (overlayShown) setBusyOverlay(null);
+      invalidate();
+    });
     return () => {
-      for (const l of built.lines) { l.geometry.dispose(); (l.material as THREE.Material).dispose(); }
-      for (const m of built.hatches) { m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
+      window.clearTimeout(showTimer);
+      if (overlayShown) setBusyOverlay(null);
     };
-  }, [built, invalidate]);
+  }, [design, configId, containersPerPcs, titleBlock, boundary, feeders, substation, areaZones,
+      eciLegend, drawingVisibility, textOverrides, siteAreas, activeAreaId, areaFeeders,
+      setBusyOverlay, invalidate]);
+
+  // Unmount dispose.
+  useEffect(() => () => {
+    const b = builtRef.current;
+    for (const l of b.lines) { l.geometry.dispose(); (l.material as THREE.Material).dispose(); }
+    for (const m of b.hatches) { m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
+  }, []);
 
   // If the selected label was removed (re-layout wiped it), clear selection.
   useEffect(() => {

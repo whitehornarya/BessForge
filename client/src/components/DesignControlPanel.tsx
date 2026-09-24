@@ -2,6 +2,7 @@ import { finalizePdfBlob } from '@/lib/nextera/pdfIdentity';
 import { Fragment, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { toastCaught, friendlyRejectReason } from '../lib/notify';
+import { withBusyOverlay, paintThen, setBusyFrac } from '../lib/busy';
 import { useDesignStore } from '../lib/stores/useDesignStore';
 import { generateArrangements, ARRANGEMENTS, ArrangementStrategy, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, MANUAL_EQUIPMENT_CATALOG, isManualEquipmentSpec, isTracedBessYard } from '../lib/nextera/layoutEngine';
 import { OptimizeResult, OptimizeCandidate } from '../lib/nextera/optimizer';
@@ -1569,32 +1570,42 @@ export default function DesignControlPanel() {
     }
   };
 
-  const handleApplyCandidate = (cand: OptimizeCandidate) => {
-    applyOptimizedLayout(cand.params);
-    const err = useDesignStore.getState().error;
-    if (err) {
-      toastCaught('Could not apply that layout', err);
-    } else {
-      toast.success(`Optimized layout applied — ${cand.stats.blocksPlaced} blocks, ${cand.stats.achievedMWh.toFixed(0)} MWh. Undo with Ctrl+Z.`);
-    }
+  const handleApplyCandidate = async (cand: OptimizeCandidate) => {
+    await paintThen(() => {
+      applyOptimizedLayout(cand.params);
+      const err = useDesignStore.getState().error;
+      if (err) {
+        toastCaught('Could not apply that layout', err);
+      } else {
+        toast.success(`Optimized layout applied — ${cand.stats.blocksPlaced} blocks, ${cand.stats.achievedMWh.toFixed(0)} MWh. Undo with Ctrl+Z.`);
+      }
+    });
   };
 
-  // Pristine alternatives (no edits) with comparison stats; computed only
-  // while the explorer is open. Deterministic per inputs.
-  const arrangementOptions = useMemo(() => {
-    if (!showArrangements || !boundary) return null;
-    try {
-      return generateArrangements(boundary, config, targetMW, targetMWh, {
-        hotClimate, containersPerPcs, roadMode, laydownPct, augmentPct, surfacingMode, surfacingDepthIn, dcRouting,
-        // The candidates must be packed inside the fence the drafter selected,
-        // otherwise the explorer compares block counts for a yard that is not
-        // the one being drawn.
-        fencePlacement,
-      });
-    } catch {
-      return null;
-    }
-  }, [showArrangements, boundary, config, targetMW, targetMWh, hotClimate, containersPerPcs, roadMode, laydownPct, augmentPct, surfacingMode, surfacingDepthIn, dcRouting, fencePlacement]);
+  // Pristine alternatives (no edits) with comparison stats; loaded once when
+  // the explorer opens (BusyOverlay) so opening never freezes the panel.
+  const [arrangementOptions, setArrangementOptions] = useState<ReturnType<typeof generateArrangements> | null>(null);
+  const arrangementInputsKey = useMemo(() => JSON.stringify({
+    name: boundary?.name, mw: targetMW, mwh: targetMWh, hotClimate, containersPerPcs,
+    roadMode, laydownPct, augmentPct, surfacingMode, surfacingDepthIn, dcRouting, fencePlacement, configId,
+  }), [boundary?.name, targetMW, targetMWh, hotClimate, containersPerPcs, roadMode, laydownPct, augmentPct, surfacingMode, surfacingDepthIn, dcRouting, fencePlacement, configId]);
+  const arrangementKeyRef = useRef('');
+  useEffect(() => {
+    if (!showArrangements) return;
+    if (!boundary) { setArrangementOptions(null); arrangementKeyRef.current = ''; return; }
+    if (arrangementKeyRef.current === arrangementInputsKey) return;
+    arrangementKeyRef.current = arrangementInputsKey;
+    void withBusyOverlay('Generating arrangements…', () => {
+      try {
+        setArrangementOptions(generateArrangements(boundary, config, targetMW, targetMWh, {
+          hotClimate, containersPerPcs, roadMode, laydownPct, augmentPct, surfacingMode, surfacingDepthIn, dcRouting,
+          fencePlacement,
+        }));
+      } catch {
+        setArrangementOptions(null);
+      }
+    });
+  }, [showArrangements, arrangementInputsKey, boundary, config, targetMW, targetMWh, hotClimate, containersPerPcs, roadMode, laydownPct, augmentPct, surfacingMode, surfacingDepthIn, dcRouting, fencePlacement]);
 
   const swBlocksPlaced = useMemo(() => {
     if (!arrangementOptions) return null;
@@ -1832,44 +1843,44 @@ export default function DesignControlPanel() {
       toast.error('Upload a KMZ site boundary first');
       return;
     }
-    warnRoutingGatesForExport();
-    const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
-    try {
-      if (cadProfile === LEGACY_TEMPLATE_CONTRACT.id) {
-        const routed = buildLegacyLayoutExport(
-          cadProfile,
-          { design, titleBlock, feeders, substation },
-          { filename: `${exportName}_Legacy_Layout.dxf` },
-        );
-        if (!routed.handled) {
-          toast.error('Legacy DXF routing failed');
+    await withBusyOverlay('Exporting DXF…', async () => {
+      warnRoutingGatesForExport();
+      const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+      try {
+        if (cadProfile === LEGACY_TEMPLATE_CONTRACT.id) {
+          const routed = buildLegacyLayoutExport(
+            cadProfile,
+            { design, titleBlock, feeders, substation },
+            { filename: `${exportName}_Legacy_Layout.dxf` },
+          );
+          if (!routed.handled) {
+            toast.error('Legacy DXF routing failed');
+            return;
+          }
+          const saved = await saveBlob(
+            legacyArtifactToBlob(routed.artifact),
+            routed.artifact.filename,
+          );
+          if (saved) toast.success('Legacy DXF exported (page 2 layout)');
           return;
         }
+        const contours = await computeExportContours(design);
+        const content = await buildDxfInWorker(design, exportName, configId, titleBlock, feeders, substation, containersPerPcs, contours, exportGroundingDxf ? groundingPlan : null, exportTrenchSectionsDxf, exportSurfacingMesh, areaZones.length ? areaZones : undefined, eciLegend || undefined, Object.keys(textOverrides).length ? textOverrides : undefined, layoutEdits.auxFeederWaypoints?.length ? true : undefined, undefined, siteExportInput, drawingVisibility);
         const saved = await saveBlob(
-          legacyArtifactToBlob(routed.artifact),
-          routed.artifact.filename,
+          new Blob([content], { type: 'application/dxf' }),
+          `${exportName}${exportFileTag()}_10pct_Design_${new Date().toISOString().slice(0, 10)}.dxf`
         );
-        if (saved) toast.success('Legacy DXF exported (page 2 layout)');
-        return;
+        if (saved) toast.success(siteExportInput ? `DXF exported — ${exportScopeLabel}` : 'DXF exported');
+      } catch (e: any) {
+        if (e instanceof SupersededError) return;
+        if (e instanceof LegacyExportValidationError) {
+          console.error(formatLegacyValidationIssues(e.issues));
+          toast.error('Legacy DXF could not be built — check the console for validation details', { duration: 12_000 });
+          return;
+        }
+        toastCaught('DXF export failed — try again', e);
       }
-      const contours = await computeExportContours(design);
-      // DXF string is built in the design worker so a 150+ block sheet
-      // (~1 MB of entities) never stalls the UI thread.
-      const content = await buildDxfInWorker(design, exportName, configId, titleBlock, feeders, substation, containersPerPcs, contours, exportGroundingDxf ? groundingPlan : null, exportTrenchSectionsDxf, exportSurfacingMesh, areaZones.length ? areaZones : undefined, eciLegend || undefined, Object.keys(textOverrides).length ? textOverrides : undefined, layoutEdits.auxFeederWaypoints?.length ? true : undefined, undefined, siteExportInput, drawingVisibility);
-      const saved = await saveBlob(
-        new Blob([content], { type: 'application/dxf' }),
-        `${exportName}${exportFileTag()}_10pct_Design_${new Date().toISOString().slice(0, 10)}.dxf`
-      );
-      if (saved) toast.success(siteExportInput ? `DXF exported — ${exportScopeLabel}` : 'DXF exported');
-    } catch (e: any) {
-      if (e instanceof SupersededError) return;
-      if (e instanceof LegacyExportValidationError) {
-        console.error(formatLegacyValidationIssues(e.issues));
-        toast.error('Legacy DXF could not be built — check the console for validation details', { duration: 12_000 });
-        return;
-      }
-      toastCaught('DXF export failed — try again', e);
-    }
+    });
   };
 
   const handleExportPackage = async () => {
@@ -1877,6 +1888,8 @@ export default function DesignControlPanel() {
       toast.error('Upload a KMZ site boundary first');
       return;
     }
+    await withBusyOverlay('Building DXF package…', async () => {
+    setBusyFrac(0.1);
     warnRoutingGatesForExport();
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
     try {
@@ -1885,8 +1898,10 @@ export default function DesignControlPanel() {
       // rect still georegisters the right-panel overlay — so fetch imagery
       // bounds when the option is on.
       const satForCover = issuedFor10 ? await loadSatellite() : null;
+      setBusyFrac(0.35);
       const cover10 = await buildCover10(satForCover);
       // Sheets are composed in the design worker; the zip is assembled here.
+      setBusyFrac(0.5);
       const sheets = await buildDxfPackageInWorker(
         design, exportName, configId, titleBlock, feeders, substation, containersPerPcs, contours,
         exportGroundingDxf ? groundingPlan : null,
@@ -1963,6 +1978,7 @@ export default function DesignControlPanel() {
       }
       toastCaught('DXF package export failed — try again', e);
     }
+    });
   };
 
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -2189,6 +2205,7 @@ export default function DesignControlPanel() {
   };
 
   const [sldPdfBusy, setSldPdfBusy] = useState(false);
+  const [sldDxfBusy, setSldDxfBusy] = useState(false);
   // SLD export options (opt-in; defaults keep the legacy ANSI sheet):
   // symbol convention per ANSI/IEEE 315 vs IEC 60617 (never mixed on one
   // sheet), and bus fault duties from the short-circuit study when enabled.
@@ -2228,9 +2245,11 @@ export default function DesignControlPanel() {
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setSldDxfBusy(true);
     try {
       // Small sheet (a few hundred entities) — built on the UI thread.
       const { buildSldDxfString } = await import('../lib/nextera/sld');
+      await new Promise(res => setTimeout(res, 30));
       const content = buildSldDxfString(design, exportName, feeders, config, titleBlock, sldOpts);
       const saved = await saveBlob(
         new Blob([content], { type: 'application/dxf' }),
@@ -2239,6 +2258,8 @@ export default function DesignControlPanel() {
       if (saved) toast.success('Single-line diagram DXF exported');
     } catch (e: any) {
       toastCaught('SLD export failed — try again', e);
+    } finally {
+      setSldDxfBusy(false);
     }
   };
 
@@ -2276,14 +2297,17 @@ export default function DesignControlPanel() {
   // cable schedule sheet; rows come verbatim from buildBomRows + the rollup,
   // so DXF/PDF/CSV always agree line for line).
   const [bomPdfBusy, setBomPdfBusy] = useState(false);
+  const [bomDxfBusy, setBomDxfBusy] = useState(false);
   const handleExportBomSheetDxf = async () => {
     if (!design || !boundary) {
       toast.error('Upload a KMZ site boundary first');
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setBomDxfBusy(true);
     try {
       const { buildBomSheetDxfString } = await import('../lib/nextera/bomSheet');
+      await new Promise(res => setTimeout(res, 30));
       // Two B018 sheets, exactly like the issued 90% package (CAR-D-B018-1/-2)
       let saved = false;
       for (const sheet of [1, 2] as const) {
@@ -2296,6 +2320,8 @@ export default function DesignControlPanel() {
       if (saved) toast.success('Bill of materials DXF exported (2 sheets, B018 template)');
     } catch (e: any) {
       toastCaught('BOM sheet export failed — try again', e);
+    } finally {
+      setBomDxfBusy(false);
     }
   };
 
@@ -2325,6 +2351,8 @@ export default function DesignControlPanel() {
 
   // --- Grading plan exports (opt-in; only offered when the FG surface is on)
   const [gradingPdfBusy, setGradingPdfBusy] = useState(false);
+  const [gradingDxfBusy, setGradingDxfBusy] = useState(false);
+  const [landXmlBusy, setLandXmlBusy] = useState(false);
   const handleExportGradingDxf = async () => {
     if (!design || !boundary) {
       toast.error('Upload a KMZ site boundary first');
@@ -2335,8 +2363,10 @@ export default function DesignControlPanel() {
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setGradingDxfBusy(true);
     try {
       const { buildGradingPlanDxfString, buildProposedContours, buildCutFillRegions } = await import('../lib/nextera/gradingPlan');
+      await new Promise(res => setTimeout(res, 30));
       const rect = terrainLocalRect(terrainYard, design.boundary.origin);
       const proposed = buildProposedContours(terrainYard, rect, fgSurface);
       const existing = await computeExportContours(design);
@@ -2357,6 +2387,8 @@ export default function DesignControlPanel() {
       if (saved) toast.success('Grading plan DXF exported (screening — not for construction)');
     } catch (e: any) {
       toastCaught('Grading plan export failed — try again', e);
+    } finally {
+      setGradingDxfBusy(false);
     }
   };
 
@@ -2400,8 +2432,11 @@ export default function DesignControlPanel() {
 
   // --- GP-2 cross-sections exports (opt-in; only offered when enabled)
   const [sectionsPdfBusy, setSectionsPdfBusy] = useState(false);
+  const [sectionsDxfBusy, setSectionsDxfBusy] = useState(false);
   const [drainagePdfBusy, setDrainagePdfBusy] = useState(false);
+  const [drainageDxfBusy, setDrainageDxfBusy] = useState(false);
   const [drainage2PdfBusy, setDrainage2PdfBusy] = useState(false);
+  const [drainage2DxfBusy, setDrainage2DxfBusy] = useState(false);
   const handleExportSectionsDxf = async () => {
     if (!design || !boundary) {
       toast.error('Upload a KMZ site boundary first');
@@ -2412,8 +2447,10 @@ export default function DesignControlPanel() {
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setSectionsDxfBusy(true);
     try {
       const { buildGradingSections, buildGradingSectionsDxfString } = await import('../lib/nextera/gradingSections');
+      await new Promise(res => setTimeout(res, 30));
       const rect = terrainLocalRect(terrainYard, design.boundary.origin);
       const sections = buildGradingSections(terrainYard, rect, fgSurface, { quarterPoints: true });
       const content = buildGradingSectionsDxfString(design, exportName, sections, config, titleBlock);
@@ -2424,6 +2461,8 @@ export default function DesignControlPanel() {
       if (saved) toast.success('Cross-sections DXF exported (screening — not for construction)');
     } catch (e: any) {
       toastCaught('Cross-sections export failed — try again', e);
+    } finally {
+      setSectionsDxfBusy(false);
     }
   };
 
@@ -2469,8 +2508,10 @@ export default function DesignControlPanel() {
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setDrainageDxfBusy(true);
     try {
       const { buildDrainageSheetDxfString } = await import('../lib/nextera/drainageSheet');
+      await new Promise(res => setTimeout(res, 30));
       const content = buildDrainageSheetDxfString(design, exportName, fgSurface, drainageModel, config, titleBlock);
       const saved = await saveBlob(
         new Blob([content], { type: 'application/dxf' }),
@@ -2479,6 +2520,8 @@ export default function DesignControlPanel() {
       if (saved) toast.success('Drainage area map DXF exported (screening — not for construction)');
     } catch (e: any) {
       toastCaught('Drainage map export failed — try again', e);
+    } finally {
+      setDrainageDxfBusy(false);
     }
   };
 
@@ -2522,8 +2565,10 @@ export default function DesignControlPanel() {
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setDrainage2DxfBusy(true);
     try {
       const { buildDrainageDetailSheetDxfString } = await import('../lib/nextera/drainageDetailSheet');
+      await new Promise(res => setTimeout(res, 30));
       const content = buildDrainageDetailSheetDxfString(design, exportName, fgSurface, drainageModel, config, titleBlock);
       const saved = await saveBlob(
         new Blob([content], { type: 'application/dxf' }),
@@ -2532,6 +2577,8 @@ export default function DesignControlPanel() {
       if (saved) toast.success('Drainage details DXF exported (screening — not for construction)');
     } catch (e: any) {
       toastCaught('Drainage details export failed — try again', e);
+    } finally {
+      setDrainage2DxfBusy(false);
     }
   };
 
@@ -2575,8 +2622,10 @@ export default function DesignControlPanel() {
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setLandXmlBusy(true);
     try {
       const { buildLandXmlString } = await import('../lib/nextera/landxml');
+      await new Promise(res => setTimeout(res, 30));
       const rect = terrainLocalRect(terrainYard, design.boundary.origin);
       const content = buildLandXmlString(fgSurface, terrainYard, rect, exportName);
       const saved = await saveBlob(
@@ -2586,6 +2635,8 @@ export default function DesignControlPanel() {
       if (saved) toast.success('LandXML FG surface exported (local site coordinates, feet)');
     } catch (e: any) {
       toastCaught('LandXML export failed — try again', e);
+    } finally {
+      setLandXmlBusy(false);
     }
   };
 
@@ -2665,6 +2716,7 @@ export default function DesignControlPanel() {
   };
 
   const [relayPdfBusy, setRelayPdfBusy] = useState(false);
+  const [relayDxfBusy, setRelayDxfBusy] = useState(false);
   const handleExportRelayDxf = async () => {
     if (!design || !boundary) {
       toast.error('Upload a KMZ site boundary first');
@@ -2675,9 +2727,11 @@ export default function DesignControlPanel() {
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setRelayDxfBusy(true);
     try {
       // Small sheet (a few hundred entities) — built on the UI thread.
       const { buildRelayOneLineDxfString } = await import('../lib/nextera/relayOneLine');
+      await new Promise(res => setTimeout(res, 30));
       const content = buildRelayOneLineDxfString(design, exportName, feeders, config, titleBlock);
       const saved = await saveBlob(
         new Blob([content], { type: 'application/dxf' }),
@@ -2686,6 +2740,8 @@ export default function DesignControlPanel() {
       if (saved) toast.success('Relay one-line DXF exported (screening placeholders — verify with protection study)');
     } catch (e: any) {
       toastCaught('Relay one-line export failed — try again', e);
+    } finally {
+      setRelayDxfBusy(false);
     }
   };
 
@@ -2880,39 +2936,50 @@ export default function DesignControlPanel() {
   const handleOpenProject = async (file: File | undefined) => {
     if (!file) return;
     const text = await file.text();
-    const err = importProject(text);
-    if (err) toastCaught('Could not open that project file', err);
-    else toast.success('Project loaded');
+    await withBusyOverlay('Opening project…', () => {
+      const err = importProject(text);
+      if (err) toastCaught('Could not open that project file', err);
+      else toast.success('Project loaded');
+    });
     if (projectFileRef.current) projectFileRef.current.value = '';
   };
 
+  const [bomCsvBusy, setBomCsvBusy] = useState(false);
+  const [cableCsvBusy, setCableCsvBusy] = useState(false);
+  const [cableDxfBusy, setCableDxfBusy] = useState(false);
+  const [fullBomBusy, setFullBomBusy] = useState(false);
+  const [energyBusy, setEnergyBusy] = useState(false);
   const handleExportBom = async () => {
     if (!design || !boundary) {
       toast.error('Upload a KMZ site boundary first');
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
-    // Multi-area sites export one section per area plus a WHOLE SITE total,
-    // so the packet covers every yard instead of just the one on screen.
-    // Single-area projects keep the original flat CSV byte-for-byte.
-    const csv = siteAreas.length > 1
-      ? siteBomToCsv(buildSiteBom(
-          siteAreas.map(a => {
-            const d = a.id === activeAreaId ? design : a.design;
-            return {
-              name: a.name,
-              rows: d
-                ? buildBomRows(d, config, a.id === activeAreaId ? feeders : undefined, a.id === activeAreaId ? groundingPlan : undefined)
-                : [],
-            };
-          })
-        ))
-      : bomToCsv(buildBomRows(design, config, feeders, groundingPlan));
+    setBomCsvBusy(true);
     try {
+      await new Promise(res => setTimeout(res, 30));
+      // Multi-area sites export one section per area plus a WHOLE SITE total,
+      // so the packet covers every yard instead of just the one on screen.
+      // Single-area projects keep the original flat CSV byte-for-byte.
+      const csv = siteAreas.length > 1
+        ? siteBomToCsv(buildSiteBom(
+            siteAreas.map(a => {
+              const d = a.id === activeAreaId ? design : a.design;
+              return {
+                name: a.name,
+                rows: d
+                  ? buildBomRows(d, config, a.id === activeAreaId ? feeders : undefined, a.id === activeAreaId ? groundingPlan : undefined)
+                  : [],
+              };
+            })
+          ))
+        : bomToCsv(buildBomRows(design, config, feeders, groundingPlan));
       const saved = await saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${exportName}_BOM.csv`);
       if (saved) toast.success('BOM CSV exported');
     } catch (e: any) {
       toastCaught('BOM export failed — try again', e);
+    } finally {
+      setBomCsvBusy(false);
     }
   };
 
@@ -2947,13 +3014,17 @@ export default function DesignControlPanel() {
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setCableCsvBusy(true);
     try {
       const { buildCableScheduleRows, cableScheduleToCsv } = await import('../lib/nextera/cableSchedule');
+      await new Promise(res => setTimeout(res, 30));
       const csv = cableScheduleToCsv(buildCableScheduleRows(design, feeders));
       const saved = await saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${exportName}_Cable_Schedule.csv`);
       if (saved) toast.success('Cable schedule CSV exported');
     } catch (e: any) {
       toastCaught('Cable schedule export failed — try again', e);
+    } finally {
+      setCableCsvBusy(false);
     }
   };
 
@@ -2963,8 +3034,10 @@ export default function DesignControlPanel() {
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setCableDxfBusy(true);
     try {
       const { buildCableScheduleDxfString } = await import('../lib/nextera/cableSchedule');
+      await new Promise(res => setTimeout(res, 30));
       const content = buildCableScheduleDxfString(design, exportName, feeders, config, titleBlock);
       const saved = await saveBlob(
         new Blob([content], { type: 'application/dxf' }),
@@ -2973,6 +3046,8 @@ export default function DesignControlPanel() {
       if (saved) toast.success('Cable schedule DXF exported');
     } catch (e: any) {
       toastCaught('Cable schedule DXF export failed — try again', e);
+    } finally {
+      setCableDxfBusy(false);
     }
   };
 
@@ -2982,15 +3057,19 @@ export default function DesignControlPanel() {
       return;
     }
     const exportName = (titleBlock.projectName.trim() || boundary.name).replace(/[^A-Za-z0-9_-]+/g, '_');
+    setFullBomBusy(true);
     try {
       const { buildCableScheduleRows } = await import('../lib/nextera/cableSchedule');
       const { buildBomRollup, fullBomToCsv } = await import('../lib/nextera/bomRollup');
+      await new Promise(res => setTimeout(res, 30));
       const rows = buildCableScheduleRows(design, feeders);
       const csv = fullBomToCsv(design, config, feeders, buildBomRollup(rows, design, feeders, groundingPlan));
       const saved = await saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${exportName}_Full_BOM.csv`);
       if (saved) toast.success('Full BOM CSV exported');
     } catch (e: any) {
       toastCaught('Full BOM export failed — try again', e);
+    } finally {
+      setFullBomBusy(false);
     }
   };
 
@@ -3001,6 +3080,12 @@ export default function DesignControlPanel() {
   }, []);
   const placeMaterialEpoch = useDesignStore(s => s.placeMaterialEpoch);
   const manualYard = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  // Slice 3: which Manual Placement palette button is selected (UI only —
+  // arming / drop is slice 4–5). Cleared when leaving a manual yard.
+  const [placeMaterialSelected, setPlaceMaterialSelected] = useState<string | null>(null);
+  useEffect(() => {
+    if (!manualYard) setPlaceMaterialSelected(null);
+  }, [manualYard]);
   // A new KMZ import opens Manual Placement. Later tab changes stay put until
   // the next import bumps the epoch.
   useEffect(() => {
@@ -3168,10 +3253,12 @@ export default function DesignControlPanel() {
                   <button
                     key={o.index}
                     onClick={() => {
-                      chooseBoundary(o.index);
-                      const err = useDesignStore.getState().error;
-                      if (err) toastCaught('Could not load that site area', err);
-                      else toast.success(`${o.name} loaded`);
+                      void withBusyOverlay('Loading site drawing…', () => {
+                        chooseBoundary(o.index);
+                        const err = useDesignStore.getState().error;
+                        if (err) toastCaught('Could not load that site area', err);
+                        else toast.success(`${o.name} loaded`);
+                      });
                     }}
                     className="text-left text-xs px-2 py-1.5 rounded bg-slate-900 hover:bg-slate-700 border border-slate-600 text-slate-200 transition-colors"
                   >
@@ -3335,13 +3422,57 @@ export default function DesignControlPanel() {
         </PanelSection>
 
         <PanelSection id="place" title="Manual Placement" discipline="Layout">
-          <div className="bg-slate-800 rounded p-3 text-sm">
+          <div className="bg-slate-800 rounded p-3 text-sm space-y-3">
             {manualYard ? (
-              <p className="text-xs text-slate-300 leading-relaxed">
-                The site shows the property line and fence. Drag the block on
-                the site to move it around. The drag stays on screen for this
-                session.
-              </p>
+              <>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  The site shows the property line and fence. Drag the block on
+                  the site to move it around. The drag stays on screen for this
+                  session.
+                </p>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
+                    Place
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {(
+                      [
+                        { id: 'pcs', label: 'PCS' },
+                        { id: 'battery', label: 'Battery container' },
+                        { id: 'road', label: 'Road' },
+                        { id: 'auxTransformer', label: 'Aux transformer' },
+                        { id: 'auxSwitchgear', label: 'Aux switchgear' },
+                        { id: 'commsCabinet', label: 'Comms cabinet' },
+                        { id: 'auxSwitchPanel', label: 'Aux switch panel' },
+                        { id: 'fiberPatchPanel', label: 'Fiber patch panel' },
+                        { id: 'fireControlPanel', label: 'Fire control panel' },
+                      ] as const
+                    ).map(opt => {
+                      const selected = placeMaterialSelected === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setPlaceMaterialSelected(selected ? null : opt.id)}
+                          aria-pressed={selected}
+                          className={`text-left text-[11px] px-2 py-1.5 rounded border font-medium transition-colors ${
+                            selected
+                              ? 'bg-cyan-700/80 border-cyan-500 text-cyan-50'
+                              : 'bg-slate-900/60 border-slate-600 text-slate-200 hover:border-slate-500 hover:bg-slate-700/60'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-1.5">
+                    {placeMaterialSelected
+                      ? 'Selected — placement arms in a later step.'
+                      : 'Select an item. Placing on the site comes later.'}
+                  </div>
+                </div>
+              </>
             ) : (
               <p className="text-xs text-slate-300 leading-relaxed">
                 This yard is a generated layout. Upload a KMZ to open a manual
@@ -4244,10 +4375,11 @@ export default function DesignControlPanel() {
                         <div className="grid grid-cols-3 gap-1.5 mt-2">
                           <button
                             onClick={handleExportGradingDxf}
-                            className="bg-slate-700 hover:bg-slate-600 text-slate-100 text-[11px] py-1.5 rounded"
+                            disabled={gradingDxfBusy}
+                            className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-100 text-[11px] py-1.5 rounded"
                             title="Standalone GRADING PLAN sheet (GP-1): proposed FG contours over screened existing contours, spot elevations, slope arrows, daylight limit, swales/discharge points (if drainage screening is on), legend and earthwork table. Opt-in — the drawing package DXF is unchanged."
                           >
-                            Grading DXF
+                            {gradingDxfBusy ? 'Exporting…' : 'Grading DXF'}
                           </button>
                           <button
                             onClick={handleExportGradingPdf}
@@ -4259,19 +4391,21 @@ export default function DesignControlPanel() {
                           </button>
                           <button
                             onClick={handleExportLandXml}
-                            className="bg-slate-700 hover:bg-slate-600 text-slate-100 text-[11px] py-1.5 rounded"
+                            disabled={landXmlBusy}
+                            className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-100 text-[11px] py-1.5 rounded"
                             title="Proposed FG surface as a LandXML 1.2 TIN for Civil 3D / Carlson / Trimble. Local site coordinates in feet (not georeferenced). Screening only."
                           >
-                            LandXML
+                            {landXmlBusy ? 'Exporting…' : 'LandXML'}
                           </button>
                           {exportSections && (
                             <>
                               <button
                                 onClick={handleExportSectionsDxf}
-                                className="bg-slate-700 hover:bg-slate-600 text-slate-100 text-[11px] py-1.5 rounded"
+                                disabled={sectionsDxfBusy}
+                                className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-100 text-[11px] py-1.5 rounded"
                                 title="Standalone GRADING CROSS-SECTIONS sheet (GP-2): OG (dashed) vs FG (solid) profiles along the automatic section lines with cut/fill hatching, elevation grids, station labels and daylight points. Opt-in — the drawing package DXF is unchanged."
                               >
-                                Sections DXF
+                                {sectionsDxfBusy ? 'Exporting…' : 'Sections DXF'}
                               </button>
                               <button
                                 onClick={handleExportSectionsPdf}
@@ -4592,10 +4726,11 @@ export default function DesignControlPanel() {
                           <div className="flex gap-2 mt-2">
                             <button
                               onClick={handleExportDrainageDxf}
-                              className="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-100 text-xs rounded px-2 py-1.5"
+                              disabled={drainageDxfBusy}
+                              className="flex-1 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-100 text-xs rounded px-2 py-1.5"
                               title="Export the DR-1 drainage area map sheet (subcatchments, flow arrows, swales, culverts, basin, hydrology schedules) as a separate AC1015 DXF. The main layout DXF is unchanged."
                             >
-                              DR-1 DXF
+                              {drainageDxfBusy ? 'Exporting…' : 'DR-1 DXF'}
                             </button>
                             <button
                               onClick={handleExportDrainagePdf}
@@ -4609,10 +4744,11 @@ export default function DesignControlPanel() {
                           <div className="flex gap-2 mt-1.5">
                             <button
                               onClick={handleExportDrainage2Dxf}
-                              className="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-100 text-xs rounded px-2 py-1.5"
+                              disabled={drainage2DxfBusy}
+                              className="flex-1 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-100 text-xs rounded px-2 py-1.5"
                               title="Export the DR-2 drainage details & routing sheet (channel section, pond outlet structure, culvert profile, TR-55 / NRCS / routing / stage-storage tables) as a separate AC1015 DXF."
                             >
-                              DR-2 DXF
+                              {drainage2DxfBusy ? 'Exporting…' : 'DR-2 DXF'}
                             </button>
                             <button
                               onClick={handleExportDrainage2Pdf}
@@ -5824,8 +5960,11 @@ export default function DesignControlPanel() {
                       )}
                       <CapacityCurvePreview result={energySim} />
                       <button
+                        disabled={energyBusy}
                         onClick={async () => {
+                          setEnergyBusy(true);
                           try {
+                            await new Promise(res => setTimeout(res, 30));
                             const cfg = getEffectiveConfiguration(configId, containersPerPcs);
                             const doc = buildEnergySimPdf(energySim, energySimInputs, {
                               titleBlock,
@@ -5839,12 +5978,14 @@ export default function DesignControlPanel() {
                             if (saved) toast.success('Energy simulation report PDF exported');
                           } catch (err) {
                             toastCaught('Energy report failed — try again', err);
+                          } finally {
+                            setEnergyBusy(false);
                           }
                         }}
-                        className="w-full mt-1 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
+                        className="w-full mt-1 py-1.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-60 text-xs font-semibold text-slate-100"
                         title="Export a one-page PDF report: RTE loss chain, year-by-year degradation and augmentation table, zone-capacity check and model citations. Standalone file — never part of the default DXF/PDF exports."
                       >
-                        Export energy report (PDF)
+                        {energyBusy ? 'Exporting…' : 'Export energy report (PDF)'}
                       </button>
                       <div className="text-slate-500">
                         Screening grade — IEC 62933-2-1 RTE framing, NREL semi-empirical degradation. Verify against OEM warranty and offtake agreement.
@@ -6971,12 +7112,14 @@ export default function DesignControlPanel() {
         </label>
         <button
           onClick={handleExport}
-          disabled={!design}
+          disabled={!design || !!busyOverlay}
           className="w-full py-2.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed font-semibold text-sm"
         >
-          {cadProfile === LEGACY_TEMPLATE_CONTRACT.id
-            ? 'Export Legacy DXF (page 2 layout)'
-            : siteAreas.length > 1 ? `Export DXF — ${exportScopeLabel}` : 'Export DXF'}
+          {busyOverlay?.label === 'Exporting DXF…'
+            ? 'Exporting…'
+            : cadProfile === LEGACY_TEMPLATE_CONTRACT.id
+              ? 'Export Legacy DXF (page 2 layout)'
+              : siteAreas.length > 1 ? `Export DXF — ${exportScopeLabel}` : 'Export DXF'}
         </button>
         <button
           onClick={handleExportDxfPdf}
@@ -6987,10 +7130,12 @@ export default function DesignControlPanel() {
         </button>
         <button
           onClick={handleExportPackage}
-          disabled={!design}
+          disabled={!design || !!busyOverlay}
           className="w-full mt-2 py-2.5 rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 disabled:cursor-not-allowed font-semibold text-sm"
         >
-          {includeSldBom ? 'Export DXF Package (10 sheets + refs, ZIP)' : 'Export DXF Package (7 sheets + refs, ZIP)'}
+          {busyOverlay?.label === 'Building DXF package…'
+            ? 'Building package…'
+            : includeSldBom ? 'Export DXF Package (10 sheets + refs, ZIP)' : 'Export DXF Package (7 sheets + refs, ZIP)'}
         </button>
         <button
           onClick={handleExportPdf}
@@ -7085,11 +7230,11 @@ export default function DesignControlPanel() {
         <div className="grid grid-cols-2 gap-2 mt-2">
           <button
             onClick={handleExportSldDxf}
-            disabled={!design || !feeders.length}
+            disabled={!design || !feeders.length || sldDxfBusy}
             title={feeders.length ? undefined : 'Place a substation to route feeders first'}
             className="py-2.5 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed font-semibold text-sm"
           >
-            Single-Line Diagram (DXF)
+            {sldDxfBusy ? 'Exporting…' : 'Single-Line Diagram (DXF)'}
           </button>
           <button
             onClick={handleExportSldPdf}
@@ -7103,11 +7248,11 @@ export default function DesignControlPanel() {
         <div className="grid grid-cols-2 gap-2 mt-2">
           <button
             onClick={handleExportRelayDxf}
-            disabled={!design || !feeders.length}
+            disabled={!design || !feeders.length || relayDxfBusy}
             title={feeders.length ? 'Protection & metering one-line — ANSI device numbers with screening CT/VT placeholders' : 'Place a substation to route feeders first'}
             className="py-2.5 rounded bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed font-semibold text-sm"
           >
-            Relay One-Line (DXF)
+            {relayDxfBusy ? 'Exporting…' : 'Relay One-Line (DXF)'}
           </button>
           <button
             onClick={handleExportRelayPdf}
@@ -7121,11 +7266,11 @@ export default function DesignControlPanel() {
         <div className="grid grid-cols-2 gap-2 mt-2">
           <button
             onClick={handleExportBomSheetDxf}
-            disabled={!design}
+            disabled={!design || bomDxfBusy}
             title="Bill-of-materials schedule sheet: major equipment + cable / terminations / conduit / civil / grounding rollups — same line items as the Full BOM CSV"
             className="py-2.5 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed font-semibold text-sm"
           >
-            Bill of Materials (DXF)
+            {bomDxfBusy ? 'Exporting…' : 'Bill of Materials (DXF)'}
           </button>
           <button
             onClick={handleExportBomSheetPdf}
@@ -7229,33 +7374,33 @@ export default function DesignControlPanel() {
         </button>
         <button
           onClick={handleExportBom}
-          disabled={!design}
+          disabled={!design || bomCsvBusy}
           className="w-full mt-2 py-2.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed font-semibold text-sm"
         >
-          Export BOM (CSV)
+          {bomCsvBusy ? 'Exporting…' : 'Export BOM (CSV)'}
         </button>
         <div className="grid grid-cols-2 gap-2 mt-2">
           <button
             onClick={handleExportCableScheduleDxf}
-            disabled={!design}
+            disabled={!design || cableDxfBusy}
             className="py-2.5 rounded bg-teal-800 hover:bg-teal-700 disabled:opacity-40 disabled:cursor-not-allowed font-semibold text-sm"
           >
-            Cable Schedule (DXF)
+            {cableDxfBusy ? 'Exporting…' : 'Cable Schedule (DXF)'}
           </button>
           <button
             onClick={handleExportCableScheduleCsv}
-            disabled={!design}
+            disabled={!design || cableCsvBusy}
             className="py-2.5 rounded bg-teal-900 hover:bg-teal-800 disabled:opacity-40 disabled:cursor-not-allowed font-semibold text-sm"
           >
-            Cable Schedule (CSV)
+            {cableCsvBusy ? 'Exporting…' : 'Cable Schedule (CSV)'}
           </button>
         </div>
         <button
           onClick={handleExportFullBom}
-          disabled={!design}
+          disabled={!design || fullBomBusy}
           className="w-full mt-2 py-2.5 rounded bg-slate-600 hover:bg-slate-500 disabled:opacity-40 disabled:cursor-not-allowed font-semibold text-sm"
         >
-          Export Full BOM w/ Cable Rollup (CSV)
+          {fullBomBusy ? 'Exporting…' : 'Export Full BOM w/ Cable Rollup (CSV)'}
         </button>
         {bomRollupSummary && (
           <div className="mt-2 bg-slate-800/60 rounded p-2 text-[11px] text-slate-300 space-y-0.5">
@@ -7286,9 +7431,10 @@ export default function DesignControlPanel() {
           </button>
           <button
             onClick={() => projectFileRef.current?.click()}
-            className="py-2 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold"
+            disabled={!!busyOverlay}
+            className="py-2 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-xs font-semibold"
           >
-            Open Project
+            {busyOverlay?.label === 'Opening project…' ? 'Opening…' : 'Open Project'}
           </button>
         </div>
         <div className="text-[10px] text-slate-500 mt-2 text-center">

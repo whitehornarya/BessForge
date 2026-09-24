@@ -2,9 +2,10 @@
 // row of the NextEra guidance checklist, groups findings by sheet/category,
 // click-to-highlight offending equipment in the preview, and exports the
 // report as PDF or CSV.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { toastCaught } from '../lib/notify';
+import { withBusyOverlay } from '../lib/busy';
 import { useDesignStore } from '../lib/stores/useDesignStore';
 import { getEffectiveConfiguration } from '../lib/nextera/catalog';
 import {
@@ -12,6 +13,7 @@ import {
   buildSiteComplianceReport,
   complianceReportToCsv,
   ComplianceFinding,
+  ComplianceReport,
 } from '../lib/nextera/complianceReport';
 import { areaFeederEndpoint } from '../lib/nextera/substationTakeoffs';
 import { exportCompliancePdf } from '../lib/nextera/compliancePdf';
@@ -48,50 +50,73 @@ export default function CompliancePanel() {
 
   const [open, setOpen] = useState(false);
   const [activeRule, setActiveRule] = useState<string | null>(null);
+  const [report, setReport] = useState<ComplianceReport | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [csvBusy, setCsvBusy] = useState(false);
+  const buildKeyRef = useRef('');
 
   // A multi-area site is scored area by area and merged, so a finding always
   // names the yard it came from. Single-area projects keep the exact original
   // single-design call (byte-identical report, CSV and PDF).
   const multiArea = siteAreas.length > 1;
-  const report = useMemo(() => {
-    if (!design || !open) return null;
-    const config = getEffectiveConfiguration(configId, containersPerPcs);
-    if (multiArea) {
-      return buildSiteComplianceReport(
-        siteAreas.map(a => ({
-          id: a.id,
-          name: a.name,
-          kind: a.kind,
-          // The active area's live design carries the drafter's in-flight
-          // edits; stored area designs are the regenerated ones.
-          design: a.id === activeAreaId ? design : a.design,
-          // Every input is the AREA'S OWN. Each area routes its feeders to
-          // the substation take-off aimed at it, so each is scored against
-          // its own routes; borrowing the active area's would score a yard
-          // against trenches it does not contain.
-          feeders: a.id === activeAreaId ? feeders : areaFeeders[a.id],
-          // A BESS yard's routes land on its take-off in the SUBSTATION area,
-          // so it has no local substation. Passing the legacy field here gave
-          // every routed BESS area a null endpoint, which drops its MV feeder
-          // finding from the report entirely.
-          substation: areaFeederEndpoint(a, siteAreas, {
-            activeAreaId, liveEndpoint: feederEndpoint,
-          }),
-          areaZones: a.id === activeAreaId ? areaZones : (a.edits?.areaZones ?? null),
-        })),
-        config,
-        // No top-level areaZones: they belong to the active area only and are
-        // passed per-area above.
-        { hotClimate, titleBlock }
-      );
+  // Stable key so we rebuild (with BusyOverlay) only when inputs actually change.
+  // areaFeeders/feederEndpoint are real inputs: without them an open report
+  // goes stale the moment another area's routes change.
+  const reportInputsKey = useMemo(() => JSON.stringify({
+    open, configId, containersPerPcs, hotClimate,
+    project: titleBlock.projectName, activeAreaId,
+    areas: siteAreas.map(a => a.id).join(','),
+    designBlocks: design?.blockRows?.length ?? 0,
+    feederN: feeders.length,
+    areaFeederN: Object.keys(areaFeeders).sort().map(k => `${k}:${areaFeeders[k]?.length ?? 0}`).join(','),
+  }), [open, configId, containersPerPcs, hotClimate, titleBlock.projectName, activeAreaId,
+      siteAreas, design, feeders.length, areaFeeders]);
+
+  useEffect(() => {
+    if (!open || !design) {
+      setReport(null);
+      buildKeyRef.current = '';
+      return;
     }
-    return buildComplianceReport(design, config, {
-      hotClimate, titleBlock, feeders, substation, areaZones,
+    if (buildKeyRef.current === reportInputsKey) return;
+    buildKeyRef.current = reportInputsKey;
+    void withBusyOverlay('Building compliance report…', () => {
+      const config = getEffectiveConfiguration(configId, containersPerPcs);
+      const next = multiArea
+        ? buildSiteComplianceReport(
+          siteAreas.map(a => ({
+            id: a.id,
+            name: a.name,
+            kind: a.kind,
+            // The active area's live design carries the drafter's in-flight
+            // edits; stored area designs are the regenerated ones.
+            design: a.id === activeAreaId ? design : a.design,
+            // Every input is the AREA'S OWN. Each area routes its feeders to
+            // the substation take-off aimed at it, so each is scored against
+            // its own routes; borrowing the active area's would score a yard
+            // against trenches it does not contain.
+            feeders: a.id === activeAreaId ? feeders : areaFeeders[a.id],
+            // A BESS yard's routes land on its take-off in the SUBSTATION area,
+            // so it has no local substation. Passing the legacy field here gave
+            // every routed BESS area a null endpoint, which drops its MV feeder
+            // finding from the report entirely.
+            substation: areaFeederEndpoint(a, siteAreas, {
+              activeAreaId, liveEndpoint: feederEndpoint,
+            }),
+            areaZones: a.id === activeAreaId ? areaZones : (a.edits?.areaZones ?? null),
+          })),
+          config,
+          // No top-level areaZones: they belong to the active area only and are
+          // passed per-area above.
+          { hotClimate, titleBlock }
+        )
+        : buildComplianceReport(design, config, {
+          hotClimate, titleBlock, feeders, substation, areaZones,
+        });
+      setReport(next);
     });
-    // areaFeeders/feederEndpoint are real inputs: without them an open report
-    // goes stale the moment another area's routes change.
-  }, [design, configId, containersPerPcs, hotClimate, titleBlock, feeders, substation,
-      areaZones, open, multiArea, siteAreas, activeAreaId, areaFeeders, feederEndpoint]);
+  }, [reportInputsKey, open, design, configId, containersPerPcs, multiArea, siteAreas,
+      activeAreaId, feeders, areaFeeders, feederEndpoint, areaZones, hotClimate, titleBlock, substation]);
 
   if (!design) return null;
 
@@ -140,6 +165,10 @@ export default function CompliancePanel() {
         <span>Compliance Report — NextEra R2</span>
         <span className="text-slate-500">{open ? '▾' : '▸'}</span>
       </button>
+
+      {open && !report && (
+        <div className="mt-2 text-xs text-slate-400">Preparing report…</div>
+      )}
 
       {open && report && (
         <div className="mt-2 space-y-2">
@@ -233,28 +262,35 @@ export default function CompliancePanel() {
 
           <div className="grid grid-cols-2 gap-2">
             <button
+              disabled={pdfBusy}
               onClick={async () => {
+                setPdfBusy(true);
                 try {
                   const saved = await exportCompliancePdf(report, `${fileBase}-compliance-report.pdf`);
                   if (saved) toast.success('Compliance report PDF downloaded');
                 } catch (err) {
                   toastCaught('Compliance PDF export failed — try again', err);
+                } finally {
+                  setPdfBusy(false);
                 }
               }}
-              className="py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 text-xs font-semibold text-slate-100"
+              className="py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-60 text-xs font-semibold text-slate-100"
             >
-              Export PDF
+              {pdfBusy ? 'Exporting…' : 'Export PDF'}
             </button>
             <button
+              disabled={csvBusy}
               onClick={() => {
+                setCsvBusy(true);
                 const csv = complianceReportToCsv(report);
                 void saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${fileBase}-compliance-findings.csv`)
                   .then(saved => { if (saved) toast.success('Compliance findings CSV downloaded'); })
-                  .catch(err => toastCaught('Compliance CSV export failed — try again', err));
+                  .catch(err => toastCaught('Compliance CSV export failed — try again', err))
+                  .finally(() => setCsvBusy(false));
               }}
-              className="py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
+              className="py-1.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-60 text-xs font-semibold text-slate-100"
             >
-              Export CSV
+              {csvBusy ? 'Exporting…' : 'Export CSV'}
             </button>
           </div>
           <div className="text-[10px] text-slate-500">
