@@ -3438,10 +3438,10 @@ export default function DesignControlPanel() {
                   <div className="grid grid-cols-1 gap-2">
                     {(
                       [
-                        { id: 'pcs', label: 'PCS' },
-                        { id: 'battery', label: 'Battery container' },
                         { id: 'road', label: 'Road' },
                         { id: 'auxTransformer', label: 'Aux transformer' },
+                        { id: 'pcs', label: 'PCS' },
+                        { id: 'battery', label: 'Battery container' },
                         { id: 'auxSwitchgear', label: 'Aux switchgear' },
                         { id: 'commsCabinet', label: 'Comms cabinet' },
                         { id: 'auxSwitchPanel', label: 'Aux switch panel' },
