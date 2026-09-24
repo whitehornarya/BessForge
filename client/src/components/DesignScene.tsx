@@ -46,7 +46,7 @@ import { buildTourIntro, buildTourSampler, feederFlyalongRoute, flightRealisticE
 import { uhdBoundDims, offlineFrameSchedule, offlineFrameT, pickOfflineCodec, codecToMuxerId, codecContainer, OFFLINE_SUPERSAMPLE } from '../lib/offlineTourRender';
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmTarget } from 'webm-muxer';
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4Target } from 'mp4-muxer';
-import { getEffectiveConfiguration, getConfiguration } from '../lib/nextera/catalog';
+import { getEffectiveConfiguration, getConfiguration, specForKind } from '../lib/nextera/catalog';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { eciSymbolForEquipment, eciYardSymbolPolys, symbolEquipmentKinds, type SymbolSource } from '../lib/nextera/eciSymbolPlacement';
 import CadLinework, { CadLayerVis, CAD_LAYER_VIS_DEFAULT, SelectedTextInfo } from './CadLinework';
@@ -6811,48 +6811,89 @@ function TraceOverlay() {
 }
 
 /**
- * One block the drafter can drag around a manual-authoring yard.
- * Position lives in this component only — it is not placed equipment.
+ * Drag a PCS onto a manual-authoring yard. Pointer down starts the ghost,
+ * pointer up commits through addPlacedGear so the scan-mode inverter renders.
  */
-function PlacementPlaceholder({ onDraggingChange }: { onDraggingChange: (d: boolean) => void }) {
+function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolean) => void; realistic: boolean }) {
   const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
-  const fence = useDesignStore(s => (manual ? s.design?.fence : undefined));
+  const armed = useDesignStore(s => s.manualPlaceItem === 'pcs');
+  const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
+  const addPlacedGear = useDesignStore(s => s.addPlacedGear);
+  const configId = useDesignStore(s => s.configId);
   const { camera, gl, controls } = useThree();
   const controlsRef = useRef<{ enabled?: boolean } | null>(null);
   controlsRef.current = controls as { enabled?: boolean } | null;
   const dragging = useRef(false);
+  const latest = useRef<Pt | null>(null);
   const [pos, setPos] = useState<Pt | null>(null);
   const raycaster = useRef(new THREE.Raycaster());
   const ndc = useRef(new THREE.Vector2());
 
-  useEffect(() => { setPos(null); }, [fence]);
+  const spec = specForKind('inverter', getConfiguration(configId));
+  const ghost = useMemo((): PlacedEquipment | null => {
+    if (!pos || !spec) return null;
+    return {
+      id: 'pcs-ghost',
+      kind: 'inverter',
+      label: 'PCS',
+      x: pos.x,
+      y: pos.y,
+      rotation: 0,
+      length: spec.dims.length,
+      width: spec.dims.width,
+      height: spec.dims.height,
+    };
+  }, [pos, spec]);
+
+  const hitGround = useCallback((ev: PointerEvent): Pt | null => {
+    const rect = gl.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    ndc.current.set(
+      ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+      -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    raycaster.current.setFromCamera(ndc.current, camera);
+    const ray = raycaster.current.ray;
+    if (Math.abs(ray.direction.y) < 1e-8) return null;
+    const t = -ray.origin.y / ray.direction.y;
+    if (!Number.isFinite(t) || t < 0) return null;
+    return {
+      x: ray.origin.x + ray.direction.x * t,
+      y: -(ray.origin.z + ray.direction.z * t),
+    };
+  }, [camera, gl]);
+
+  useEffect(() => {
+    if (!manual || !armed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setManualPlaceItem(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [manual, armed, setManualPlaceItem]);
 
   useEffect(() => {
     const el = gl.domElement;
     const move = (ev: PointerEvent) => {
       if (!dragging.current) return;
-      const rect = el.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
-      ndc.current.set(
-        ((ev.clientX - rect.left) / rect.width) * 2 - 1,
-        -((ev.clientY - rect.top) / rect.height) * 2 + 1,
-      );
-      raycaster.current.setFromCamera(ndc.current, camera);
-      const ray = raycaster.current.ray;
-      if (Math.abs(ray.direction.y) < 1e-8) return;
-      const t = -ray.origin.y / ray.direction.y;
-      if (!Number.isFinite(t) || t < 0) return;
-      setPos({
-        x: ray.origin.x + ray.direction.x * t,
-        y: -(ray.origin.z + ray.direction.z * t),
-      });
+      const p = hitGround(ev);
+      if (!p) return;
+      latest.current = p;
+      setPos(p);
     };
-    const up = () => {
+    const up = (ev: PointerEvent) => {
       if (!dragging.current) return;
       dragging.current = false;
       onDraggingChange(false);
-      el.style.cursor = '';
+      el.style.cursor = 'crosshair';
       if (controlsRef.current) controlsRef.current.enabled = true;
+      const hit = hitGround(ev);
+      const p = hit ?? latest.current;
+      latest.current = null;
+      setPos(null);
+      if (!p) return;
+      const why = addPlacedGear('inverter', Math.round(p.x), Math.round(p.y));
+      if (why) toast.error(friendlyRejectReason(why));
     };
     el.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -6861,55 +6902,43 @@ function PlacementPlaceholder({ onDraggingChange }: { onDraggingChange: (d: bool
       el.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
-      el.style.cursor = '';
     };
-  }, [camera, gl, onDraggingChange]);
+  }, [gl, hitGround, onDraggingChange, addPlacedGear]);
 
-  const metrics = useMemo(() => {
-    if (!fence?.length) return null;
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    let sx = 0, sy = 0;
-    for (const p of fence) {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.y > maxY) maxY = p.y;
-      sx += p.x;
-      sy += p.y;
-    }
-    const span = Math.min(maxX - minX, maxY - minY);
-    const length = Math.max(30, Math.min(80, span * 0.06));
-    return {
-      center: { x: sx / fence.length, y: sy / fence.length },
-      length,
-      width: length * 0.4,
-      height: 12,
-    };
-  }, [fence]);
-
-  if (!manual || !metrics) return null;
-  const at = pos ?? metrics.center;
+  if (!manual || !armed) return null;
   return (
-    <mesh
-      position={[at.x, metrics.height / 2, -at.y]}
-      onPointerDown={e => {
-        e.stopPropagation();
-        dragging.current = true;
-        onDraggingChange(true);
-        if (controlsRef.current) controlsRef.current.enabled = false;
-        gl.domElement.style.cursor = 'grabbing';
-      }}
-      onPointerOver={e => {
-        e.stopPropagation();
-        if (!dragging.current) gl.domElement.style.cursor = 'grab';
-      }}
-      onPointerOut={() => {
-        if (!dragging.current) gl.domElement.style.cursor = '';
-      }}
-    >
-      <boxGeometry args={[metrics.length, metrics.height, metrics.width]} />
-      <meshStandardMaterial color="#38bdf8" />
-    </mesh>
+    <group>
+      <mesh
+        position={[0, 0.2, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        onPointerDown={e => {
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          const p = { x: e.point.x, y: -e.point.z };
+          dragging.current = true;
+          latest.current = p;
+          setPos(p);
+          onDraggingChange(true);
+          if (controlsRef.current) controlsRef.current.enabled = false;
+          gl.domElement.style.cursor = 'grabbing';
+        }}
+        onPointerOver={() => { gl.domElement.style.cursor = 'crosshair'; }}
+        onPointerOut={() => { if (!dragging.current) gl.domElement.style.cursor = ''; }}
+      >
+        <planeGeometry args={[200000, 200000]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+      {ghost && (realistic ? (
+        <Suspense fallback={null}>
+          <RealisticEquipment equipment={[ghost]} ghost />
+        </Suspense>
+      ) : (
+        <mesh position={[ghost.x, ghost.height / 2, -ghost.y]}>
+          <boxGeometry args={[ghost.length, ghost.height, ghost.width]} />
+          <meshStandardMaterial color="#3f8f5f" transparent opacity={0.55} />
+        </mesh>
+      ))}
+    </group>
   );
 }
 
@@ -8246,7 +8275,7 @@ export default function DesignScene() {
         {design ? (
           <>
             <DesignContent design={design} editMode={editMode} realistic={realisticModels && viewMode !== '2d'} is3D={viewMode === '3d'} cad={viewMode === 'cad'} onDraggingChange={setDragging} editTool={editTool} onEditToolChange={setEditTool} zoneKind={zoneKind} islandPairs={islandPairs} placeKind={placeKind} placeAug={placeAug} placeAuxGear={placeAuxGear} placeEquipType={placeEquipType} placeAngleDeg={placeAngleDeg} placeSnap={placeSnap} roadDrawWidth={roadDrawWidth} onSelectedIslandChange={setSelIsland} onSelectedTargetChange={setNudgeTarget} onSelectedEquipChange={setSelEquip} onRoadSelectionChange={setRoadSelInfo} cadLayerVis={cadLayerVis} onSelectText={setCadSelectedText} />
-            <PlacementPlaceholder onDraggingChange={setDragging} />
+            <PcsDrop onDraggingChange={setDragging} realistic={realisticModels && viewMode !== '2d'} />
             {viewMode !== 'cad' && drawingVisibility.dimensions &&
               <SpacingDimensions design={design} is3D={viewMode === '3d'} />}
           </>

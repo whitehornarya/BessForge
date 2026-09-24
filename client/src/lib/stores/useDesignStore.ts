@@ -3463,6 +3463,10 @@ interface DesignState {
   // Bumped when a KMZ import opens the sidebar Place Material section.
   // 0 until the first import in this session, so a reload does not jump tabs.
   placeMaterialEpoch: number;
+  // Palette selection on Manual Placement. 'pcs' arms a site drag; other ids
+  // are selectable only. Session UI, not a saved edit.
+  manualPlaceItem: string | null;
+  setManualPlaceItem: (id: string | null) => void;
   // Drafter text-label overrides (position/height/content deltas). Applied to
   // the CAD view and all DXF/PDF exports. Keyed by label fingerprint.
   // Empty map = no overrides (default, keeps all outputs byte-identical).
@@ -4382,6 +4386,8 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   gateEdge: null,
   layoutEdits: {},
   placeMaterialEpoch: 0,
+  manualPlaceItem: null,
+  setManualPlaceItem: (id: string | null): void => set({ manualPlaceItem: id }),
   yardRotationDeg: 0,
   textOverrides: {},
   setTextOverride: (key, ov) => set(s => ({ textOverrides: { ...s.textOverrides, [key]: ov } })),
@@ -7343,7 +7349,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     set({ gearPlacement: kind ? { kind } : null }),
   addPlacedGear: (kind: TraceEquipKind, x: number, y: number, rotationDeg = 0): string | null => {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return 'Invalid placement point.';
-    const spec = specForKind(kind);
+    const spec = specForKind(kind, getConfiguration(get().configId) ?? undefined);
     if (!spec) return `No catalog dimensions for ${kind}.`;
     const prevEdits = get().layoutEdits;
     let nextPeq = 1;

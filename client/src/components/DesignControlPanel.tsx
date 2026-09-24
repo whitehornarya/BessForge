@@ -3081,12 +3081,12 @@ export default function DesignControlPanel() {
   }, []);
   const placeMaterialEpoch = useDesignStore(s => s.placeMaterialEpoch);
   const manualYard = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
-  // Slice 3: which Manual Placement palette button is selected (UI only —
-  // arming / drop is slice 4–5). Cleared when leaving a manual yard.
-  const [placeMaterialSelected, setPlaceMaterialSelected] = useState<string | null>(null);
+  // Palette selection. Cleared when the yard is no longer a manual site.
+  const manualPlaceItem = useDesignStore(s => s.manualPlaceItem);
+  const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
   useEffect(() => {
-    if (!manualYard) setPlaceMaterialSelected(null);
-  }, [manualYard]);
+    if (!manualYard) setManualPlaceItem(null);
+  }, [manualYard, setManualPlaceItem]);
   // A new KMZ import opens Manual Placement. Later tab changes stay put until
   // the next import bumps the epoch.
   useEffect(() => {
@@ -3427,9 +3427,9 @@ export default function DesignControlPanel() {
             {manualYard ? (
               <>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  The site shows the property line and fence. Drag the block on
-                  the site to move it around. The drag stays on screen for this
-                  session.
+                  The site shows the property line and fence. Select PCS, then
+                  drag on the site to drop one. Press Escape or click PCS again
+                  to stop.
                 </p>
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
@@ -3449,7 +3449,7 @@ export default function DesignControlPanel() {
                         { id: 'fireControlPanel', label: 'Fire control panel' },
                       ] as const
                     ).map(opt => {
-                      const selected = placeMaterialSelected === opt.id;
+                      const selected = manualPlaceItem === opt.id;
                       const pe = config.inverterModel === 'PE FP4200M';
                       const iconKey = opt.id === 'pcs' ? (pe ? 'pcsPe' : 'pcsGe')
                         : opt.id === 'battery' ? (pe ? 'batteryPe' : 'batteryGe')
@@ -3461,7 +3461,7 @@ export default function DesignControlPanel() {
                         <button
                           key={opt.id}
                           type="button"
-                          onClick={() => setPlaceMaterialSelected(selected ? null : opt.id)}
+                          onClick={() => setManualPlaceItem(selected ? null : opt.id)}
                           aria-pressed={selected}
                           className={`flex items-center gap-2 text-left text-xs px-2.5 py-2 rounded border font-medium transition-colors ${
                             selected
@@ -3490,9 +3490,11 @@ export default function DesignControlPanel() {
                     })}
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1.5">
-                    {placeMaterialSelected
-                      ? 'Selected — placement arms in a later step.'
-                      : 'Select an item. Placing on the site comes later.'}
+                    {manualPlaceItem === 'pcs'
+                      ? 'PCS armed — drag on the site to drop one. Escape cancels.'
+                      : manualPlaceItem
+                      ? 'Selected — placement for this item comes later.'
+                      : 'Select PCS to drag one onto the site.'}
                   </div>
                 </div>
               </>

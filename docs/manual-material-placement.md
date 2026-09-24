@@ -26,7 +26,7 @@ Saved projects that do not carry `yardAuthoring: 'manual'` keep today’s auto-l
 - After “show all areas,” each BESS footprint shows the property line and fence only. The imported drawing stays loaded for scan and is hidden during this phase. No auto equipment or roads.
 - The placement chrome lives in the sidebar, not on the scene. The section is **Manual Placement**, same heading style as the other tabs.
 - **Auto-fill from drawing** / **Scan drawing** is duplicated at the bottom of that tab so it reads as the next step. The original control stays on Site Boundary.
-- Manual palette options (slice 3): PCS, battery container, road, and the existing aux items. Buttons select only; arming and drop are later slices.
+- Manual palette options: PCS, battery container, road, and the existing aux items. PCS drag-and-drop is implemented. The other buttons select only.
 
 ## Slice 1 — Placement indicator (done)
 
@@ -34,9 +34,7 @@ After a KMZ is uploaded and areas are chosen, the sidebar opens **Manual Placeme
 
 New imports set `yardAuthoring: 'manual'` on [`LayoutConstraints`](../client/src/lib/nextera/layoutEngine.ts) for each BESS area, from `applyBoundary` and `chooseAllBoundariesWithProgress` in [`useDesignStore.ts`](../client/src/lib/stores/useDesignStore.ts). [`generateSiteDesign`](../client/src/lib/nextera/layoutEngine.ts) draws the fence, and the scene draws the property line. The imported KMZ linework stays loaded for scan but is hidden while `yardAuthoring` is `'manual'`. The layout does not run the block packer, interior roads, augmentation, surfacing, DC cables, or MV feeders. Substation areas keep their current yard.
 
-One placeholder block can be dragged on the site. That drag is local to [`DesignScene.tsx`](../client/src/components/DesignScene.tsx) and does not write `placedEquipment`.
-
-Applying a scan in this slice still leaves the bare yard empty. Filling the yard from the scan is slice 2.
+The layout does not run the block packer, interior roads, augmentation, surfacing, DC cables, or MV feeders. Substation areas keep their current yard. A hand-placed PCS is the exception and is composed in slice 4.
 
 ## Slice 2 — Scan, then today’s UI (done)
 
@@ -53,11 +51,22 @@ Add one button per manual option in the **Manual Placement** section. Labels and
 - Road
 - Aux transformer, aux switchgear, comms cabinet, aux switch panel, fiber patch panel, fire control panel
 
-Buttons are visible and selectable as UI. They do not place catalog gear yet. The placeholder from slice 1 can stay until slice 5 replaces it.
+Buttons are visible and selectable. PCS is the one that places gear (slice 4). The others do not place catalog gear yet.
 
 ## Slice 4 — Implement each button
 
-One task per button. Selecting it arms that catalog item: footprint from [`catalog.ts`](../client/src/lib/nextera/catalog.ts), plan outline from [`equipGlyphs.ts`](../client/src/lib/nextera/equipGlyphs.ts) (PE/GE PCS, LG container, aux transformer, distribution, fiber, fire panel). Kinds with no glyph use the catalog rectangle. PCS and containers use the `addPlacedGear` spec shape (`source: 'manual'`). Aux items use the existing `ManualEquipmentSpec` types. Arming shows the right block. It does not snap or persist a drop until slice 5.
+**PCS (done).** Selecting PCS arms a drag on the manual yard. Pointer down starts a ghost, pointer up commits through `addPlacedGear('inverter', …)` with catalog dimensions for the active GE or PE configuration and `source: 'manual'`. [`manualAuthoringDesign`](../client/src/lib/nextera/layoutEngine.ts) composes those inverter specs at the stored pose and still skips the packer, roads, cables, surfacing, and MW. The ghost and the committed unit use the same inverter rendering as a scanned PCS (`RealisticEquipment` / the simple box). Escape or clicking PCS again disarms. Snap, rotate, and delete stay in slice 5.
+
+The other buttons stay selectable outlines until their own task:
+
+- **Battery container** — same drag later; `addPlacedGear('bess')`; LG JF2 model.
+- **Road** — centerline draw, not a block.
+- **Aux transformer** — `ManualEquipmentSpec`; Hitachi aux model.
+- **Aux switchgear** — manual spec; aux distribution model.
+- **Comms cabinet** — manual spec; catalog box and legend symbol.
+- **Aux switch panel** — manual spec; catalog rectangle.
+- **Fiber patch panel** — manual spec; fiber model.
+- **Fire control panel** — manual spec; fire-control model.
 
 ## Slice 5 — Drag and snap
 

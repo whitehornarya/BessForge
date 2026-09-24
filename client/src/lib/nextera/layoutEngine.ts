@@ -1643,19 +1643,56 @@ export function isManualAuthoringYard(constraints?: LayoutConstraints | null): b
 
 /**
  * Fence-only site for manual authoring. The imported KMZ linework is a
- * separate drawing overlay, not part of this design. No equipment, roads,
- * cables, or surfacing.
+ * separate drawing overlay, not part of this design. Hand-placed PCS units
+ * are composed at their stored pose. No packer, roads, cables, or surfacing,
+ * and drops do not change achieved MW.
  */
 export function manualAuthoringDesign(
   boundary: SiteBoundary,
   targetMW: number,
   targetMWh: number,
   fencePlacement?: FencePlacementMode,
+  constraints?: LayoutConstraints | null,
 ): SiteDesign {
+  const fence = fencePolygonFor(boundary.polygon, fencePlacement);
+  const equipment: PlacedEquipment[] = [];
+  const warnings: string[] = [];
+  for (const spec of constraints?.placedEquipment ?? []) {
+    if (isManualEquipmentSpec(spec) || spec.kind !== 'inverter') continue;
+    if (![spec.x, spec.y, spec.lengthFt, spec.widthFt].every(v => Number.isFinite(v)) ||
+        spec.lengthFt <= 0 || spec.widthFt <= 0) {
+      warnings.push(`Placed equipment ${spec.id} rejected: invalid position or size — remove it in the layout edits panel.`);
+      continue;
+    }
+    const rotDeg = Number.isFinite(spec.rotationDeg) ? (spec.rotationDeg as number) : 0;
+    const rad = (rotDeg * Math.PI) / 180;
+    const item: PlacedEquipment = {
+      id: spec.id,
+      kind: 'inverter',
+      label: spec.label || 'PCS',
+      x: spec.x, y: spec.y,
+      rotation: rad,
+      length: spec.lengthFt,
+      width: spec.widthFt,
+      height: Number.isFinite(spec.heightFt) && (spec.heightFt as number) > 0 ? (spec.heightFt as number) : 8,
+    };
+    const c = Math.cos(rad), s = Math.sin(rad);
+    const hl = spec.lengthFt / 2, hw = spec.widthFt / 2;
+    const corners: Pt[] = [
+      { x: spec.x + c * hl - s * hw, y: spec.y + s * hl + c * hw },
+      { x: spec.x + c * hl + s * hw, y: spec.y + s * hl - c * hw },
+      { x: spec.x - c * hl - s * hw, y: spec.y - s * hl + c * hw },
+      { x: spec.x - c * hl + s * hw, y: spec.y - s * hl - c * hw },
+    ];
+    if (corners.some(p => !pointInPolygon(p, fence))) {
+      warnings.push(`Placed equipment ${spec.id} placed with warning: the PCS extends outside the fence line at its drawn position — the reference geometry was kept as drawn; review the fence or move it.`);
+    }
+    equipment.push(item);
+  }
   return {
     boundary,
-    fence: fencePolygonFor(boundary.polygon, fencePlacement),
-    equipment: [],
+    fence,
+    equipment,
     augmentationZones: [],
     reservedZones: [],
     reserveSummary: null,
@@ -1674,7 +1711,7 @@ export function manualAuthoringDesign(
     achievedMWh: 0,
     targetMW,
     targetMWh,
-    warnings: [],
+    warnings,
   };
 }
 
@@ -1686,7 +1723,7 @@ export function generateSiteDesign(
   options: LayoutOptions = { hotClimate: true }
 ): SiteDesign {
   if (isManualAuthoringYard(options.constraints)) {
-    return manualAuthoringDesign(boundary, targetMW, targetMWh, options.fencePlacement);
+    return manualAuthoringDesign(boundary, targetMW, targetMWh, options.fencePlacement, options.constraints);
   }
   // The island-augmentation rescue (below) may shift a row so an island's
   // aug units fit at its end. That shift becomes part of the AUTO baseline:

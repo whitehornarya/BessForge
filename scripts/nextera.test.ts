@@ -288,6 +288,23 @@ async function main() {
       `${manual.fence.length} vertices`);
     check('[manual yard] leaves an unflagged layout populated', auto.equipment.length > 0 && auto.blocksPlaced > 0,
       `${auto.blocksPlaced} blocks`);
+    const dropped = generateSiteDesign(square, cfg, 100, 400, {
+      hotClimate: true,
+      constraints: {
+        yardAuthoring: 'manual',
+        placedEquipment: [{
+          id: 'peq-1', kind: 'inverter', x: 40, y: -25, rotationDeg: 0,
+          lengthFt: 20, widthFt: 8, heightFt: 9.5, source: 'manual',
+        }],
+      },
+    });
+    const pcs = dropped.equipment.find(e => e.id === 'peq-1');
+    check('[manual yard] dropped PCS keeps its pose',
+      !!pcs && pcs.kind === 'inverter' && pcs.x === 40 && pcs.y === -25 && pcs.length === 20 && pcs.width === 8,
+      pcs ? `${pcs.kind} @ ${pcs.x},${pcs.y} ${pcs.length}x${pcs.width}` : 'missing');
+    check('[manual yard] dropped PCS adds no roads or MW',
+      dropped.roads.length === 0 && dropped.achievedMW === 0 && dropped.cables.length === 0,
+      `roads ${dropped.roads.length}, MW ${dropped.achievedMW}`);
   }
 
   const HONDO_KMZ = path.resolve(
