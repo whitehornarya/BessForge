@@ -12,6 +12,7 @@ import { gateApronKeepouts } from '../lib/nextera/feederKeepouts';
 import type { FeederRoutingResult, FeederRoutingCandidate } from '../lib/nextera/feederOptimizer';
 import { ArrangementThumbnail } from './ArrangementThumbnail';
 import { CONFIGURATIONS, getConfiguration, getEffectiveConfiguration } from '../lib/nextera/catalog';
+import { PLACEMENT_BUTTON_ICONS, PLACEMENT_BUTTON_ICON_SIZE } from '../lib/nextera/placementButtonIcons';
 import { buildBomRows, bomToCsv, buildSiteBom, siteBomToCsv } from '../lib/nextera/bom';
 import { buildCableScheduleRows } from '../lib/nextera/cableSchedule';
 import { buildBomRollup } from '../lib/nextera/bomRollup';
@@ -3434,7 +3435,7 @@ export default function DesignControlPanel() {
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
                     Place
                   </div>
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <div className="grid grid-cols-1 gap-2">
                     {(
                       [
                         { id: 'pcs', label: 'PCS' },
@@ -3449,18 +3450,40 @@ export default function DesignControlPanel() {
                       ] as const
                     ).map(opt => {
                       const selected = placeMaterialSelected === opt.id;
+                      const pe = config.inverterModel === 'PE FP4200M';
+                      const iconKey = opt.id === 'pcs' ? (pe ? 'pcsPe' : 'pcsGe')
+                        : opt.id === 'battery' ? (pe ? 'batteryPe' : 'batteryGe')
+                        : opt.id === 'commsCabinet' ? (pe ? 'commsCabinetPe' : 'commsCabinetGe')
+                        : opt.id;
+                      const icon = PLACEMENT_BUTTON_ICONS[iconKey];
+                      const placeholder = opt.id === 'auxSwitchPanel' || opt.id === 'road';
                       return (
                         <button
                           key={opt.id}
                           type="button"
                           onClick={() => setPlaceMaterialSelected(selected ? null : opt.id)}
                           aria-pressed={selected}
-                          className={`text-left text-[11px] px-2 py-1.5 rounded border font-medium transition-colors ${
+                          className={`flex items-center gap-2 text-left text-xs px-2.5 py-2 rounded border font-medium transition-colors ${
                             selected
                               ? 'bg-cyan-700/80 border-cyan-500 text-cyan-50'
                               : 'bg-slate-900/60 border-slate-600 text-slate-200 hover:border-slate-500 hover:bg-slate-700/60'
                           }`}
                         >
+                          {icon && (
+                            <svg
+                              viewBox={`0 0 ${PLACEMENT_BUTTON_ICON_SIZE} ${PLACEMENT_BUTTON_ICON_SIZE}`}
+                              className="w-8 h-8 shrink-0"
+                              aria-hidden
+                            >
+                              <path
+                                d={icon}
+                                fill="currentColor"
+                                fillRule="evenodd"
+                                stroke={placeholder ? 'currentColor' : 'none'}
+                                strokeWidth={placeholder ? 1.25 : 0}
+                              />
+                            </svg>
+                          )}
                           {opt.label}
                         </button>
                       );
