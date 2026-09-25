@@ -67,6 +67,7 @@ function iconPath(rings: Ring[]): string {
 const PLACEHOLDERS: Record<string, string> = {
   auxSwitchPanel: 'M6 5H26V27H6Z M16 5V27 M9 10H13 M19 10H23 M9 16H13 M19 16H23',
   road: 'M4 12H28V20H4Z M8 16H24',
+  gate: 'M5 6V26 M9 8H23V24 M27 6V26',
 };
 
 const icons: Record<string, string> = {

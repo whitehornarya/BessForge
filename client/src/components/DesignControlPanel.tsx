@@ -3439,6 +3439,7 @@ export default function DesignControlPanel() {
                     {(
                       [
                         { id: 'road', label: 'Road' },
+                        { id: 'gate', label: 'Gate' },
                         { id: 'auxTransformer', label: 'Aux transformer' },
                         { id: 'pcs', label: 'PCS' },
                         { id: 'battery', label: 'Battery container' },
@@ -3456,7 +3457,7 @@ export default function DesignControlPanel() {
                         : opt.id === 'commsCabinet' ? (pe ? 'commsCabinetPe' : 'commsCabinetGe')
                         : opt.id;
                       const icon = PLACEMENT_BUTTON_ICONS[iconKey];
-                      const placeholder = opt.id === 'auxSwitchPanel' || opt.id === 'road';
+                      const placeholder = opt.id === 'auxSwitchPanel' || opt.id === 'road' || opt.id === 'gate';
                       return (
                         <button
                           key={opt.id}
