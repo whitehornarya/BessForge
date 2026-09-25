@@ -27,13 +27,13 @@ Saved projects that do not carry `yardAuthoring: 'manual'` keep today’s auto-l
 - The placement chrome lives in the sidebar, not on the scene. The section is **Manual Placement**, same heading style as the other tabs.
 - **Auto-fill from drawing** / **Scan drawing** is duplicated at the bottom of that tab so it reads as the next step. The original control stays on Site Boundary.
 - Palette order: Road, Gate, Aux transformer, PCS, battery container, aux switchgear, comms cabinet, aux switch panel, fiber patch panel, fire control panel. Icons are baked once into [`placementButtonIcons.ts`](../client/src/lib/nextera/placementButtonIcons.ts). Gate, road, and aux switch panel use placeholders.
-- PCS drag-and-drop is implemented. The other buttons select only. Editing a placed item, grid snap, and group alignment are later slices.
+- PCS drag-and-drop is implemented, and so are the other palette items: battery container, aux gear, a road centerline, and one gate. Editing a placed item, grid snap, and group alignment are later slices.
 
 ## Slice 1 — Placement indicator (done)
 
 After a KMZ is uploaded and areas are chosen, the sidebar opens **Manual Placement** in [`DesignControlPanel.tsx`](../client/src/components/DesignControlPanel.tsx) (`PANEL_SECTIONS`). There is no scene toolbar for this step.
 
-New imports set `yardAuthoring: 'manual'` on [`LayoutConstraints`](../client/src/lib/nextera/layoutEngine.ts) for each BESS area, from `applyBoundary` and `chooseAllBoundariesWithProgress` in [`useDesignStore.ts`](../client/src/lib/stores/useDesignStore.ts). [`generateSiteDesign`](../client/src/lib/nextera/layoutEngine.ts) draws the fence, and the scene draws the property line. The imported KMZ linework stays loaded for scan but is hidden while `yardAuthoring` is `'manual'`. The layout does not run the block packer, interior roads, augmentation, surfacing, DC cables, or MV feeders. Substation areas keep their current yard. A hand-placed PCS is the exception and is composed in slice 4.
+New imports set `yardAuthoring: 'manual'` on [`LayoutConstraints`](../client/src/lib/nextera/layoutEngine.ts) for each BESS area, from `applyBoundary` and `chooseAllBoundariesWithProgress` in [`useDesignStore.ts`](../client/src/lib/stores/useDesignStore.ts). [`generateSiteDesign`](../client/src/lib/nextera/layoutEngine.ts) draws the fence, and the scene draws the property line. The imported KMZ linework stays loaded for scan but is hidden while `yardAuthoring` is `'manual'`. The layout does not run the block packer, interior roads, augmentation, surfacing, DC cables, or MV feeders. Substation areas keep their current yard. Hand-placed palette items are the exception and are composed in slice 4.
 
 ## Slice 2 — Scan, then today’s UI (done)
 
@@ -52,25 +52,19 @@ One button per manual option in the **Manual Placement** section, in this order:
 - Battery container
 - Aux switchgear, comms cabinet, aux switch panel, fiber patch panel, fire control panel
 
-Buttons are visible and selectable. Icons are the baked 32×32 paths, not rescaled on each render. PCS is the one that places gear (slice 4). The others do not place catalog gear yet.
+Buttons are visible and selectable. Each one places its item (slice 4).
 
 ## Slice 4 — Implement each button
 
-**PCS (done).** Selecting PCS arms a drag on the manual yard. Pointer down anywhere on the yard starts a ghost and pointer up commits through `addPlacedGear('inverter', …)` with catalog dimensions for the active GE or PE configuration and `source: 'manual'`. [`manualAuthoringDesign`](../client/src/lib/nextera/layoutEngine.ts) composes those inverter specs at the stored pose and still skips the packer, roads, cables, surfacing, and MW. The ghost and the committed unit use the same inverter rendering as a scanned PCS (`RealisticEquipment` / the simple box). Escape or clicking PCS again disarms.
+**PCS, battery, aux items, road, and gate (done).** Selecting a button arms a drag on the manual yard. Pointer up commits:
 
-The full-yard catcher in [`PcsDrop`](../client/src/components/DesignScene.tsx) sits over the equipment, so a left click on an existing PCS drops another copy. Slice 5 removes that.
+- **PCS** — `addPlacedGear('inverter', …)`, catalog size for the active GE or PE configuration, same model as a scanned PCS.
+- **Battery container** — `addPlacedGear('bess', …)`, LG JF2 model.
+- **Aux transformer, aux switchgear, comms cabinet, aux switch panel, fiber patch panel, fire control panel** — `addPlacedEquipment` (`ManualEquipmentSpec`). Realistic models where the scene already has one; otherwise the catalog box.
+- **Road** — click the start, then click the end. Stored as a `customRoads` centerline, 24 ft wide.
+- **Gate** — one `placedGate` at the drop, rendered with the existing gate.
 
-The other buttons stay selectable outlines until their own task. Those tasks come after the edit gestures in slice 5, so every later item uses the same left-drag and right-click behavior:
-
-- **Battery container** — same drag later; `addPlacedGear('bess')`; LG JF2 model.
-- **Road** — centerline draw, not a block.
-- **Gate** — placement comes later. Placeholder icon.
-- **Aux transformer** — `ManualEquipmentSpec`; Hitachi aux model.
-- **Aux switchgear** — manual spec; aux distribution model.
-- **Comms cabinet** — manual spec; catalog box and legend symbol.
-- **Aux switch panel** — manual spec; catalog rectangle.
-- **Fiber patch panel** — manual spec; fiber model.
-- **Fire control panel** — manual spec; fire-control model.
+[`manualAuthoringDesign`](../client/src/lib/nextera/layoutEngine.ts) composes those poses and still skips the packer, cables, surfacing, and MW. Escape or clicking the button again disarms. The full-yard catcher still sits over equipment, so a left click on an existing item drops another copy. Slice 5 removes that.
 
 Manual drops do not change achieved MW or `tracedPcsUnits`. Feeder routing stays as it is until the connections phase. Commits survive `regenerate` and area switching. A later scan apply must not move those `x` / `y` / `rotationDeg` values.
 

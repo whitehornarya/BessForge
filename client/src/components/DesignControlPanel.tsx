@@ -3427,9 +3427,9 @@ export default function DesignControlPanel() {
             {manualYard ? (
               <>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  The site shows the property line and fence. Select PCS, then
-                  drag on the site to drop one. Press Escape or click PCS again
-                  to stop.
+                  The site shows the property line and fence. Select an item, then
+                  drag on the site to drop it. Press Escape or click the item
+                  again to stop.
                 </p>
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
@@ -3491,11 +3491,13 @@ export default function DesignControlPanel() {
                     })}
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1.5">
-                    {manualPlaceItem === 'pcs'
-                      ? 'PCS armed — drag on the site to drop one. Escape cancels.'
+                    {manualPlaceItem === 'road'
+                      ? 'Road armed — click the start, then click the end. Escape cancels.'
+                      : manualPlaceItem === 'gate'
+                      ? 'Gate armed — drag on the site to drop the gate. Escape cancels.'
                       : manualPlaceItem
-                      ? 'Selected — placement for this item comes later.'
-                      : 'Select PCS to drag one onto the site.'}
+                      ? 'Armed — drag on the site to drop one. Escape cancels.'
+                      : 'Select an item, then drag it onto the site.'}
                   </div>
                 </div>
               </>

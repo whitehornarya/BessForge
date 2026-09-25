@@ -6810,40 +6810,79 @@ function TraceOverlay() {
   );
 }
 
+type PaletteArm =
+  | { drop: 'gear'; kind: 'inverter' | 'bess' }
+  | { drop: 'manual'; type: ManualEquipmentType }
+  | { drop: 'road' }
+  | { drop: 'gate' };
+
+function paletteArm(id: string | null): PaletteArm | null {
+  switch (id) {
+    case 'pcs': return { drop: 'gear', kind: 'inverter' };
+    case 'battery': return { drop: 'gear', kind: 'bess' };
+    case 'road': return { drop: 'road' };
+    case 'gate': return { drop: 'gate' };
+    case 'auxTransformer':
+    case 'auxSwitchgear':
+    case 'commsCabinet':
+    case 'auxSwitchPanel':
+    case 'fiberPatchPanel':
+    case 'fireControlPanel':
+      return { drop: 'manual', type: id };
+    default: return null;
+  }
+}
+
 /**
- * Drag a PCS onto a manual-authoring yard. Pointer down starts the ghost,
- * pointer up commits through addPlacedGear so the scan-mode inverter renders.
+ * Drag the armed palette item onto a manual yard. Pointer up commits a
+ * catalog block, a road centerline, or the site gate.
  */
 function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolean) => void; realistic: boolean }) {
   const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
-  const armed = useDesignStore(s => s.manualPlaceItem === 'pcs');
+  const manualPlaceItem = useDesignStore(s => s.manualPlaceItem);
+  const arm = useMemo(
+    () => paletteArm(manual && manualPlaceItem ? manualPlaceItem : null),
+    [manual, manualPlaceItem],
+  );
   const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
   const addPlacedGear = useDesignStore(s => s.addPlacedGear);
+  const addPlacedEquipment = useDesignStore(s => s.addPlacedEquipment);
+  const addManualRoad = useDesignStore(s => s.addManualRoad);
+  const setPlacedGate = useDesignStore(s => s.setPlacedGate);
   const configId = useDesignStore(s => s.configId);
   const { camera, gl, controls } = useThree();
   const controlsRef = useRef<{ enabled?: boolean } | null>(null);
   controlsRef.current = controls as { enabled?: boolean } | null;
   const dragging = useRef(false);
   const latest = useRef<Pt | null>(null);
+  const roadStart = useRef<Pt | null>(null);
   const [pos, setPos] = useState<Pt | null>(null);
+  const [roadFrom, setRoadFrom] = useState<Pt | null>(null);
   const raycaster = useRef(new THREE.Raycaster());
   const ndc = useRef(new THREE.Vector2());
 
-  const spec = specForKind('inverter', getConfiguration(configId));
   const ghost = useMemo((): PlacedEquipment | null => {
-    if (!pos || !spec) return null;
+    if (!pos || !arm || arm.drop === 'road' || arm.drop === 'gate') return null;
+    if (arm.drop === 'gear') {
+      const spec = specForKind(arm.kind, getConfiguration(configId));
+      if (!spec) return null;
+      return {
+        id: 'place-ghost',
+        kind: arm.kind,
+        label: arm.kind === 'bess' ? 'BESS' : 'PCS',
+        x: pos.x, y: pos.y, rotation: 0,
+        length: spec.dims.length, width: spec.dims.width, height: spec.dims.height,
+      };
+    }
+    const cat = MANUAL_EQUIPMENT_CATALOG[arm.type];
     return {
-      id: 'pcs-ghost',
-      kind: 'inverter',
-      label: 'PCS',
-      x: pos.x,
-      y: pos.y,
-      rotation: 0,
-      length: spec.dims.length,
-      width: spec.dims.width,
-      height: spec.dims.height,
+      id: 'place-ghost',
+      kind: cat.kind,
+      label: cat.short,
+      x: pos.x, y: pos.y, rotation: 0,
+      length: cat.dims.length, width: cat.dims.width, height: cat.dims.height,
     };
-  }, [pos, spec]);
+  }, [pos, arm, configId]);
 
   const hitGround = useCallback((ev: PointerEvent): Pt | null => {
     const rect = gl.domElement.getBoundingClientRect();
@@ -6864,17 +6903,28 @@ function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolea
   }, [camera, gl]);
 
   useEffect(() => {
-    if (!manual || !armed) return;
+    if (!arm) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setManualPlaceItem(null);
+      if (e.key !== 'Escape') return;
+      roadStart.current = null;
+      setRoadFrom(null);
+      setPos(null);
+      setManualPlaceItem(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [manual, armed, setManualPlaceItem]);
+  }, [arm, setManualPlaceItem]);
 
   useEffect(() => {
     const el = gl.domElement;
     const move = (ev: PointerEvent) => {
+      if (roadStart.current) {
+        const p = hitGround(ev);
+        if (!p) return;
+        latest.current = p;
+        setPos(p);
+        return;
+      }
       if (!dragging.current) return;
       const p = hitGround(ev);
       if (!p) return;
@@ -6891,8 +6941,12 @@ function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolea
       const p = hit ?? latest.current;
       latest.current = null;
       setPos(null);
-      if (!p) return;
-      const why = addPlacedGear('inverter', Math.round(p.x), Math.round(p.y));
+      if (!p || !arm || arm.drop === 'road') return;
+      const why = arm.drop === 'gate'
+        ? setPlacedGate(Math.round(p.x), Math.round(p.y))
+        : arm.drop === 'gear'
+          ? addPlacedGear(arm.kind, Math.round(p.x), Math.round(p.y))
+          : addPlacedEquipment(arm.type, { x: Math.round(p.x), y: Math.round(p.y) });
       if (why) toast.error(friendlyRejectReason(why));
     };
     el.addEventListener('pointermove', move);
@@ -6903,9 +6957,9 @@ function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolea
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
     };
-  }, [gl, hitGround, onDraggingChange, addPlacedGear]);
+  }, [gl, hitGround, onDraggingChange, addPlacedGear, addPlacedEquipment, addManualRoad, setPlacedGate, arm]);
 
-  if (!manual || !armed) return null;
+  if (!arm) return null;
   return (
     <group>
       <mesh
@@ -6915,6 +6969,30 @@ function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolea
           if (e.button !== 0) return;
           e.stopPropagation();
           const p = { x: e.point.x, y: -e.point.z };
+          if (arm.drop === 'road') {
+            const start = roadStart.current;
+            if (!start) {
+              roadStart.current = p;
+              setRoadFrom(p);
+              setPos(p);
+              return;
+            }
+            const why = addManualRoad(
+              { x: Math.round(start.x), y: Math.round(start.y) },
+              { x: Math.round(p.x), y: Math.round(p.y) },
+            );
+            if (why) {
+              roadStart.current = start;
+              setRoadFrom(start);
+              setPos(p);
+              toast.error(friendlyRejectReason(why));
+              return;
+            }
+            roadStart.current = null;
+            setRoadFrom(null);
+            setPos(null);
+            return;
+          }
           dragging.current = true;
           latest.current = p;
           setPos(p);
@@ -6928,7 +7006,7 @@ function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolea
         <planeGeometry args={[200000, 200000]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
-      {ghost && (realistic ? (
+      {ghost && (realistic && REALISTIC_KINDS.has(ghost.kind) ? (
         <Suspense fallback={null}>
           <RealisticEquipment equipment={[ghost]} ghost />
         </Suspense>
@@ -6938,6 +7016,32 @@ function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolea
           <meshStandardMaterial color="#3f8f5f" transparent opacity={0.55} />
         </mesh>
       ))}
+      {arm.drop === 'gate' && pos && (
+        <mesh position={[pos.x, 4, -pos.y]} rotation={[0, 0, 0]}>
+          <boxGeometry args={[24, 8, 1.5]} />
+          <meshStandardMaterial color="#94a3b8" transparent opacity={0.55} />
+        </mesh>
+      )}
+      {arm.drop === 'road' && roadFrom && (
+        <group
+          position={[roadFrom.x, 0.4, -roadFrom.y]}
+          rotation={[0, Math.atan2(pos ? pos.y - roadFrom.y : 0, pos ? pos.x - roadFrom.x : 1), 0]}
+        >
+          <mesh position={[0, 0.3, 0]}>
+            <sphereGeometry args={[3, 16, 12]} />
+            <meshStandardMaterial color="#38bdf8" />
+          </mesh>
+          {pos && (
+            <mesh
+              position={[Math.max(0.5, Math.hypot(pos.x - roadFrom.x, pos.y - roadFrom.y)) / 2, 0, 0]}
+              rotation={[-Math.PI / 2, 0, 0]}
+            >
+              <planeGeometry args={[Math.max(0.5, Math.hypot(pos.x - roadFrom.x, pos.y - roadFrom.y)), 24]} />
+              <meshStandardMaterial color="#64748b" transparent opacity={0.55} />
+            </mesh>
+          )}
+        </group>
+      )}
     </group>
   );
 }

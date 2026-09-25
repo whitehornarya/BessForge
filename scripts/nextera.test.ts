@@ -305,6 +305,29 @@ async function main() {
     check('[manual yard] dropped PCS adds no roads or MW',
       dropped.roads.length === 0 && dropped.achievedMW === 0 && dropped.cables.length === 0,
       `roads ${dropped.roads.length}, MW ${dropped.achievedMW}`);
+    const mixed = generateSiteDesign(square, cfg, 100, 400, {
+      hotClimate: true,
+      constraints: {
+        yardAuthoring: 'manual',
+        placedEquipment: [
+          { id: 'peq-2', kind: 'bess', x: 10, y: 12, lengthFt: 23.525, widthFt: 8.433, heightFt: 9.5, source: 'manual' },
+          { id: 'peq-3', type: 'auxTransformer', x: -30, y: 8 },
+        ],
+        customRoads: [{ id: 'mroad-1', pts: [{ x: 0, y: 0 }, { x: 80, y: 0 }], width: 24 }],
+        placedGate: { x: 15, y: -40, width: 24 },
+      },
+    });
+    const batt = mixed.equipment.find(e => e.id === 'peq-2');
+    const xfmr = mixed.equipment.find(e => e.id === 'peq-3');
+    const road = mixed.roads.find(r => r.id === 'mroad-1');
+    check('[manual yard] dropped battery and aux stay put',
+      !!batt && batt.kind === 'bess' && batt.x === 10 && batt.y === 12 &&
+      !!xfmr && xfmr.kind === 'auxTransformer' && xfmr.x === -30 && xfmr.y === 8,
+      `batt ${batt?.kind ?? 'missing'}, xfmr ${xfmr?.kind ?? 'missing'}`);
+    check('[manual yard] drawn road and gate land',
+      !!road && road.length === 80 && road.width === 24 &&
+      mixed.gate?.x === 15 && mixed.gate?.y === -40 && mixed.achievedMW === 0,
+      `road ${road?.length ?? 'missing'}, gate ${mixed.gate?.x ?? 'missing'}`);
   }
 
   const HONDO_KMZ = path.resolve(

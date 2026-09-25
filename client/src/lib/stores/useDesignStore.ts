@@ -362,6 +362,17 @@ export const sanitizeLayoutEdits = (v: unknown): LayoutConstraints => {
   const e = v as Record<string, unknown>;
   const out: LayoutConstraints = {};
   if (e.yardAuthoring === 'manual') out.yardAuthoring = 'manual';
+  if (e.placedGate && typeof e.placedGate === 'object' && !Array.isArray(e.placedGate)) {
+    const g = e.placedGate as { x?: unknown; y?: unknown; width?: unknown; rotationDeg?: unknown };
+    if (typeof g.x === 'number' && Number.isFinite(g.x) && typeof g.y === 'number' && Number.isFinite(g.y)) {
+      out.placedGate = {
+        x: g.x,
+        y: g.y,
+        ...(typeof g.width === 'number' && Number.isFinite(g.width) && g.width > 0 ? { width: g.width } : {}),
+        ...(typeof g.rotationDeg === 'number' && Number.isFinite(g.rotationDeg) ? { rotationDeg: g.rotationDeg } : {}),
+      };
+    }
+  }
   const takeMoveMap = (raw: unknown, intKeys: boolean): Record<string, { dx: number; dy: number }> | null => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const clean: Record<string, { dx: number; dy: number }> = {};
@@ -4137,6 +4148,8 @@ interface DesignState {
   gearPlacement: { kind: TraceEquipKind } | null;
   setGearPlacement: (kind: TraceEquipKind | null) => void;
   addPlacedGear: (kind: TraceEquipKind, x: number, y: number, rotationDeg?: number) => string | null;
+  addManualRoad: (a: Pt, b: Pt) => string | null;
+  setPlacedGate: (x: number, y: number) => string | null;
 
   // ---- scene bulk tagging (manual auto-fill fallback) ---------------------
   // Arm a tag, then marquee-drag over the reference drawing in the scene:
@@ -7387,6 +7400,45 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     get().pushHistory(before);
     return null;
   },
+
+  addManualRoad: (a: Pt, b: Pt): string | null => {
+    if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) return 'Invalid road.';
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    if (length < 8) return 'Road is too short.';
+    const prev = get().layoutEdits;
+    const existing = prev.customRoads ?? [];
+    let n = 1;
+    for (const r of existing) {
+      const m = /^mroad-(\d+)$/.exec(r.id);
+      if (m) n = Math.max(n, parseInt(m[1], 10) + 1);
+    }
+    const before = snapOf(get(), 'Drew a road');
+    set({
+      layoutEdits: {
+        ...prev,
+        customRoads: [...existing, { id: `mroad-${n}`, pts: [{ x: a.x, y: a.y }, { x: b.x, y: b.y }], width: 24 }],
+      },
+    });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
+    return null;
+  },
+
+  setPlacedGate: (x: number, y: number): string | null => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return 'Invalid gate position.';
+    const prev = get().layoutEdits;
+    const before = snapOf(get(), 'Placed gate');
+    set({
+      layoutEdits: {
+        ...prev,
+        placedGate: { x, y, width: 24, rotationDeg: 0 },
+      },
+    });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
+    return null;
+  },
+
   moveEquipment: (id: string, dx: number, dy: number, force = false): boolean => {
     set({ lastRejection: null });
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false;

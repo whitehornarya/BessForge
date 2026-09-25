@@ -271,6 +271,8 @@ export interface LayoutConstraints {
   // later step fills the yard. Absent on saved projects, which keep the
   // automatic layout.
   yardAuthoring?: 'manual';
+  // One entrance gate dropped on a manual yard. Absent means no gate.
+  placedGate?: { x: number; y: number; width?: number; rotationDeg?: number };
   rowMoves?: Record<number, { dx: number; dy: number }>;
   // blockMoves: offset (dx, dy) applied to ONE block (its containers, PCS and
   // aug bay as a unit), keyed by the stable 1-based block number. Applied
@@ -1642,10 +1644,9 @@ export function isManualAuthoringYard(constraints?: LayoutConstraints | null): b
 }
 
 /**
- * Fence-only site for manual authoring. The imported KMZ linework is a
- * separate drawing overlay, not part of this design. Hand-placed PCS units
- * are composed at their stored pose. No packer, roads, cables, or surfacing,
- * and drops do not change achieved MW.
+ * Fence-only site for manual authoring. Hand-placed equipment, drawn road
+ * centerlines, and a placed gate are composed at their stored poses. No
+ * packer, cables, or surfacing, and drops do not change achieved MW.
  */
 export function manualAuthoringDesign(
   boundary: SiteBoundary,
@@ -1657,8 +1658,29 @@ export function manualAuthoringDesign(
   const fence = fencePolygonFor(boundary.polygon, fencePlacement);
   const equipment: PlacedEquipment[] = [];
   const warnings: string[] = [];
+  const outside = (x: number, y: number, length: number, width: number, rad: number) => {
+    const c = Math.cos(rad), s = Math.sin(rad);
+    const hl = length / 2, hw = width / 2;
+    const corners: Pt[] = [
+      { x: x + c * hl - s * hw, y: y + s * hl + c * hw },
+      { x: x + c * hl + s * hw, y: y + s * hl - c * hw },
+      { x: x - c * hl - s * hw, y: y - s * hl + c * hw },
+      { x: x - c * hl + s * hw, y: y - s * hl - c * hw },
+    ];
+    return corners.some(p => !pointInPolygon(p, fence));
+  };
+  let commsSeq = 1;
   for (const spec of constraints?.placedEquipment ?? []) {
-    if (isManualEquipmentSpec(spec) || spec.kind !== 'inverter') continue;
+    if (isManualEquipmentSpec(spec)) {
+      const item = composePlacedEquipment(spec, commsSeq);
+      if (spec.type === 'commsCabinet') commsSeq++;
+      if (outside(item.x, item.y, item.length, item.width, item.rotation)) {
+        warnings.push(`Placed equipment ${spec.id} placed with warning: the ${item.label} extends outside the fence line at its drawn position — the reference geometry was kept as drawn; review the fence or move it.`);
+      }
+      equipment.push(item);
+      continue;
+    }
+    if (spec.kind !== 'inverter' && spec.kind !== 'bess') continue;
     if (![spec.x, spec.y, spec.lengthFt, spec.widthFt].every(v => Number.isFinite(v)) ||
         spec.lengthFt <= 0 || spec.widthFt <= 0) {
       warnings.push(`Placed equipment ${spec.id} rejected: invalid position or size — remove it in the layout edits panel.`);
@@ -1666,29 +1688,43 @@ export function manualAuthoringDesign(
     }
     const rotDeg = Number.isFinite(spec.rotationDeg) ? (spec.rotationDeg as number) : 0;
     const rad = (rotDeg * Math.PI) / 180;
+    const label = spec.label || (spec.kind === 'bess' ? 'BESS' : 'PCS');
     const item: PlacedEquipment = {
       id: spec.id,
-      kind: 'inverter',
-      label: spec.label || 'PCS',
+      kind: spec.kind,
+      label,
       x: spec.x, y: spec.y,
       rotation: rad,
       length: spec.lengthFt,
       width: spec.widthFt,
       height: Number.isFinite(spec.heightFt) && (spec.heightFt as number) > 0 ? (spec.heightFt as number) : 8,
     };
-    const c = Math.cos(rad), s = Math.sin(rad);
-    const hl = spec.lengthFt / 2, hw = spec.widthFt / 2;
-    const corners: Pt[] = [
-      { x: spec.x + c * hl - s * hw, y: spec.y + s * hl + c * hw },
-      { x: spec.x + c * hl + s * hw, y: spec.y + s * hl - c * hw },
-      { x: spec.x - c * hl - s * hw, y: spec.y - s * hl + c * hw },
-      { x: spec.x - c * hl + s * hw, y: spec.y - s * hl - c * hw },
-    ];
-    if (corners.some(p => !pointInPolygon(p, fence))) {
-      warnings.push(`Placed equipment ${spec.id} placed with warning: the PCS extends outside the fence line at its drawn position — the reference geometry was kept as drawn; review the fence or move it.`);
+    if (outside(item.x, item.y, item.length, item.width, rad)) {
+      warnings.push(`Placed equipment ${spec.id} placed with warning: the ${label} extends outside the fence line at its drawn position — the reference geometry was kept as drawn; review the fence or move it.`);
     }
     equipment.push(item);
   }
+  const roads: RoadSegment[] = [];
+  for (const road of constraints?.customRoads ?? []) {
+    if (road.pts.length < 2) continue;
+    const a = road.pts[0];
+    const b = road.pts[road.pts.length - 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    if (length < 1) continue;
+    roads.push({
+      id: road.id,
+      x: (a.x + b.x) / 2,
+      y: (a.y + b.y) / 2,
+      length,
+      width: road.width ?? 24,
+      rotation: Math.atan2(dy, dx),
+    });
+  }
+  const g = constraints?.placedGate;
+  const gate = g && Number.isFinite(g.x) && Number.isFinite(g.y)
+    ? { x: g.x, y: g.y, width: g.width && g.width > 0 ? g.width : 24, rotation: ((g.rotationDeg ?? 0) * Math.PI) / 180 }
+    : null;
   return {
     boundary,
     fence,
@@ -1696,10 +1732,10 @@ export function manualAuthoringDesign(
     augmentationZones: [],
     reservedZones: [],
     reserveSummary: null,
-    roads: [],
+    roads,
     aisles: [],
     roadNetwork: null,
-    gate: null,
+    gate,
     cables: [],
     trench: null,
     surfacing: null,
