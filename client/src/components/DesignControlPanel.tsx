@@ -3478,6 +3478,34 @@ export default function DesignControlPanel() {
                       : 'Free — the pointer position is the pose.'}
                   </div>
                 </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => undoEdit()}
+                    disabled={undoStack.length === 0}
+                    title="Undo the last placement or move"
+                    className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" aria-hidden>
+                      <path d="M6.5 3.5L3 7.5l3.5 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M3.5 7.5H13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                    Undo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => redoEdit()}
+                    disabled={redoStack.length === 0}
+                    title="Redo the placement or move just undone"
+                    className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Redo
+                    <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" aria-hidden>
+                      <path d="M9.5 3.5L13 7.5l-3.5 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M12.5 7.5H3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                </div>
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
                     Place
