@@ -6837,7 +6837,7 @@ function paletteArm(id: string | null): PaletteArm | null {
  * Drag the armed palette item onto a manual yard. Pointer up commits a
  * catalog block, a road centerline, or the site gate.
  */
-function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolean) => void; realistic: boolean }) {
+function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChange: (d: boolean) => void; onGroundDown: () => void; realistic: boolean }) {
   const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
   const manualPlaceItem = useDesignStore(s => s.manualPlaceItem);
   const arm = useMemo(
@@ -6963,11 +6963,12 @@ function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolea
   return (
     <group>
       <mesh
-        position={[0, 0.2, 0]}
+        position={[0, -0.05, 0]}
         rotation={[-Math.PI / 2, 0, 0]}
         onPointerDown={e => {
           if (e.button !== 0) return;
           e.stopPropagation();
+          onGroundDown();
           const p = { x: e.point.x, y: -e.point.z };
           if (arm.drop === 'road') {
             const start = roadStart.current;
@@ -7046,8 +7047,149 @@ function PcsDrop({ onDraggingChange, realistic }: { onDraggingChange: (d: boolea
   );
 }
 
+type ItemMenu = { id: string; x: number; y: number; duplicate: boolean };
+
+/** Left-drag moves a placed manual item. Right-click opens delete, duplicate, and rotate. */
+function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d: boolean) => void; onMenu: (m: ItemMenu | null) => void }) {
+  const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const equipment = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.equipment : undefined) ?? []);
+  const roads = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.roads : undefined) ?? []);
+  const gate = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.gate ?? null : null));
+  const moveManualPlacement = useDesignStore(s => s.moveManualPlacement);
+  const { camera, gl, controls } = useThree();
+  const controlsRef = useRef<{ enabled?: boolean } | null>(null);
+  controlsRef.current = controls as { enabled?: boolean } | null;
+  const drag = useRef<{ id: string; gx: number; gy: number } | null>(null);
+  const [ghost, setGhost] = useState<{ x: number; y: number; length: number; width: number; height: number; rotation: number } | null>(null);
+  const raycaster = useRef(new THREE.Raycaster());
+  const ndc = useRef(new THREE.Vector2());
+
+  const hitGround = useCallback((ev: PointerEvent): Pt | null => {
+    const rect = gl.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    ndc.current.set(
+      ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+      -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    raycaster.current.setFromCamera(ndc.current, camera);
+    const ray = raycaster.current.ray;
+    if (Math.abs(ray.direction.y) < 1e-8) return null;
+    const t = -ray.origin.y / ray.direction.y;
+    if (!Number.isFinite(t) || t < 0) return null;
+    return {
+      x: ray.origin.x + ray.direction.x * t,
+      y: -(ray.origin.z + ray.direction.z * t),
+    };
+  }, [camera, gl]);
+
+  useEffect(() => {
+    if (!manual) return;
+    const block = (e: Event) => e.preventDefault();
+    const el = gl.domElement;
+    el.addEventListener('contextmenu', block);
+    return () => el.removeEventListener('contextmenu', block);
+  }, [manual, gl]);
+
+  useEffect(() => {
+    const el = gl.domElement;
+    const move = (ev: PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      const p = hitGround(ev);
+      if (!p) return;
+      setGhost(g => g ? { ...g, x: p.x + d.gx, y: p.y + d.gy } : g);
+    };
+    const up = (ev: PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      drag.current = null;
+      onDraggingChange(false);
+      if (controlsRef.current) controlsRef.current.enabled = true;
+      const p = hitGround(ev);
+      setGhost(null);
+      if (!p) return;
+      const why = moveManualPlacement(d.id, Math.round(p.x + d.gx), Math.round(p.y + d.gy));
+      if (why) toast.error(friendlyRejectReason(why));
+    };
+    el.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => {
+      el.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+  }, [gl, hitGround, moveManualPlacement, onDraggingChange]);
+
+  if (!manual) return null;
+
+  const begin = (id: string, center: Pt, hit: Pt, size: { length: number; width: number; height: number; rotation: number }, e: { stopPropagation: () => void; button: number; nativeEvent: MouseEvent }) => {
+    if (e.button === 2 || e.nativeEvent.button === 2) {
+      e.stopPropagation();
+      e.nativeEvent.preventDefault();
+      onMenu({ id, x: e.nativeEvent.clientX, y: e.nativeEvent.clientY, duplicate: id !== 'gate' });
+      return;
+    }
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    onMenu(null);
+    drag.current = { id, gx: center.x - hit.x, gy: center.y - hit.y };
+    setGhost({ x: center.x, y: center.y, ...size });
+    onDraggingChange(true);
+    if (controlsRef.current) controlsRef.current.enabled = false;
+  };
+
+  return (
+    <group>
+      {equipment.map(eq => (
+        <mesh
+          key={eq.id}
+          position={[eq.x, Math.max(eq.height, 1) / 2, -eq.y]}
+          rotation={[0, eq.rotation, 0]}
+          onPointerDown={e => begin(eq.id, eq, { x: e.point.x, y: -e.point.z }, { length: eq.length, width: eq.width, height: eq.height, rotation: eq.rotation }, e)}
+          onContextMenu={e => { e.stopPropagation(); e.nativeEvent.preventDefault(); }}
+        >
+          <boxGeometry args={[eq.length, Math.max(eq.height, 1), eq.width]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      ))}
+      {roads.map(rd => (
+        <mesh
+          key={rd.id ?? `${rd.x},${rd.y}`}
+          position={[rd.x, 0.6, -rd.y]}
+          rotation={[-Math.PI / 2, 0, -rd.rotation]}
+          onPointerDown={e => {
+            if (!rd.id) return;
+            begin(rd.id, { x: rd.x, y: rd.y }, { x: e.point.x, y: -e.point.z }, { length: rd.length, width: rd.width, height: 1, rotation: rd.rotation }, e);
+          }}
+          onContextMenu={e => { e.stopPropagation(); e.nativeEvent.preventDefault(); }}
+        >
+          <planeGeometry args={[rd.length, rd.width]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      ))}
+      {gate && (
+        <mesh
+          position={[gate.x, 4, -gate.y]}
+          rotation={[0, gate.rotation, 0]}
+          onPointerDown={e => begin('gate', gate, { x: e.point.x, y: -e.point.z }, { length: gate.width, width: 2, height: 8, rotation: gate.rotation }, e)}
+          onContextMenu={e => { e.stopPropagation(); e.nativeEvent.preventDefault(); }}
+        >
+          <boxGeometry args={[gate.width, 8, 2]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      )}
+      {ghost && (
+        <mesh position={[ghost.x, ghost.height / 2, -ghost.y]} rotation={[0, ghost.rotation, 0]}>
+          <boxGeometry args={[ghost.length, ghost.height, ghost.width]} />
+          <meshStandardMaterial color="#38bdf8" transparent opacity={0.35} depthWrite={false} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
 export default function DesignScene() {
   const design = useDesignStore(s => s.design);
+  const [itemMenu, setItemMenu] = useState<{ id: string; x: number; y: number; duplicate: boolean } | null>(null);
   const alignRows = useDesignStore(s => s.alignRows);
   const alignIsland = useDesignStore(s => s.alignIsland);
   const mirrorAlignIsland = useDesignStore(s => s.mirrorAlignIsland);
@@ -7318,6 +7460,19 @@ export default function DesignScene() {
   const marketingStillsRequest = useDesignStore(s => s.marketingStillsRequest);
   const setRealisticModelsStore = setRealisticModels;
   const containerRef = useRef<HTMLDivElement>(null);
+  const manualYard = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  // The item menu mounts on pointerdown, before the browser fires contextmenu.
+  // That menu covers the canvas, so the browser menu has to be cancelled here.
+  useEffect(() => {
+    if (!manualYard) return;
+    const block = (e: Event) => {
+      const root = containerRef.current;
+      const t = e.target;
+      if (root && t instanceof Node && root.contains(t)) e.preventDefault();
+    };
+    window.addEventListener('contextmenu', block, true);
+    return () => window.removeEventListener('contextmenu', block, true);
+  }, [manualYard]);
   const [stillsProgress, setStillsProgress] = useState<string | null>(null);
   // Tour options popover (duration preset + per-stop toggles)
   const [showTourOptions, setShowTourOptions] = useState(false);
@@ -8379,7 +8534,8 @@ export default function DesignScene() {
         {design ? (
           <>
             <DesignContent design={design} editMode={editMode} realistic={realisticModels && viewMode !== '2d'} is3D={viewMode === '3d'} cad={viewMode === 'cad'} onDraggingChange={setDragging} editTool={editTool} onEditToolChange={setEditTool} zoneKind={zoneKind} islandPairs={islandPairs} placeKind={placeKind} placeAug={placeAug} placeAuxGear={placeAuxGear} placeEquipType={placeEquipType} placeAngleDeg={placeAngleDeg} placeSnap={placeSnap} roadDrawWidth={roadDrawWidth} onSelectedIslandChange={setSelIsland} onSelectedTargetChange={setNudgeTarget} onSelectedEquipChange={setSelEquip} onRoadSelectionChange={setRoadSelInfo} cadLayerVis={cadLayerVis} onSelectText={setCadSelectedText} />
-            <PcsDrop onDraggingChange={setDragging} realistic={realisticModels && viewMode !== '2d'} />
+            <PlacedItemHandles onDraggingChange={setDragging} onMenu={setItemMenu} />
+            <PcsDrop onDraggingChange={setDragging} onGroundDown={() => setItemMenu(null)} realistic={realisticModels && viewMode !== '2d'} />
             {viewMode !== 'cad' && drawingVisibility.dimensions &&
               <SpacingDimensions design={design} is3D={viewMode === '3d'} />}
           </>
@@ -8432,6 +8588,44 @@ export default function DesignScene() {
         {viewMode === '3d' && walkMode && design && <FirstPersonMode design={design} />}
         {viewMode === '3d' && tourActive && tourPhase === 'path' && design && <CinematicTourCamera design={design} />}
       </Canvas>
+      {itemMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onPointerDown={() => setItemMenu(null)}
+            onContextMenu={e => e.preventDefault()}
+          />
+          <div
+            className="fixed z-50 flex flex-col min-w-[9rem] rounded border border-slate-600 bg-slate-900 shadow-lg overflow-hidden"
+            style={{ left: itemMenu.x, top: itemMenu.y }}
+            onContextMenu={e => e.preventDefault()}
+          >
+            <button
+              type="button"
+              className="px-3 py-1.5 text-left text-xs text-slate-100 hover:bg-slate-700"
+              onClick={() => { useDesignStore.getState().removeManualPlacement(itemMenu.id); setItemMenu(null); }}
+            >
+              Delete
+            </button>
+            {itemMenu.duplicate && (
+              <button
+                type="button"
+                className="px-3 py-1.5 text-left text-xs text-slate-100 hover:bg-slate-700"
+                onClick={() => { useDesignStore.getState().duplicateManualPlacement(itemMenu.id); setItemMenu(null); }}
+              >
+                Duplicate
+              </button>
+            )}
+            <button
+              type="button"
+              className="px-3 py-1.5 text-left text-xs text-slate-100 hover:bg-slate-700"
+              onClick={() => { useDesignStore.getState().rotateManualPlacement(itemMenu.id); setItemMenu(null); }}
+            >
+              Rotate
+            </button>
+          </div>
+        </>
+      )}
       </CanvasErrorBoundary>
       )}
 

@@ -6,7 +6,7 @@ import { analyzeReferenceDrawing, classifyTraceName, traceKindHeight, fitRectPos
 // Tag choices for the scene bulk-tag tool: any traceable equipment kind, a
 // normal drawn road, or a wide (entrance-width) road.
 export type BulkTagKind = TraceEquipKind | 'road' | 'wideRoad';
-import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PAIR_INNER_GAP_FT, A3_GAP_FT, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
+import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PAIR_INNER_GAP_FT, A3_GAP_FT, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
 
 // Re-export the traced-road fingerprint helpers at their historical home:
 // the tombstone flow was built here, and external callers (tests) import
@@ -4150,6 +4150,10 @@ interface DesignState {
   addPlacedGear: (kind: TraceEquipKind, x: number, y: number, rotationDeg?: number) => string | null;
   addManualRoad: (a: Pt, b: Pt) => string | null;
   setPlacedGate: (x: number, y: number) => string | null;
+  moveManualPlacement: (id: string, x: number, y: number) => string | null;
+  rotateManualPlacement: (id: string) => string | null;
+  duplicateManualPlacement: (id: string) => string | null;
+  removeManualPlacement: (id: string) => void;
 
   // ---- scene bulk tagging (manual auto-fill fallback) ---------------------
   // Arm a tag, then marquee-drag over the reference drawing in the scene:
@@ -7437,6 +7441,163 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     get().regenerate({ sync: true });
     get().pushHistory(before);
     return null;
+  },
+
+  moveManualPlacement: (id: string, x: number, y: number): string | null => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return 'Invalid position.';
+    const prev = get().layoutEdits;
+    if (id === 'gate' && prev.placedGate) {
+      if (prev.placedGate.x === x && prev.placedGate.y === y) return null;
+      const before = snapOf(get(), 'Moved gate');
+      set({ layoutEdits: { ...prev, placedGate: { ...prev.placedGate, x, y } } });
+      get().regenerate({ sync: true });
+      get().pushHistory(before);
+      return null;
+    }
+    const road = (prev.customRoads ?? []).find(r => r.id === id);
+    if (road && road.pts.length >= 2) {
+      const a = road.pts[0];
+      const b = road.pts[road.pts.length - 1];
+      const dx = x - (a.x + b.x) / 2;
+      const dy = y - (a.y + b.y) / 2;
+      if (!dx && !dy) return null;
+      const before = snapOf(get(), 'Moved road');
+      set({
+        layoutEdits: {
+          ...prev,
+          customRoads: (prev.customRoads ?? []).map(r => r.id === id
+            ? { ...r, pts: r.pts.map(p => ({ x: p.x + dx, y: p.y + dy })) }
+            : r),
+        },
+      });
+      get().regenerate({ sync: true });
+      get().pushHistory(before);
+      return null;
+    }
+    const existing = prev.placedEquipment ?? [];
+    const spec = existing.find(s => s.id === id);
+    if (!spec) return 'Placed item not found.';
+    if (spec.x === x && spec.y === y) return null;
+    const before = snapOf(get(), 'Moved placed item');
+    set({
+      layoutEdits: {
+        ...prev,
+        placedEquipment: existing.map(s => s.id === id ? movePlacedSpec(s, x, y) : s),
+      },
+    });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
+    return null;
+  },
+
+  rotateManualPlacement: (id: string): string | null => {
+    const prev = get().layoutEdits;
+    if (id === 'gate' && prev.placedGate) {
+      const rotationDeg = ((prev.placedGate.rotationDeg ?? 0) + 90) % 360;
+      const before = snapOf(get(), 'Rotated gate');
+      set({ layoutEdits: { ...prev, placedGate: { ...prev.placedGate, rotationDeg } } });
+      get().regenerate({ sync: true });
+      get().pushHistory(before);
+      return null;
+    }
+    const road = (prev.customRoads ?? []).find(r => r.id === id);
+    if (road && road.pts.length >= 2) {
+      const a = road.pts[0];
+      const b = road.pts[road.pts.length - 1];
+      const cx = (a.x + b.x) / 2;
+      const cy = (a.y + b.y) / 2;
+      const turn = (p: Pt) => ({ x: cx - (p.y - cy), y: cy + (p.x - cx) });
+      const before = snapOf(get(), 'Rotated road');
+      set({
+        layoutEdits: {
+          ...prev,
+          customRoads: (prev.customRoads ?? []).map(r => r.id === id ? { ...r, pts: r.pts.map(turn) } : r),
+        },
+      });
+      get().regenerate({ sync: true });
+      get().pushHistory(before);
+      return null;
+    }
+    const existing = prev.placedEquipment ?? [];
+    if (!existing.some(s => s.id === id)) return 'Placed item not found.';
+    const before = snapOf(get(), 'Rotated placed item');
+    set({
+      layoutEdits: {
+        ...prev,
+        placedEquipment: existing.map(s => s.id === id ? rotatePlacedSpec(s) : s),
+      },
+    });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
+    return null;
+  },
+
+  duplicateManualPlacement: (id: string): string | null => {
+    const prev = get().layoutEdits;
+    const road = (prev.customRoads ?? []).find(r => r.id === id);
+    if (road) {
+      let n = 1;
+      for (const r of prev.customRoads ?? []) {
+        const m = /^mroad-(\d+)$/.exec(r.id);
+        if (m) n = Math.max(n, parseInt(m[1], 10) + 1);
+      }
+      const before = snapOf(get(), 'Duplicated road');
+      set({
+        layoutEdits: {
+          ...prev,
+          customRoads: [...(prev.customRoads ?? []), {
+            ...road,
+            id: `mroad-${n}`,
+            pts: road.pts.map(p => ({ x: p.x, y: p.y + 20 })),
+          }],
+        },
+      });
+      get().regenerate({ sync: true });
+      get().pushHistory(before);
+      return null;
+    }
+    const existing = prev.placedEquipment ?? [];
+    const spec = existing.find(s => s.id === id);
+    if (!spec) return 'Placed item not found.';
+    let nextN = 1;
+    for (const p of existing) {
+      const m = /^peq-(\d+)$/.exec(p.id);
+      if (m) nextN = Math.max(nextN, parseInt(m[1], 10) + 1);
+    }
+    const before = snapOf(get(), 'Duplicated placed item');
+    set({
+      layoutEdits: {
+        ...prev,
+        placedEquipment: [...existing, duplicatePlacedSpec(spec, `peq-${nextN}`)],
+      },
+    });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
+    return null;
+  },
+
+  removeManualPlacement: (id: string): void => {
+    const prev = get().layoutEdits;
+    if (id === 'gate' && prev.placedGate) {
+      const before = snapOf(get(), 'Removed gate');
+      const next = { ...prev };
+      delete next.placedGate;
+      set({ layoutEdits: next });
+      get().regenerate({ sync: true });
+      get().pushHistory(before);
+      return;
+    }
+    if ((prev.customRoads ?? []).some(r => r.id === id)) {
+      const remaining = (prev.customRoads ?? []).filter(r => r.id !== id);
+      const before = snapOf(get(), 'Removed road');
+      const next = { ...prev };
+      if (remaining.length) next.customRoads = remaining; else delete next.customRoads;
+      set({ layoutEdits: next });
+      get().regenerate({ sync: true });
+      get().pushHistory(before);
+      return;
+    }
+    get().removePlacedEquipment(id);
   },
 
   moveEquipment: (id: string, dx: number, dy: number, force = false): boolean => {

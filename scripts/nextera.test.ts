@@ -28,6 +28,9 @@ import {
 import {
   generateSiteDesign,
   fencePolygonFor,
+  movePlacedSpec,
+  rotatePlacedSpec,
+  duplicatePlacedSpec,
   SHRINKWRAP_AREA_RATIO,
   filletClosedPolygon,
   subtractAislesFromYard,
@@ -328,6 +331,34 @@ async function main() {
       !!road && road.length === 80 && road.width === 24 &&
       mixed.gate?.x === 15 && mixed.gate?.y === -40 && mixed.achievedMW === 0,
       `road ${road?.length ?? 'missing'}, gate ${mixed.gate?.x ?? 'missing'}`);
+    const pcsSpec = {
+      id: 'peq-1', kind: 'inverter' as const, x: 40, y: -25, rotationDeg: 0,
+      lengthFt: 20, widthFt: 8, heightFt: 9.5, source: 'manual' as const,
+    };
+    const movedSpec = movePlacedSpec(pcsSpec, 55, 12);
+    const movedYard = generateSiteDesign(square, cfg, 100, 400, {
+      hotClimate: true,
+      constraints: { yardAuthoring: 'manual', placedEquipment: [movedSpec] },
+    });
+    check('[manual yard] dragging a PCS keeps one item at the new pose',
+      movedYard.equipment.length === 1 && movedYard.equipment[0].id === 'peq-1' &&
+      movedYard.equipment[0].x === 55 && movedYard.equipment[0].y === 12,
+      `${movedYard.equipment.length} @ ${movedYard.equipment[0]?.x},${movedYard.equipment[0]?.y}`);
+    const turned = rotatePlacedSpec(pcsSpec);
+    check('[manual yard] rotate adds 90 degrees', turned.rotationDeg === 90, `${turned.rotationDeg}`);
+    const copy = duplicatePlacedSpec(pcsSpec, 'peq-2');
+    const copiedYard = generateSiteDesign(square, cfg, 100, 400, {
+      hotClimate: true,
+      constraints: { yardAuthoring: 'manual', placedEquipment: [pcsSpec, copy] },
+    });
+    check('[manual yard] duplicate adds one offset copy',
+      copiedYard.equipment.length === 2 && copy.x === 62 && copiedYard.equipment.some(e => e.id === 'peq-2' && e.x === 62),
+      `n ${copiedYard.equipment.length}, copy x ${copy.x}`);
+    const deletedYard = generateSiteDesign(square, cfg, 100, 400, {
+      hotClimate: true,
+      constraints: { yardAuthoring: 'manual', placedEquipment: [pcsSpec].filter(s => s.id !== 'peq-1') },
+    });
+    check('[manual yard] delete removes the PCS', deletedYard.equipment.length === 0, `${deletedYard.equipment.length}`);
   }
 
   const HONDO_KMZ = path.resolve(

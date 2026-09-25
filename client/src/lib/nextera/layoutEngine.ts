@@ -9429,6 +9429,32 @@ export function composePlacedEquipment(
   };
 }
 
+/** Move, quarter-turn, or copy one hand-placed spec. The id stays put on a move. */
+export function movePlacedSpec(spec: PlacedEquipmentSpec, x: number, y: number): PlacedEquipmentSpec {
+  return { ...spec, x, y };
+}
+
+export function rotatePlacedSpec(spec: PlacedEquipmentSpec): PlacedEquipmentSpec {
+  if (isManualEquipmentSpec(spec)) {
+    const a = (manualEquipmentAngle(spec) + 90) % 360;
+    const next: ManualEquipmentSpec = { ...spec };
+    if (a === 0) delete next.angleDeg; else next.angleDeg = a;
+    return next;
+  }
+  const nextDeg = ((((spec.rotationDeg ?? 0) % 360) + 360) % 360 + 90) % 360;
+  const next: TracedEquipmentSpec = { ...spec };
+  if (nextDeg === 0) delete next.rotationDeg; else next.rotationDeg = nextDeg;
+  return next;
+}
+
+export function duplicatePlacedSpec(spec: PlacedEquipmentSpec, id: string): PlacedEquipmentSpec {
+  if (isManualEquipmentSpec(spec)) {
+    const cat = MANUAL_EQUIPMENT_CATALOG[spec.type];
+    return { ...spec, id, x: spec.x + cat.dims.length + 2 };
+  }
+  return { ...spec, id, x: spec.x + spec.lengthFt + 2 };
+}
+
 /**
  * SINGLE source of truth for whether a manually placed item is accepted.
  * buildLayout calls this at commit time and the drag ghost calls it every

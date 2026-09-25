@@ -27,7 +27,7 @@ Saved projects that do not carry `yardAuthoring: 'manual'` keep today’s auto-l
 - The placement chrome lives in the sidebar, not on the scene. The section is **Manual Placement**, same heading style as the other tabs.
 - **Auto-fill from drawing** / **Scan drawing** is duplicated at the bottom of that tab so it reads as the next step. The original control stays on Site Boundary.
 - Palette order: Road, Gate, Aux transformer, PCS, battery container, aux switchgear, comms cabinet, aux switch panel, fiber patch panel, fire control panel. Icons are baked once into [`placementButtonIcons.ts`](../client/src/lib/nextera/placementButtonIcons.ts). Gate, road, and aux switch panel use placeholders.
-- PCS drag-and-drop is implemented, and so are the other palette items: battery container, aux gear, a road centerline, and one gate. Editing a placed item, grid snap, and group alignment are later slices.
+- PCS, battery, aux gear, a road centerline, and one gate can be placed. Left-drag moves a placed item. Right-click deletes, duplicates, or rotates it. Grid snap and group alignment are later slices.
 
 ## Slice 1 — Placement indicator (done)
 
@@ -64,17 +64,15 @@ Buttons are visible and selectable. Each one places its item (slice 4).
 - **Road** — click the start, then click the end. Stored as a `customRoads` centerline, 24 ft wide.
 - **Gate** — one `placedGate` at the drop, rendered with the existing gate.
 
-[`manualAuthoringDesign`](../client/src/lib/nextera/layoutEngine.ts) composes those poses and still skips the packer, cables, surfacing, and MW. Escape or clicking the button again disarms. The full-yard catcher still sits over equipment, so a left click on an existing item drops another copy. Slice 5 removes that.
+[`manualAuthoringDesign`](../client/src/lib/nextera/layoutEngine.ts) composes those poses and still skips the packer, cables, surfacing, and MW. Escape or clicking the button again disarms. A left click on an existing item drags that item (slice 5) instead of dropping another copy.
 
 Manual drops do not change achieved MW or `tracedPcsUnits`. Feeder routing stays as it is until the connections phase. Commits survive `regenerate` and area switching. A later scan apply must not move those `x` / `y` / `rotationDeg` values.
 
-## Slice 5 — Edit a placed item
+## Slice 5 — Edit a placed item (done)
 
-Next slice. Applies to a placed PCS now, and to later items the same way. Placement in this slice is free: no grid snap yet.
+Left click on a placed item drags that item. Releasing rewrites its stored `x` / `y` and does not add another copy. A new copy is only created by dragging on empty ground while that palette button is armed. Placement stays free: no grid snap yet.
 
-- Left click on a placed item drags that item. Releasing writes its new `x` / `y` through the existing manual pose update (`updatePlacedEquipment` / `moveEquipment` for a `source: 'manual'` id). It does not call `addPlacedGear`.
-- A new copy is only created by dragging on empty ground while that palette button is armed. The catcher plane in `PcsDrop` must sit behind the equipment hit target so a click on a unit never starts a new drop.
-- Right click on a placed item opens a small menu: **Delete** (remove that `placedEquipment` spec), **Duplicate** (another `addPlacedGear` of the same kind, offset so the copy is not stacked on the original), **Rotate** (one quarter turn via `rotatePlacedEquipment`).
+Right click opens **Delete**, **Duplicate** (offset so the copy is not stacked on the original), and **Rotate** (one quarter turn). The gate can be deleted and rotated; a second gate replaces the first, so it has no duplicate. Roads move, rotate, duplicate, and delete the same way.
 
 ## Slice 6 — Grid or free
 
