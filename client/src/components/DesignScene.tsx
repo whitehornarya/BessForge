@@ -6810,6 +6810,57 @@ function TraceOverlay() {
   );
 }
 
+/** Black site grid for Manual Placement. Lines sit on the same spacing the drop snaps to. */
+function ManualSiteGrid() {
+  const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const snapFt = useDesignStore(s => s.manualSnapFt);
+  const fence = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.fence : undefined));
+  const geometry = useMemo(() => {
+    if (!manual || snapFt <= 0 || !fence || fence.length < 3) return null;
+    const xs = fence.map(p => p.x);
+    const ys = fence.map(p => p.y);
+    let minX = Math.min(...xs);
+    let maxX = Math.max(...xs);
+    let minY = Math.min(...ys);
+    let maxY = Math.max(...ys);
+    const pad = Math.max(snapFt, 10);
+    minX -= pad;
+    maxX += pad;
+    minY -= pad;
+    maxY += pad;
+    // Keep every drawn line on a snap multiple. If the parcel would need more
+    // than this many lines on one axis, draw a coarser multiple so the view
+    // stays a grid instead of a solid sheet.
+    const maxLines = 2000;
+    let step = snapFt;
+    const need = Math.max((maxX - minX) / step, (maxY - minY) / step);
+    if (need > maxLines) step = snapFt * Math.ceil(need / maxLines);
+    const y = 1.05;
+    const verts: number[] = [];
+    const pushSpan = (a: number, b: number, horizontal: boolean) => {
+      const i0 = Math.ceil(a / step - 1e-6);
+      const i1 = Math.floor(b / step + 1e-6);
+      for (let i = i0; i <= i1; i++) {
+        const v = Math.round(i * step * 1000) / 1000;
+        if (horizontal) verts.push(minX, y, -v, maxX, y, -v);
+        else verts.push(v, y, -minY, v, y, -maxY);
+      }
+    };
+    pushSpan(minX, maxX, false);
+    pushSpan(minY, maxY, true);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    return geo;
+  }, [manual, snapFt, fence]);
+  useEffect(() => () => geometry?.dispose(), [geometry]);
+  if (!geometry) return null;
+  return (
+    <lineSegments geometry={geometry} raycast={() => null} renderOrder={4}>
+      <lineBasicMaterial color="#000000" transparent opacity={0.45} depthWrite={false} />
+    </lineSegments>
+  );
+}
+
 type PaletteArm =
   | { drop: 'gear'; kind: 'inverter' | 'bess' }
   | { drop: 'manual'; type: ManualEquipmentType }
@@ -6849,6 +6900,9 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
   const addPlacedEquipment = useDesignStore(s => s.addPlacedEquipment);
   const addManualRoad = useDesignStore(s => s.addManualRoad);
   const setPlacedGate = useDesignStore(s => s.setPlacedGate);
+  const manualSnapFt = useDesignStore(s => s.manualSnapFt);
+  const snapFtRef = useRef(manualSnapFt);
+  snapFtRef.current = manualSnapFt;
   const configId = useDesignStore(s => s.configId);
   const { camera, gl, controls } = useThree();
   const controlsRef = useRef<{ enabled?: boolean } | null>(null);
@@ -6921,15 +6975,17 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
       if (roadStart.current) {
         const p = hitGround(ev);
         if (!p) return;
-        latest.current = p;
-        setPos(p);
+        const snapped = snapPlacementCenter(p, snapFtRef.current);
+        latest.current = snapped;
+        setPos(snapped);
         return;
       }
       if (!dragging.current) return;
       const p = hitGround(ev);
       if (!p) return;
-      latest.current = p;
-      setPos(p);
+      const snapped = snapPlacementCenter(p, snapFtRef.current);
+      latest.current = snapped;
+      setPos(snapped);
     };
     const up = (ev: PointerEvent) => {
       if (!dragging.current) return;
@@ -6938,15 +6994,16 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
       el.style.cursor = 'crosshair';
       if (controlsRef.current) controlsRef.current.enabled = true;
       const hit = hitGround(ev);
-      const p = hit ?? latest.current;
+      const raw = hit ?? latest.current;
       latest.current = null;
       setPos(null);
-      if (!p || !arm || arm.drop === 'road') return;
+      if (!raw || !arm || arm.drop === 'road') return;
+      const p = snapPlacementCenter(raw, snapFtRef.current);
       const why = arm.drop === 'gate'
-        ? setPlacedGate(Math.round(p.x), Math.round(p.y))
+        ? setPlacedGate(p.x, p.y)
         : arm.drop === 'gear'
-          ? addPlacedGear(arm.kind, Math.round(p.x), Math.round(p.y))
-          : addPlacedEquipment(arm.type, { x: Math.round(p.x), y: Math.round(p.y) });
+          ? addPlacedGear(arm.kind, p.x, p.y)
+          : addPlacedEquipment(arm.type, { x: p.x, y: p.y });
       if (why) toast.error(friendlyRejectReason(why));
     };
     el.addEventListener('pointermove', move);
@@ -6969,7 +7026,7 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
           if (e.button !== 0) return;
           e.stopPropagation();
           onGroundDown();
-          const p = { x: e.point.x, y: -e.point.z };
+          const p = snapPlacementCenter({ x: e.point.x, y: -e.point.z }, manualSnapFt);
           if (arm.drop === 'road') {
             const start = roadStart.current;
             if (!start) {
@@ -6979,8 +7036,8 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
               return;
             }
             const why = addManualRoad(
-              { x: Math.round(start.x), y: Math.round(start.y) },
-              { x: Math.round(p.x), y: Math.round(p.y) },
+              { x: start.x, y: start.y },
+              { x: p.x, y: p.y },
             );
             if (why) {
               roadStart.current = start;
@@ -7056,6 +7113,9 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
   const roads = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.roads : undefined) ?? []);
   const gate = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.gate ?? null : null));
   const moveManualPlacement = useDesignStore(s => s.moveManualPlacement);
+  const manualSnapFt = useDesignStore(s => s.manualSnapFt);
+  const snapFtRef = useRef(manualSnapFt);
+  snapFtRef.current = manualSnapFt;
   const { camera, gl, controls } = useThree();
   const controlsRef = useRef<{ enabled?: boolean } | null>(null);
   controlsRef.current = controls as { enabled?: boolean } | null;
@@ -7097,7 +7157,8 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
       if (!d) return;
       const p = hitGround(ev);
       if (!p) return;
-      setGhost(g => g ? { ...g, x: p.x + d.gx, y: p.y + d.gy } : g);
+      const center = snapPlacementCenter({ x: p.x + d.gx, y: p.y + d.gy }, snapFtRef.current);
+      setGhost(g => g ? { ...g, x: center.x, y: center.y } : g);
     };
     const up = (ev: PointerEvent) => {
       const d = drag.current;
@@ -7108,7 +7169,8 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
       const p = hitGround(ev);
       setGhost(null);
       if (!p) return;
-      const why = moveManualPlacement(d.id, Math.round(p.x + d.gx), Math.round(p.y + d.gy));
+      const center = snapPlacementCenter({ x: p.x + d.gx, y: p.y + d.gy }, snapFtRef.current);
+      const why = moveManualPlacement(d.id, center.x, center.y);
       if (why) toast.error(friendlyRejectReason(why));
     };
     el.addEventListener('pointermove', move);
@@ -8534,6 +8596,7 @@ export default function DesignScene() {
         {design ? (
           <>
             <DesignContent design={design} editMode={editMode} realistic={realisticModels && viewMode !== '2d'} is3D={viewMode === '3d'} cad={viewMode === 'cad'} onDraggingChange={setDragging} editTool={editTool} onEditToolChange={setEditTool} zoneKind={zoneKind} islandPairs={islandPairs} placeKind={placeKind} placeAug={placeAug} placeAuxGear={placeAuxGear} placeEquipType={placeEquipType} placeAngleDeg={placeAngleDeg} placeSnap={placeSnap} roadDrawWidth={roadDrawWidth} onSelectedIslandChange={setSelIsland} onSelectedTargetChange={setNudgeTarget} onSelectedEquipChange={setSelEquip} onRoadSelectionChange={setRoadSelInfo} cadLayerVis={cadLayerVis} onSelectText={setCadSelectedText} />
+            <ManualSiteGrid />
             <PlacedItemHandles onDraggingChange={setDragging} onMenu={setItemMenu} />
             <PcsDrop onDraggingChange={setDragging} onGroundDown={() => setItemMenu(null)} realistic={realisticModels && viewMode !== '2d'} />
             {viewMode !== 'cad' && drawingVisibility.dimensions &&

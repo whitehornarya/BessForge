@@ -2,7 +2,7 @@
 
 After area selection, the user places PCS, battery containers, and aux items on a bare yard, then scans. Generating feeders and cables, and swapping those blocks for full CAD/3D models, stay later product phases.
 
-Implementation is sliced so each step is visible on its own. Do not build grid snap, group alignment, or the remaining palette items ahead of the slice that owns them.
+Implementation is sliced so each step is visible on its own. Do not build group alignment ahead of the slice that owns it.
 
 ```mermaid
 flowchart LR
@@ -27,7 +27,7 @@ Saved projects that do not carry `yardAuthoring: 'manual'` keep today’s auto-l
 - The placement chrome lives in the sidebar, not on the scene. The section is **Manual Placement**, same heading style as the other tabs.
 - **Auto-fill from drawing** / **Scan drawing** is duplicated at the bottom of that tab so it reads as the next step. The original control stays on Site Boundary.
 - Palette order: Road, Gate, Aux transformer, PCS, battery container, aux switchgear, comms cabinet, aux switch panel, fiber patch panel, fire control panel. Icons are baked once into [`placementButtonIcons.ts`](../client/src/lib/nextera/placementButtonIcons.ts). Gate, road, and aux switch panel use placeholders.
-- PCS, battery, aux gear, a road centerline, and one gate can be placed. Left-drag moves a placed item. Right-click deletes, duplicates, or rotates it. Grid snap and group alignment are later slices.
+- PCS, battery, aux gear, a road centerline, and one gate can be placed. Left-drag moves a placed item. Right-click deletes, duplicates, or rotates it. Grid or free placement is on Manual Placement. Group alignment is a later slice.
 
 ## Slice 1 — Placement indicator (done)
 
@@ -70,16 +70,16 @@ Manual drops do not change achieved MW or `tracedPcsUnits`. Feeder routing stays
 
 ## Slice 5 — Edit a placed item (done)
 
-Left click on a placed item drags that item. Releasing rewrites its stored `x` / `y` and does not add another copy. A new copy is only created by dragging on empty ground while that palette button is armed. Placement stays free: no grid snap yet.
+Left click on a placed item drags that item. Releasing rewrites its stored `x` / `y` and does not add another copy. A new copy is only created by dragging on empty ground while that palette button is armed. Free placement is the default.
 
 Right click opens **Delete**, **Duplicate** (offset so the copy is not stacked on the original), and **Rotate** (one quarter turn). The gate can be deleted and rotated; a second gate replaces the first, so it has no duplicate. Roads move, rotate, duplicate, and delete the same way.
 
-## Slice 6 — Grid or free
+## Slice 6 — Grid or free (done)
 
-A placement-mode control on Manual Placement, next to the palette:
+A placement-mode control on Manual Placement, above the palette. The choice is session UI (`manualSnapFt` in the design store), not a saved edit.
 
-- **Grid** draws a site grid and snaps a drag (new drop or move) so the item aligns to that grid. Spacing reuses the existing placement snap steps (`PLACEMENT_SNAP_STEPS_FT` / `snapPlacementCenter` in [`layoutEngine.ts`](../client/src/lib/nextera/layoutEngine.ts)), default `PLACEMENT_SNAP_DEFAULT_FT`.
-- **Free** is the slice 5 behavior: the pointer position is the pose, with no snap.
+- **Grid** draws black lines across the fenced site and snaps a new drop, a road endpoint, or a move so the item center aligns to that grid. Spacing is 0.1, 0.5, 1, 5, 10, or 20 ft, using `snapPlacementCenter` in [`layoutEngine.ts`](../client/src/lib/nextera/layoutEngine.ts). Turning Grid on starts at `PLACEMENT_SNAP_DEFAULT_FT` (1 ft).
+- **Free** keeps the pointer position. `snapPlacementCenter` with a step of 0 records it to 0.01 ft and does not snap to the grid.
 
 ## Slice 7 — Align a group
 

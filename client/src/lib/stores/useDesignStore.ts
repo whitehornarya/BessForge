@@ -3478,6 +3478,10 @@ interface DesignState {
   // are selectable only. Session UI, not a saved edit.
   manualPlaceItem: string | null;
   setManualPlaceItem: (id: string | null) => void;
+  // Manual Placement snap. 0 = free (pointer pose). A positive step is one of
+  // PLACEMENT_SNAP_STEPS_FT and snaps new drops and moves. Session UI.
+  manualSnapFt: number;
+  setManualSnapFt: (ft: number) => void;
   // Drafter text-label overrides (position/height/content deltas). Applied to
   // the CAD view and all DXF/PDF exports. Keyed by label fingerprint.
   // Empty map = no overrides (default, keeps all outputs byte-identical).
@@ -4405,6 +4409,8 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   placeMaterialEpoch: 0,
   manualPlaceItem: null,
   setManualPlaceItem: (id: string | null): void => set({ manualPlaceItem: id }),
+  manualSnapFt: 0,
+  setManualSnapFt: (ft: number): void => set({ manualSnapFt: Number.isFinite(ft) && ft > 0 ? ft : 0 }),
   yardRotationDeg: 0,
   textOverrides: {},
   setTextOverride: (key, ov) => set(s => ({ textOverrides: { ...s.textOverrides, [key]: ov } })),

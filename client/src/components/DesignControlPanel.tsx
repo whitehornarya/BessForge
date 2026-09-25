@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { toastCaught, friendlyRejectReason } from '../lib/notify';
 import { withBusyOverlay, paintThen, setBusyFrac } from '../lib/busy';
 import { useDesignStore } from '../lib/stores/useDesignStore';
-import { generateArrangements, ARRANGEMENTS, ArrangementStrategy, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, MANUAL_EQUIPMENT_CATALOG, isManualEquipmentSpec, isTracedBessYard } from '../lib/nextera/layoutEngine';
+import { generateArrangements, ARRANGEMENTS, ArrangementStrategy, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, MANUAL_EQUIPMENT_CATALOG, isManualEquipmentSpec, isTracedBessYard, PLACEMENT_SNAP_DEFAULT_FT } from '../lib/nextera/layoutEngine';
 import { OptimizeResult, OptimizeCandidate } from '../lib/nextera/optimizer';
 import { optimizeInWorker, optimizeGradingInWorker, optimizeFeederRoutingInWorker, buildDxfInWorker, buildDxfPackageInWorker, cancelChannel, SupersededError } from '../lib/nextera/designWorkerClient';
 import { feederRoutingInputSignature } from '../lib/nextera/feederOptimizer';
@@ -3084,6 +3084,8 @@ export default function DesignControlPanel() {
   // Palette selection. Cleared when the yard is no longer a manual site.
   const manualPlaceItem = useDesignStore(s => s.manualPlaceItem);
   const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
+  const manualSnapFt = useDesignStore(s => s.manualSnapFt);
+  const setManualSnapFt = useDesignStore(s => s.setManualSnapFt);
   useEffect(() => {
     if (!manualYard) setManualPlaceItem(null);
   }, [manualYard, setManualPlaceItem]);
@@ -3431,6 +3433,51 @@ export default function DesignControlPanel() {
                   drag on the site to drop it. Press Escape or click the item
                   again to stop.
                 </p>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
+                    Placement
+                  </div>
+                  <div className="flex rounded overflow-hidden border border-slate-600">
+                    <button
+                      type="button"
+                      onClick={() => setManualSnapFt(0)}
+                      aria-pressed={manualSnapFt <= 0}
+                      className={`flex-1 px-2 py-1.5 text-xs font-medium ${manualSnapFt <= 0 ? 'bg-sky-600 text-white' : 'bg-slate-900/60 text-slate-300 hover:bg-slate-700'}`}
+                    >
+                      Free
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { if (manualSnapFt <= 0) setManualSnapFt(PLACEMENT_SNAP_DEFAULT_FT); }}
+                      aria-pressed={manualSnapFt > 0}
+                      title="Snap new drops and moves to a site grid"
+                      className={`flex-1 px-2 py-1.5 text-xs font-medium border-l border-slate-600 ${manualSnapFt > 0 ? 'bg-sky-600 text-white' : 'bg-slate-900/60 text-slate-300 hover:bg-slate-700'}`}
+                    >
+                      Grid
+                    </button>
+                  </div>
+                  {manualSnapFt > 0 && (
+                    <div className="grid grid-cols-3 gap-1 mt-1.5">
+                      {[0.1, 0.5, 1, 5, 10, 20].map(s => (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => setManualSnapFt(s)}
+                          aria-pressed={manualSnapFt === s}
+                          title={`Snap to a ${s} ft grid`}
+                          className={`px-1 py-1.5 text-xs font-medium rounded border ${manualSnapFt === s ? 'bg-sky-700 border-sky-500 text-white' : 'bg-slate-900/60 border-slate-600 text-slate-300 hover:bg-slate-700'}`}
+                        >
+                          {s} ft
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="text-[10px] text-slate-500 mt-1.5">
+                    {manualSnapFt > 0
+                      ? `Grid on — drops and drags snap to ${manualSnapFt} ft.`
+                      : 'Free — the pointer position is the pose.'}
+                  </div>
+                </div>
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
                     Place

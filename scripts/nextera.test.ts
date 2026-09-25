@@ -31,6 +31,8 @@ import {
   movePlacedSpec,
   rotatePlacedSpec,
   duplicatePlacedSpec,
+  snapPlacementCenter,
+  PLACEMENT_SNAP_DEFAULT_FT,
   SHRINKWRAP_AREA_RATIO,
   filletClosedPolygon,
   subtractAislesFromYard,
@@ -359,6 +361,13 @@ async function main() {
       constraints: { yardAuthoring: 'manual', placedEquipment: [pcsSpec].filter(s => s.id !== 'peq-1') },
     });
     check('[manual yard] delete removes the PCS', deletedYard.equipment.length === 0, `${deletedYard.equipment.length}`);
+    const raw = { x: 10.4, y: -3.6 };
+    const freePt = snapPlacementCenter(raw, 0);
+    const gridPt = snapPlacementCenter(raw, PLACEMENT_SNAP_DEFAULT_FT);
+    check('[manual yard] free placement keeps the raw point',
+      freePt.x === 10.4 && freePt.y === -3.6, `${freePt.x},${freePt.y}`);
+    check('[manual yard] grid placement snaps onto the grid',
+      gridPt.x === 10 && gridPt.y === -4, `${gridPt.x},${gridPt.y}`);
   }
 
   const HONDO_KMZ = path.resolve(
