@@ -571,6 +571,78 @@ function offsetRing(ring: [number, number][], d: number, minArea = 0.35): [numbe
 }
 
 /**
+ * PCS / BESS glyphs whose interior vents, blocks, and leftover end-panel
+ * "dots" are dropped so only the outer footprint annulus remains. Aux and
+ * other kinds keep full delivered detail.
+ */
+const OUTLINE_ONLY_GLYPH_KEYS = new Set([
+  'geFlex', 'peInverter',
+  'lgLinkGe', 'lgLinkPe', 'lgLinkA', 'lgLinkC',
+]);
+
+function polyOuterBounds(poly: number[][][]): LocalRect | null {
+  const outer = poly[0];
+  if (!outer || outer.length < 3) return null;
+  return ringBounds(outer as [number, number][]);
+}
+
+/** How well a poly's outer ring matches the glyph body bbox (higher = better). */
+function bodyMatchScore(bounds: LocalRect, body: LocalRect): number {
+  const cover = rectOverlapFraction(body, bounds); // overlap / body area
+  const fit = rectOverlapFraction(bounds, body);   // overlap / poly area
+  return cover * fit * Math.sqrt(Math.max(rectArea(bounds), 0));
+}
+
+function pickFootprintOutlinePoly(
+  polys: number[][][][],
+  body: LocalRect,
+): number[][][] | null {
+  let best: number[][][] | null = null;
+  let bestScore = -1;
+  for (const poly of polys) {
+    const b = polyOuterBounds(poly);
+    if (!b) continue;
+    const score = bodyMatchScore(b, body);
+    if (score > bestScore) {
+      bestScore = score;
+      best = poly;
+    }
+  }
+  return best;
+}
+
+/**
+ * Keep only the outer footprint outline for PCS/BESS symbols. Drops PCS
+ * vent/block interiors and the leftover BESS end-panel mark while leaving
+ * the cable-compartment erase to clip any fused frame in the outline.
+ */
+function footprintOutlineOnlyGlyph(
+  glyph: EciLegendGlyph,
+  glyphKey: string,
+): EciLegendGlyph {
+  if (!OUTLINE_ONLY_GLYPH_KEYS.has(glyphKey)) return glyph;
+  const body = glyph.body as LocalRect;
+  const outline = pickFootprintOutlinePoly(glyph.black, body)
+    ?? pickFootprintOutlinePoly(glyph.gray, body);
+  if (!outline) return glyph;
+  const outlineBounds = polyOuterBounds(outline)!;
+  const outlineScore = bodyMatchScore(outlineBounds, body);
+  // Gray body fill (ECI library) stays; vent/panel shading does not.
+  const grayCandidates = glyph.gray.filter(poly => {
+    const b = polyOuterBounds(poly);
+    if (!b) return false;
+    return bodyMatchScore(b, body) >= outlineScore * 0.5
+      && rectOverlapFraction(b, outlineBounds) > 0.5;
+  });
+  const bestGray = pickFootprintOutlinePoly(grayCandidates, body);
+  return {
+    ...glyph,
+    black: [outline],
+    gray: bestGray ? [bestGray] : [],
+  };
+}
+
+/**
  * Yard-space symbol polygons for one placement: black linework thinned by
  * `thinFt`, gray shading passed through. Shared by the DXF exporter and the
  * in-app scene overlay so every 2D/3D surface draws identical geometry.
@@ -587,13 +659,14 @@ export function eciYardSymbolPolys(
   // each unit's own rigid transform. Rotation/translation are rigid and the
   // inset always moves toward a ring's own interior (orientation-aware), so
   // mirroring commutes with it: the drawn result is unchanged.
+  const glyph = footprintOutlineOnlyGlyph(p.glyph, p.glyphKey);
   const cached = thinCache.get(`${p.localKey}|${thinFt}`);
-  const localBlack = cached ?? thinBlackLocal(p, thinFt);
+  const localBlack = cached ?? thinBlackLocal(p, glyph, thinFt);
   if (!cached) {
     if (thinCache.size > 512) thinCache.clear(); // bounded; keys are few
     thinCache.set(`${p.localKey}|${thinFt}`, localBlack);
   }
-  const mappedGray = p.glyph.gray.map((poly): [number, number][][] =>
+  const mappedGray = glyph.gray.map((poly): [number, number][][] =>
     poly.map(ring => ring.map(([nx, ny]) => p.toLocalFt(nx, ny))));
   const localGray = eraseLocalPolys(mappedGray, p.compartmentErase);
   return {
@@ -646,9 +719,10 @@ function eraseLocalPolys(
 
 function thinBlackLocal(
   p: EciSymbolPlacement,
+  glyph: EciLegendGlyph,
   thinFt: number
 ): [number, number][][][] {
-  const sourceBlack = p.glyph.black.map((poly): [number, number][][] =>
+  const sourceBlack = glyph.black.map((poly): [number, number][][] =>
     poly.map(ring => ring.map(([nx, ny]) => p.toLocalFt(nx, ny))));
   const mappedBlack = eraseLocalPolys(sourceBlack, p.compartmentErase);
   // Adaptive inset: strokes scale with the equipment footprint (a GE skid
