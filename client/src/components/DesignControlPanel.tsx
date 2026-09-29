@@ -3084,6 +3084,8 @@ export default function DesignControlPanel() {
   // Palette selection. Cleared when the yard is no longer a manual site.
   const manualPlaceItem = useDesignStore(s => s.manualPlaceItem);
   const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
+  const manualRoadWidth = useDesignStore(s => s.manualRoadWidth);
+  const setManualRoadWidth = useDesignStore(s => s.setManualRoadWidth);
   const manualSnapFt = useDesignStore(s => s.manualSnapFt);
   const setManualSnapFt = useDesignStore(s => s.setManualSnapFt);
   useEffect(() => {
@@ -3567,13 +3569,32 @@ export default function DesignControlPanel() {
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1.5">
                     {manualPlaceItem === 'road'
-                      ? 'Road armed — click the start, then click the end. Escape cancels.'
+                      ? 'Mark the road path (click vertices). Enter / double-click generates the road. Escape cancels.'
                       : manualPlaceItem === 'gate'
                       ? 'Gate armed — drag on the site to drop the gate. Escape cancels.'
                       : manualPlaceItem
                       ? 'Armed — drag on the site to drop one. Escape cancels.'
                       : 'Select an item, then drag it onto the site.'}
                   </div>
+                  {manualPlaceItem === 'road' && (
+                    <div className="flex items-center gap-1 mt-2">
+                      <span className="text-[10px] text-slate-400 mr-1">Width</span>
+                      {([24, 30, 36] as const).map(w => (
+                        <button
+                          key={w}
+                          type="button"
+                          onClick={() => setManualRoadWidth(w)}
+                          className={`px-2 py-0.5 text-[10px] font-semibold border border-slate-600 ${
+                            manualRoadWidth === w
+                              ? 'bg-amber-600 text-white'
+                              : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                          }`}
+                        >
+                          {w}&apos;
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </>
             ) : (

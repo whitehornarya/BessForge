@@ -61,7 +61,7 @@ Buttons are visible and selectable. Each one places its item (slice 4).
 - **PCS** — `addPlacedGear('inverter', …)`, catalog size for the active GE or PE configuration, same model as a scanned PCS.
 - **Battery container** — `addPlacedGear('bess', …)`, LG JF2 model.
 - **Aux transformer, aux switchgear, comms cabinet, aux switch panel, fiber patch panel, fire control panel** — `addPlacedEquipment` (`ManualEquipmentSpec`). Realistic models where the scene already has one; otherwise the catalog box.
-- **Road** — click the start, then click the end. Stored as a `customRoads` centerline, 24 ft wide.
+- **Road** — click centerline vertices; Enter or double-click finishes. Width chips **24 / 30 / 36** ft. Stored in `customRoads` and composed into a filleted `roadNetwork` under manual authoring (same compact builder as Edit Layout). Not `traced: true`.
 - **Gate** — one `placedGate` at the drop, rendered with the existing gate.
 
 [`manualAuthoringDesign`](../client/src/lib/nextera/layoutEngine.ts) composes those poses and still skips the packer, cables, surfacing, and MW. Escape or clicking the button again disarms. A left click on an existing item drags that item (slice 5) instead of dropping another copy.

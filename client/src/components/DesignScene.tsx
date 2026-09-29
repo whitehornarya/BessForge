@@ -393,7 +393,9 @@ function RoadCalloutLabels({ road }: { road: NonNullable<SiteDesign['roadNetwork
 // they are boolean-unioned here so the translucent fill has uniform opacity
 // and the outline traces the final strip boundary. Preview only — commit
 // geometry and exports are untouched.
-function RoadDraftBand({ pts, width = 24 }: { pts: Pt[]; width?: number }) {
+// `ghost` (Manual Placement path-then-generate): lower fill/outline opacity so
+// the band reads as “what will generate,” not the thing being drawn.
+function RoadDraftBand({ pts, width = 24, ghost = false }: { pts: Pt[]; width?: number; ghost?: boolean }) {
   const design = useDesignStore(s => s.design);
   // Legal-region cache: fence + equipment only change on regenerate, so the
   // (relatively expensive) inset + pad-difference booleans run once per
@@ -462,26 +464,30 @@ function RoadDraftBand({ pts, width = 24 }: { pts: Pt[]; width?: number }) {
   // rejected on commit) — every commit-gate outcome is visible while drawing.
   const stripColor = parts.nothingToAdd ? '#94a3b8' : parts.ok ? '#fbbf24' : '#f59e0b';
   const outlineColor = parts.nothingToAdd ? '#94a3b8' : parts.ok ? '#fbbf24' : '#ef4444';
+  const fillOp = ghost ? 0.08 : 0.22;
+  const outlineOp = ghost ? 0.35 : 0.85;
+  const blockedFillOp = ghost ? 0.2 : 0.45;
+  const blockedOutlineOp = ghost ? 0.45 : 0.9;
   return (
     <group>
       {parts.strip.fills.map((g, i) => (
         <mesh key={`rdb-${i}`} geometry={g} position={[0, 0.82, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <meshBasicMaterial color={stripColor} transparent opacity={0.22} depthWrite={false} side={THREE.DoubleSide} />
+          <meshBasicMaterial color={stripColor} transparent opacity={fillOp} depthWrite={false} side={THREE.DoubleSide} />
         </mesh>
       ))}
       {parts.strip.outlines.map((line, i) => (
-        <Line key={`rdo-${i}`} points={line} color={outlineColor} lineWidth={1.5} transparent opacity={0.85} />
+        <Line key={`rdo-${i}`} points={line} color={outlineColor} lineWidth={ghost ? 1 : 1.5} transparent opacity={outlineOp} />
       ))}
       {/* Blocked sub-region: painted red so the drafter sees exactly which
           stretch violates equipment clearance / fence setback BEFORE
           committing (the commit gate rejects the whole road otherwise). */}
       {parts.blocked?.fills.map((g, i) => (
         <mesh key={`rdbx-${i}`} geometry={g} position={[0, 0.83, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <meshBasicMaterial color="#ef4444" transparent opacity={0.45} depthWrite={false} side={THREE.DoubleSide} />
+          <meshBasicMaterial color="#ef4444" transparent opacity={blockedFillOp} depthWrite={false} side={THREE.DoubleSide} />
         </mesh>
       ))}
       {parts.blocked?.outlines.map((line, i) => (
-        <Line key={`rdox-${i}`} points={line.map(v => new THREE.Vector3(v.x, 0.845, v.z))} color="#ef4444" lineWidth={2} transparent opacity={0.9} />
+        <Line key={`rdox-${i}`} points={line.map(v => new THREE.Vector3(v.x, 0.845, v.z))} color="#ef4444" lineWidth={ghost ? 1.25 : 2} transparent opacity={blockedOutlineOp} />
       ))}
     </group>
   );
@@ -6886,19 +6892,21 @@ function paletteArm(id: string | null): PaletteArm | null {
 
 /**
  * Drag the armed palette item onto a manual yard. Pointer up commits a
- * catalog block, a road centerline, or the site gate.
+ * catalog block or the site gate. Road uses ManualRoadDraw (polyline).
  */
 function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChange: (d: boolean) => void; onGroundDown: () => void; realistic: boolean }) {
   const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
   const manualPlaceItem = useDesignStore(s => s.manualPlaceItem);
   const arm = useMemo(
-    () => paletteArm(manual && manualPlaceItem ? manualPlaceItem : null),
+    () => {
+      const a = paletteArm(manual && manualPlaceItem ? manualPlaceItem : null);
+      return a && a.drop !== 'road' ? a : null;
+    },
     [manual, manualPlaceItem],
   );
   const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
   const addPlacedGear = useDesignStore(s => s.addPlacedGear);
   const addPlacedEquipment = useDesignStore(s => s.addPlacedEquipment);
-  const addManualRoad = useDesignStore(s => s.addManualRoad);
   const setPlacedGate = useDesignStore(s => s.setPlacedGate);
   const manualSnapFt = useDesignStore(s => s.manualSnapFt);
   const snapFtRef = useRef(manualSnapFt);
@@ -6909,14 +6917,12 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
   controlsRef.current = controls as { enabled?: boolean } | null;
   const dragging = useRef(false);
   const latest = useRef<Pt | null>(null);
-  const roadStart = useRef<Pt | null>(null);
   const [pos, setPos] = useState<Pt | null>(null);
-  const [roadFrom, setRoadFrom] = useState<Pt | null>(null);
   const raycaster = useRef(new THREE.Raycaster());
   const ndc = useRef(new THREE.Vector2());
 
   const ghost = useMemo((): PlacedEquipment | null => {
-    if (!pos || !arm || arm.drop === 'road' || arm.drop === 'gate') return null;
+    if (!pos || !arm || arm.drop === 'gate') return null;
     if (arm.drop === 'gear') {
       const spec = specForKind(arm.kind, getConfiguration(configId));
       if (!spec) return null;
@@ -6960,8 +6966,6 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
     if (!arm) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      roadStart.current = null;
-      setRoadFrom(null);
       setPos(null);
       setManualPlaceItem(null);
     };
@@ -6972,14 +6976,6 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
   useEffect(() => {
     const el = gl.domElement;
     const move = (ev: PointerEvent) => {
-      if (roadStart.current) {
-        const p = hitGround(ev);
-        if (!p) return;
-        const snapped = snapPlacementCenter(p, snapFtRef.current);
-        latest.current = snapped;
-        setPos(snapped);
-        return;
-      }
       if (!dragging.current) return;
       const p = hitGround(ev);
       if (!p) return;
@@ -6997,7 +6993,7 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
       const raw = hit ?? latest.current;
       latest.current = null;
       setPos(null);
-      if (!raw || !arm || arm.drop === 'road') return;
+      if (!raw || !arm) return;
       const p = snapPlacementCenter(raw, snapFtRef.current);
       const why = arm.drop === 'gate'
         ? setPlacedGate(p.x, p.y)
@@ -7014,7 +7010,7 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
     };
-  }, [gl, hitGround, onDraggingChange, addPlacedGear, addPlacedEquipment, addManualRoad, setPlacedGate, arm]);
+  }, [gl, hitGround, onDraggingChange, addPlacedGear, addPlacedEquipment, setPlacedGate, arm]);
 
   if (!arm) return null;
   return (
@@ -7027,30 +7023,6 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
           e.stopPropagation();
           onGroundDown();
           const p = snapPlacementCenter({ x: e.point.x, y: -e.point.z }, manualSnapFt);
-          if (arm.drop === 'road') {
-            const start = roadStart.current;
-            if (!start) {
-              roadStart.current = p;
-              setRoadFrom(p);
-              setPos(p);
-              return;
-            }
-            const why = addManualRoad(
-              { x: start.x, y: start.y },
-              { x: p.x, y: p.y },
-            );
-            if (why) {
-              roadStart.current = start;
-              setRoadFrom(start);
-              setPos(p);
-              toast.error(friendlyRejectReason(why));
-              return;
-            }
-            roadStart.current = null;
-            setRoadFrom(null);
-            setPos(null);
-            return;
-          }
           dragging.current = true;
           latest.current = p;
           setPos(p);
@@ -7068,49 +7040,180 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
         <Suspense fallback={null}>
           <RealisticEquipment equipment={[ghost]} ghost />
         </Suspense>
-      ) : (
+      ) : ghost ? (
         <mesh position={[ghost.x, ghost.height / 2, -ghost.y]}>
           <boxGeometry args={[ghost.length, ghost.height, ghost.width]} />
           <meshStandardMaterial color="#3f8f5f" transparent opacity={0.55} />
         </mesh>
-      ))}
+      ) : null)}
       {arm.drop === 'gate' && pos && (
         <mesh position={[pos.x, 4, -pos.y]} rotation={[0, 0, 0]}>
           <boxGeometry args={[24, 8, 1.5]} />
           <meshStandardMaterial color="#94a3b8" transparent opacity={0.55} />
         </mesh>
       )}
-      {arm.drop === 'road' && roadFrom && (
-        <group
-          position={[roadFrom.x, 0.4, -roadFrom.y]}
-          rotation={[0, Math.atan2(pos ? pos.y - roadFrom.y : 0, pos ? pos.x - roadFrom.x : 1), 0]}
-        >
-          <mesh position={[0, 0.3, 0]}>
-            <sphereGeometry args={[3, 16, 12]} />
-            <meshStandardMaterial color="#38bdf8" />
-          </mesh>
-          {pos && (
-            <mesh
-              position={[Math.max(0.5, Math.hypot(pos.x - roadFrom.x, pos.y - roadFrom.y)) / 2, 0, 0]}
-              rotation={[-Math.PI / 2, 0, 0]}
-            >
-              <planeGeometry args={[Math.max(0.5, Math.hypot(pos.x - roadFrom.x, pos.y - roadFrom.y)), 24]} />
-              <meshStandardMaterial color="#64748b" transparent opacity={0.55} />
-            </mesh>
-          )}
-        </group>
+    </group>
+  );
+}
+
+/**
+ * Manual Placement Road: path-then-generate — mark a centerline, then
+ * Enter / double-click commits via addCustomRoad (same compact fillet builder
+ * as bare scan / Edit Layout). Preview is path-first: thin dashed centerline
+ * + vertex dots; RoadDraftBand is a light ghost of the strip that will generate.
+ */
+function ManualRoadDraw({ onDraggingChange }: { onDraggingChange: (d: boolean) => void }) {
+  const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const armed = useDesignStore(s => s.manualPlaceItem === 'road');
+  const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
+  const addCustomRoad = useDesignStore(s => s.addCustomRoad);
+  const roadDrawWidth = useDesignStore(s => s.manualRoadWidth);
+  const design = useDesignStore(s => s.design);
+  const [roadPts, setRoadPts] = useState<Pt[]>([]);
+  const [roadCursor, setRoadCursor] = useState<Pt | null>(null);
+  const { gl } = useThree();
+
+  const fence = design?.fence ?? [];
+  const fb = useMemo(() => {
+    if (!fence.length) return { minX: -500, maxX: 500, minY: -500, maxY: 500 };
+    return {
+      minX: Math.min(...fence.map(p => p.x)),
+      maxX: Math.max(...fence.map(p => p.x)),
+      minY: Math.min(...fence.map(p => p.y)),
+      maxY: Math.max(...fence.map(p => p.y)),
+    };
+  }, [fence]);
+
+  const planePt = (e: { point: THREE.Vector3 }): Pt => ({ x: e.point.x, y: -e.point.z });
+
+  const commit = useCallback(() => {
+    if (roadPts.length < 2) return;
+    const ok = addCustomRoad(roadPts, roadDrawWidth !== 24 ? roadDrawWidth : undefined);
+    if (!ok) toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Road could not be added.'));
+    setRoadPts([]);
+    setRoadCursor(null);
+  }, [roadPts, addCustomRoad, roadDrawWidth]);
+
+  useEffect(() => {
+    if (!manual || !armed) {
+      setRoadPts([]);
+      setRoadCursor(null);
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && roadPts.length >= 2) {
+        e.preventDefault();
+        commit();
+        return;
+      }
+      if (e.key !== 'Escape') return;
+      if (roadPts.length || roadCursor) {
+        setRoadPts([]);
+        setRoadCursor(null);
+        return;
+      }
+      setManualPlaceItem(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [manual, armed, roadPts, roadCursor, commit, setManualPlaceItem]);
+
+  useEffect(() => {
+    if (!manual || !armed) return;
+    gl.domElement.style.cursor = 'crosshair';
+    onDraggingChange(true);
+    return () => {
+      gl.domElement.style.cursor = '';
+      onDraggingChange(false);
+    };
+  }, [manual, armed, gl, onDraggingChange]);
+
+  if (!manual || !armed) return null;
+
+  const previewPts = [...roadPts, ...(roadCursor ? [roadCursor] : [])];
+
+  return (
+    <group>
+      <mesh
+        position={[(fb.minX + fb.maxX) / 2, 0.6, -(fb.minY + fb.maxY) / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        onPointerMove={e => {
+          e.stopPropagation();
+          setRoadCursor(snapRoadPoint(planePt(e), roadPts[roadPts.length - 1]));
+        }}
+        onPointerDown={e => {
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          const pt = snapRoadPoint(planePt(e), roadPts[roadPts.length - 1]);
+          setRoadPts(prev => {
+            const last = prev[prev.length - 1];
+            if (last && Math.hypot(pt.x - last.x, pt.y - last.y) < 1) return prev;
+            return [...prev, pt];
+          });
+        }}
+        onDoubleClick={e => {
+          e.stopPropagation();
+          commit();
+        }}
+      >
+        <planeGeometry args={[(fb.maxX - fb.minX) * 4 || 2000, (fb.maxY - fb.minY) * 4 || 2000]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+      {/* Ghost of generated strip (path-then-generate): subordinate to the path. */}
+      {previewPts.length >= 2 && <RoadDraftBand pts={previewPts} width={roadDrawWidth} ghost />}
+      {previewPts.length >= 2 && (
+        <Line
+          points={previewPts.map(p => new THREE.Vector3(p.x, 0.85, -p.y))}
+          color="#fbbf24"
+          lineWidth={2}
+          dashed
+          dashSize={8}
+          gapSize={4}
+        />
       )}
+      {roadPts.map((p, i) => (
+        <mesh key={`mroadpt-${i}`} position={[p.x, 0.86, -p.y]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[2.25, 16]} />
+          <meshBasicMaterial color="#fbbf24" side={THREE.DoubleSide} />
+        </mesh>
+      ))}
     </group>
   );
 }
 
 type ItemMenu = { id: string; x: number; y: number; duplicate: boolean };
 
+const NO_EQUIP: PlacedEquipment[] = [];
+const NO_CUSTOM_ROADS: { id: string; pts: Pt[]; width?: number }[] = [];
+
 /** Left-drag moves a placed manual item. Right-click opens delete, duplicate, and rotate. */
 function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d: boolean) => void; onMenu: (m: ItemMenu | null) => void }) {
   const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
-  const equipment = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.equipment : undefined) ?? []);
-  const roads = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.roads : undefined) ?? []);
+  // Stable empty fallbacks — a fresh [] each snapshot causes infinite re-renders
+  // (useSyncExternalStore getSnapshot must be referentially stable).
+  const equipment = useDesignStore(s =>
+    s.layoutEdits.yardAuthoring === 'manual' ? (s.design?.equipment ?? NO_EQUIP) : NO_EQUIP);
+  // Hit targets come from stored customRoads (design.roads is empty when the
+  // filleted roadNetwork is the render surface).
+  const customRoads = useDesignStore(s =>
+    s.layoutEdits.yardAuthoring === 'manual'
+      ? (s.layoutEdits.customRoads ?? NO_CUSTOM_ROADS)
+      : NO_CUSTOM_ROADS);
+  const roads = useMemo(() => customRoads.flatMap(r => {
+    if (!r.pts || r.pts.length < 2) return [];
+    const a = r.pts[0], b = r.pts[r.pts.length - 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    if (length < 1) return [];
+    return [{
+      id: r.id,
+      x: (a.x + b.x) / 2,
+      y: (a.y + b.y) / 2,
+      length,
+      width: r.width ?? 24,
+      rotation: Math.atan2(dy, dx),
+    }];
+  }), [customRoads]);
   const gate = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.gate ?? null : null));
   const moveManualPlacement = useDesignStore(s => s.moveManualPlacement);
   const manualSnapFt = useDesignStore(s => s.manualSnapFt);
@@ -8599,6 +8702,7 @@ export default function DesignScene() {
             <ManualSiteGrid />
             <PlacedItemHandles onDraggingChange={setDragging} onMenu={setItemMenu} />
             <PcsDrop onDraggingChange={setDragging} onGroundDown={() => setItemMenu(null)} realistic={realisticModels && viewMode !== '2d'} />
+            <ManualRoadDraw onDraggingChange={setDragging} />
             {viewMode !== 'cad' && drawingVisibility.dimensions &&
               <SpacingDimensions design={design} is3D={viewMode === '3d'} />}
           </>

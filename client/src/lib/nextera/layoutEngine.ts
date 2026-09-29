@@ -1644,9 +1644,9 @@ export function isManualAuthoringYard(constraints?: LayoutConstraints | null): b
 }
 
 /**
- * Fence-only site for manual authoring. Hand-placed equipment, drawn road
- * centerlines, and a placed gate are composed at their stored poses. No
- * packer, cables, or surfacing, and drops do not change achieved MW.
+ * Manual-authoring site: hand-placed equipment, custom road centerlines
+ * (filleted into roadNetwork via the compact builder), and a placed gate.
+ * No packer, cables, or surfacing, and drops do not change achieved MW.
  */
 export function manualAuthoringDesign(
   boundary: SiteBoundary,
@@ -1704,22 +1704,36 @@ export function manualAuthoringDesign(
     }
     equipment.push(item);
   }
-  const roads: RoadSegment[] = [];
-  for (const road of constraints?.customRoads ?? []) {
-    if (road.pts.length < 2) continue;
-    const a = road.pts[0];
-    const b = road.pts[road.pts.length - 1];
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const length = Math.hypot(dx, dy);
-    if (length < 1) continue;
-    roads.push({
-      id: road.id,
-      x: (a.x + b.x) / 2,
-      y: (a.y + b.y) / 2,
-      length,
-      width: road.width ?? 24,
-      rotation: Math.atan2(dy, dx),
-    });
+  const customRoads = constraints?.customRoads ?? [];
+  // Filleted compact network from customRoads (same builder as Edit Layout
+  // compact). Empty customRoads → no pavement. Simple RoadSegment rectangles
+  // are no longer the manual-road surface — RoadNetworkMesh renders the mesh.
+  let roads: RoadSegment[] = [];
+  let roadNetwork: SiteDesign['roadNetwork'] = null;
+  if (customRoads.length) {
+    const built = buildRoads(
+      fence,
+      equipment,
+      [],
+      { width: 1, depth: 1, coreWidth: 1 },
+      true, // compact — skip perimeter ring; fillet custom strips only
+      'S',
+      null,
+      [],
+      [],
+      customRoads,
+      [],
+      [],
+      [],
+      'fence',
+      null,
+      true, // allowEmptyEquipment — roads-only manual yards still pave
+      [GATE_ENTRANCE_ROAD_ID], // no auto gate driveway on a manual yard
+    );
+    roads = built.roads.filter(r => r.id !== GATE_ENTRANCE_ROAD_ID);
+    roadNetwork = built.roadNetwork;
+    warnings.push(...built.roadWarnings.filter(w =>
+      !w.startsWith('Gate entrance road removed by drafter edit')));
   }
   const g = constraints?.placedGate;
   const gate = g && Number.isFinite(g.x) && Number.isFinite(g.y)
@@ -1734,7 +1748,7 @@ export function manualAuthoringDesign(
     reserveSummary: null,
     roads,
     aisles: [],
-    roadNetwork: null,
+    roadNetwork,
     gate,
     cables: [],
     trench: null,

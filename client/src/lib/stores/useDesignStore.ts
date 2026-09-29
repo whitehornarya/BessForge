@@ -3478,6 +3478,10 @@ interface DesignState {
   // are selectable only. Session UI, not a saved edit.
   manualPlaceItem: string | null;
   setManualPlaceItem: (id: string | null) => void;
+  // Manual Placement Road draw width (24 / 30 / 36). Session UI; Edit Layout
+  // keeps its own local roadDrawWidth chrome.
+  manualRoadWidth: 24 | 30 | 36;
+  setManualRoadWidth: (w: 24 | 30 | 36) => void;
   // Manual Placement snap. 0 = free (pointer pose). A positive step is one of
   // PLACEMENT_SNAP_STEPS_FT and snaps new drops and moves. Session UI.
   manualSnapFt: number;
@@ -4409,6 +4413,8 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   placeMaterialEpoch: 0,
   manualPlaceItem: null,
   setManualPlaceItem: (id: string | null): void => set({ manualPlaceItem: id }),
+  manualRoadWidth: 24 as 24 | 30 | 36,
+  setManualRoadWidth: (w: 24 | 30 | 36): void => set({ manualRoadWidth: w }),
   manualSnapFt: 0,
   setManualSnapFt: (ft: number): void => set({ manualSnapFt: Number.isFinite(ft) && ft > 0 ? ft : 0 }),
   yardRotationDeg: 0,
@@ -7131,7 +7137,12 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     const before = snapOf(get(), `Drew access road (${Math.round(len)} ft${widthOverride ? `, ${widthOverride} ft wide` : ''})`);
     const id = `road-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4)}`;
     const customRoads = [...(prevEdits.customRoads ?? []), { id, pts: clean, ...(widthOverride !== undefined ? { width: widthOverride } : {}) }];
-    set({ layoutEdits: { ...prevEdits, customRoads } });
+    // Manual yards need compact mode so leaving authoring (or a later path)
+    // still fillets these strips the same way scan Apply does.
+    set({
+      layoutEdits: { ...prevEdits, customRoads },
+      ...(prevEdits.yardAuthoring === 'manual' ? { roadMode: 'compact' as const } : {}),
+    });
     get().regenerate({ sync: true });
     // The engine rejects roads that would be silently eaten by equipment
     // clearance / fence-setback clipping (stable "Drawn road <id> rejected:"
@@ -7412,26 +7423,10 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   },
 
   addManualRoad: (a: Pt, b: Pt): string | null => {
-    if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) return 'Invalid road.';
-    const length = Math.hypot(b.x - a.x, b.y - a.y);
-    if (length < 8) return 'Road is too short.';
-    const prev = get().layoutEdits;
-    const existing = prev.customRoads ?? [];
-    let n = 1;
-    for (const r of existing) {
-      const m = /^mroad-(\d+)$/.exec(r.id);
-      if (m) n = Math.max(n, parseInt(m[1], 10) + 1);
-    }
-    const before = snapOf(get(), 'Drew a road');
-    set({
-      layoutEdits: {
-        ...prev,
-        customRoads: [...existing, { id: `mroad-${n}`, pts: [{ x: a.x, y: a.y }, { x: b.x, y: b.y }], width: 24 }],
-      },
-    });
-    get().regenerate({ sync: true });
-    get().pushHistory(before);
-    return null;
+    // Thin wrap: Manual Placement polyline commit uses addCustomRoad; keep
+    // this for any leftover two-point callers (same customRoads + reject path).
+    const ok = get().addCustomRoad([a, b]);
+    return ok ? null : (get().lastRejection ?? 'Road could not be added.');
   },
 
   setPlacedGate: (x: number, y: number): string | null => {
