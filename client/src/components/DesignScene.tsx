@@ -7223,6 +7223,8 @@ function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean
   const planePt = (e: { point: THREE.Vector3 }): Pt => ({ x: e.point.x, y: -e.point.z });
 
   const commitBox = useCallback((start: Pt, cur: Pt) => {
+    // Locked group: marquee must not replace or clear the selection.
+    if (useDesignStore.getState().manualSelectionLocked) return;
     const minX = Math.min(start.x, cur.x), maxX = Math.max(start.x, cur.x);
     const minY = Math.min(start.y, cur.y), maxY = Math.max(start.y, cur.y);
     const inRect = (x: number, y: number) => x >= minX && x <= maxX && y >= minY && y <= maxY;

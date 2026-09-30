@@ -83,12 +83,12 @@ A placement-mode control on Manual Placement, above the palette. The choice is s
 
 ## Slice 7a — Multi-select duplicate (done)
 
-**Select area** on Manual Placement arms a marquee. Drag a rectangle; equipment centers and road midpoints inside become the selection (cyan outlines). Gate is never selected.
+**Select area** on Manual Placement arms a marquee. Drag a rectangle; equipment centers and road midpoints inside become the selection (cyan outlines). Gate is never selected. Disarming Select keeps the selection until Escape / Ungroup.
 
-- **Duplicate** copies the whole selection with a shared offset (one undo step) and selects the new ids.
-- Drag any selected item to move the group together (`moveManualSelection`).
+- **Duplicate** clones the selection with a shared **+10 ft X/Y** nudge (copies sit on the originals but are visibly offset), one undo step, and selects **only the new ids** so you can drag the new group immediately.
+- Drag any selected item to move the selection together (`moveManualSelection`).
+- **Group** (when 2+ selected) locks the selection so a new marquee cannot clear it; **Ungroup** or Escape clears lock + selection. Duplicating a locked group leaves the copies locked.
 - **Delete** (panel or Delete key) removes the selection in one step.
-- Escape clears the selection (again disarms Select).
 
 Align X / Y / rotation remains Slice 7 later.
 
@@ -107,4 +107,4 @@ Cases live in [`scripts/nextera.test.ts`](../scripts/nextera.test.ts).
 - Slice 4: a dropped PCS stays on its catalog footprint and adds no roads or MW. A trace apply does not move that point.
 - Slice 5: dragging a placed PCS changes that id’s pose and does not add a second id; delete removes it; duplicate adds one offset copy; rotate changes `rotationDeg` by 90.
 - Slice 6: grid mode snaps a drop onto the grid; free mode keeps the raw point.
-- Slice 7a: marquee selects multiple peq/roads; Duplicate adds offset copies; group drag moves them together.
+- Slice 7a: marquee selects multiple peq/roads; Duplicate offsets copies (+10,+10) and selects them; Group locks selection; group drag moves them together.

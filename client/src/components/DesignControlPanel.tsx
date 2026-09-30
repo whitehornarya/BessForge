@@ -3087,6 +3087,9 @@ export default function DesignControlPanel() {
   const manualSelectTool = useDesignStore(s => s.manualSelectTool);
   const setManualSelectTool = useDesignStore(s => s.setManualSelectTool);
   const manualSelectionIds = useDesignStore(s => s.manualSelectionIds);
+  const manualSelectionLocked = useDesignStore(s => s.manualSelectionLocked);
+  const groupManualSelection = useDesignStore(s => s.groupManualSelection);
+  const ungroupManualSelection = useDesignStore(s => s.ungroupManualSelection);
   const duplicateManualSelection = useDesignStore(s => s.duplicateManualSelection);
   const removeManualSelection = useDesignStore(s => s.removeManualSelection);
   const manualRoadWidth = useDesignStore(s => s.manualRoadWidth);
@@ -3534,28 +3537,52 @@ export default function DesignControlPanel() {
                   </button>
                   {manualSelectTool && (
                     <div className="text-[10px] text-slate-500 mt-1.5">
-                      Drag a rectangle to select equipment and roads. Duplicate copies the group; drag any selected item to move all. Escape clears.
+                      Drag a rectangle to select. Duplicate offsets copies and leaves them selected so you can drag the new group. Group locks the selection; Escape / Ungroup clears.
                     </div>
                   )}
                   {manualSelectionIds.length > 0 && (
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const why = duplicateManualSelection();
-                          if (why) toast.error(why);
-                        }}
-                        className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-amber-700/80 text-amber-50 hover:bg-amber-600"
-                      >
-                        Duplicate ({manualSelectionIds.length})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => removeManualSelection()}
-                        className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
-                      >
-                        Delete
-                      </button>
+                    <div className="flex flex-col gap-1.5 mt-2">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const why = duplicateManualSelection();
+                            if (why) toast.error(why);
+                          }}
+                          className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-amber-700/80 text-amber-50 hover:bg-amber-600"
+                        >
+                          Duplicate ({manualSelectionIds.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeManualSelection()}
+                          className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                      {manualSelectionIds.length >= 2 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (manualSelectionLocked) ungroupManualSelection();
+                            else groupManualSelection();
+                          }}
+                          aria-pressed={manualSelectionLocked}
+                          className={`w-full px-2 py-1.5 text-xs font-medium rounded border ${
+                            manualSelectionLocked
+                              ? 'bg-cyan-700/80 border-cyan-500 text-cyan-50'
+                              : 'bg-slate-900/60 border-slate-600 text-slate-200 hover:bg-slate-700'
+                          }`}
+                        >
+                          {manualSelectionLocked ? 'Ungroup' : 'Group'}
+                        </button>
+                      )}
+                      {manualSelectionLocked && (
+                        <div className="text-[10px] text-slate-500">
+                          Group locked — drag any member to move all. Ungroup or Escape to clear.
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

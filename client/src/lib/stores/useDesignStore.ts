@@ -3487,6 +3487,11 @@ interface DesignState {
   manualSelectionIds: string[];
   setManualSelectionIds: (ids: string[]) => void;
   clearManualSelection: () => void;
+  // When true, the current multi-selection is "grouped": empty marquee does
+  // not replace it; Esc / Ungroup clears. Session UI, not persisted.
+  manualSelectionLocked: boolean;
+  groupManualSelection: () => void;
+  ungroupManualSelection: () => void;
   // Manual Placement Road draw width (24 / 30 / 36). Session UI; Edit Layout
   // keeps its own local roadDrawWidth chrome.
   manualRoadWidth: 24 | 30 | 36;
@@ -4430,16 +4435,25 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     ...(id ? { manualSelectTool: false } : {}),
   }),
   manualSelectTool: false,
-  setManualSelectTool: (on: boolean): void => set(s => ({
+  setManualSelectTool: (on: boolean): void => set({
     manualSelectTool: on,
     ...(on ? { manualPlaceItem: null } : {}),
-    ...(!on ? { manualSelectionIds: [] } : {}),
-  })),
+    // Disarming Select keeps the selection so Duplicate / Group drag still work.
+  }),
   manualSelectionIds: [] as string[],
   setManualSelectionIds: (ids: string[]): void => set({
     manualSelectionIds: [...new Set(ids.filter(id => id && id !== 'gate'))],
+    // A fresh marquee selection is unlocked until Group is clicked.
+    manualSelectionLocked: false,
   }),
-  clearManualSelection: (): void => set({ manualSelectionIds: [] }),
+  clearManualSelection: (): void => set({ manualSelectionIds: [], manualSelectionLocked: false }),
+  manualSelectionLocked: false,
+  groupManualSelection: (): void => {
+    const ids = get().manualSelectionIds.filter(id => id !== 'gate');
+    if (ids.length < 2) return;
+    set({ manualSelectionLocked: true, manualSelectionIds: ids });
+  },
+  ungroupManualSelection: (): void => set({ manualSelectionIds: [], manualSelectionLocked: false }),
   manualRoadWidth: 24 as 24 | 30 | 36,
   setManualRoadWidth: (w: 24 | 30 | 36): void => set({ manualRoadWidth: w }),
   manualSnapFt: 0,
@@ -7612,7 +7626,10 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     const roads = (prev.customRoads ?? []).filter(r => idSet.has(r.id));
     const peqs = (prev.placedEquipment ?? []).filter(s => idSet.has(s.id));
     if (!roads.length && !peqs.length) return 'Nothing selected.';
-    const OFFSET = 20;
+    // Small shared nudge so copies sit on the originals but are visibly offset.
+    const OX = 10;
+    const OY = 10;
+    const keepLocked = get().manualSelectionLocked && ids.length >= 2;
     let roadN = 1;
     for (const r of prev.customRoads ?? []) {
       const m = /^mroad-(\d+)$/.exec(r.id);
@@ -7631,15 +7648,16 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       return {
         ...r,
         id,
-        pts: r.pts.map(p => ({ x: p.x, y: p.y + OFFSET })),
+        pts: r.pts.map(p => ({ x: p.x + OX, y: p.y + OY })),
       };
     });
     const clonedPeqs = peqs.map(s => {
       const id = `peq-${peqN++}`;
       newPeqIds.push(id);
       // Shared group offset (not per-item length+2) so relative layout holds.
-      return { ...s, id, x: s.x, y: s.y + OFFSET };
+      return { ...s, id, x: s.x + OX, y: s.y + OY };
     });
+    const newIds = [...newRoadIds, ...newPeqIds];
     const before = snapOf(get(), `Duplicated ${ids.length} placed item${ids.length === 1 ? '' : 's'}`);
     set({
       layoutEdits: {
@@ -7651,7 +7669,9 @@ export const useDesignStore = create<DesignState>((set, get) => ({
           ? { placedEquipment: [...(prev.placedEquipment ?? []), ...clonedPeqs] }
           : {}),
       },
-      manualSelectionIds: [...newRoadIds, ...newPeqIds],
+      manualSelectionIds: newIds,
+      // Copies stay selected for group drag; preserve lock if the source was grouped.
+      manualSelectionLocked: keepLocked && newIds.length >= 2,
     });
     get().regenerate({ sync: true });
     get().pushHistory(before);
@@ -7700,7 +7720,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     const next = { ...prev };
     if (remainingRoads.length) next.customRoads = remainingRoads; else delete next.customRoads;
     if (remainingPeq.length) next.placedEquipment = remainingPeq; else delete next.placedEquipment;
-    set({ layoutEdits: next, manualSelectionIds: [] });
+    set({ layoutEdits: next, manualSelectionIds: [], manualSelectionLocked: false });
     get().regenerate({ sync: true });
     get().pushHistory(before);
   },
