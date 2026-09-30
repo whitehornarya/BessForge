@@ -81,11 +81,21 @@ A placement-mode control on Manual Placement, above the palette. The choice is s
 - **Grid** draws black lines across the fenced site and snaps a new drop, a road endpoint, or a move so the item center aligns to that grid. Spacing is 0.1, 0.5, 1, 5, 10, or 20 ft, using `snapPlacementCenter` in [`layoutEngine.ts`](../client/src/lib/nextera/layoutEngine.ts). Turning Grid on starts at `PLACEMENT_SNAP_DEFAULT_FT` (1 ft).
 - **Free** keeps the pointer position. `snapPlacementCenter` with a step of 0 records it to 0.01 ft and does not snap to the grid.
 
+## Slice 7a — Multi-select duplicate (done)
+
+**Select area** on Manual Placement arms a marquee. Drag a rectangle; equipment centers and road midpoints inside become the selection (cyan outlines). Gate is never selected.
+
+- **Duplicate** copies the whole selection with a shared offset (one undo step) and selects the new ids.
+- Drag any selected item to move the group together (`moveManualSelection`).
+- **Delete** (panel or Delete key) removes the selection in one step.
+- Escape clears the selection (again disarms Select).
+
+Align X / Y / rotation remains Slice 7 later.
+
 ## Slice 7 — Align a group
 
 Later, after several item types can be placed.
 
-- Multi-select placed items.
 - Align the selection on X, on Y, or to the rotation of one chosen item in the selection.
 - Writes the same stored poses as a drag, so a later scan still does not move `source: 'manual'` items.
 
@@ -97,3 +107,4 @@ Cases live in [`scripts/nextera.test.ts`](../scripts/nextera.test.ts).
 - Slice 4: a dropped PCS stays on its catalog footprint and adds no roads or MW. A trace apply does not move that point.
 - Slice 5: dragging a placed PCS changes that id’s pose and does not add a second id; delete removes it; duplicate adds one offset copy; rotate changes `rotationDeg` by 90.
 - Slice 6: grid mode snaps a drop onto the grid; free mode keeps the raw point.
+- Slice 7a: marquee selects multiple peq/roads; Duplicate adds offset copies; group drag moves them together.

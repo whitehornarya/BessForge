@@ -3478,6 +3478,15 @@ interface DesignState {
   // are selectable only. Session UI, not a saved edit.
   manualPlaceItem: string | null;
   setManualPlaceItem: (id: string | null) => void;
+  // Manual Placement Select tool (marquee multi-select). Session UI; arms
+  // rectangle select and clears palette drop / road draw.
+  manualSelectTool: boolean;
+  setManualSelectTool: (on: boolean) => void;
+  // Ids currently selected for group duplicate / move / delete (peq-* and
+  // custom road ids). Gate is never included. Session UI.
+  manualSelectionIds: string[];
+  setManualSelectionIds: (ids: string[]) => void;
+  clearManualSelection: () => void;
   // Manual Placement Road draw width (24 / 30 / 36). Session UI; Edit Layout
   // keeps its own local roadDrawWidth chrome.
   manualRoadWidth: 24 | 30 | 36;
@@ -4162,6 +4171,10 @@ interface DesignState {
   rotateManualPlacement: (id: string) => string | null;
   duplicateManualPlacement: (id: string) => string | null;
   removeManualPlacement: (id: string) => void;
+  // Batch ops for Manual Placement multi-select (one history entry each).
+  duplicateManualSelection: () => string | null;
+  moveManualSelection: (dx: number, dy: number) => string | null;
+  removeManualSelection: () => void;
 
   // ---- scene bulk tagging (manual auto-fill fallback) ---------------------
   // Arm a tag, then marquee-drag over the reference drawing in the scene:
@@ -4412,7 +4425,21 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   layoutEdits: {},
   placeMaterialEpoch: 0,
   manualPlaceItem: null,
-  setManualPlaceItem: (id: string | null): void => set({ manualPlaceItem: id }),
+  setManualPlaceItem: (id: string | null): void => set({
+    manualPlaceItem: id,
+    ...(id ? { manualSelectTool: false } : {}),
+  }),
+  manualSelectTool: false,
+  setManualSelectTool: (on: boolean): void => set(s => ({
+    manualSelectTool: on,
+    ...(on ? { manualPlaceItem: null } : {}),
+    ...(!on ? { manualSelectionIds: [] } : {}),
+  })),
+  manualSelectionIds: [] as string[],
+  setManualSelectionIds: (ids: string[]): void => set({
+    manualSelectionIds: [...new Set(ids.filter(id => id && id !== 'gate'))],
+  }),
+  clearManualSelection: (): void => set({ manualSelectionIds: [] }),
   manualRoadWidth: 24 as 24 | 30 | 36,
   setManualRoadWidth: (w: 24 | 30 | 36): void => set({ manualRoadWidth: w }),
   manualSnapFt: 0,
@@ -7575,6 +7602,107 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     get().regenerate({ sync: true });
     get().pushHistory(before);
     return null;
+  },
+
+  duplicateManualSelection: (): string | null => {
+    const ids = get().manualSelectionIds.filter(id => id !== 'gate');
+    if (!ids.length) return 'Nothing selected.';
+    const prev = get().layoutEdits;
+    const idSet = new Set(ids);
+    const roads = (prev.customRoads ?? []).filter(r => idSet.has(r.id));
+    const peqs = (prev.placedEquipment ?? []).filter(s => idSet.has(s.id));
+    if (!roads.length && !peqs.length) return 'Nothing selected.';
+    const OFFSET = 20;
+    let roadN = 1;
+    for (const r of prev.customRoads ?? []) {
+      const m = /^mroad-(\d+)$/.exec(r.id);
+      if (m) roadN = Math.max(roadN, parseInt(m[1], 10) + 1);
+    }
+    let peqN = 1;
+    for (const p of prev.placedEquipment ?? []) {
+      const m = /^peq-(\d+)$/.exec(p.id);
+      if (m) peqN = Math.max(peqN, parseInt(m[1], 10) + 1);
+    }
+    const newRoadIds: string[] = [];
+    const newPeqIds: string[] = [];
+    const clonedRoads = roads.map(r => {
+      const id = `mroad-${roadN++}`;
+      newRoadIds.push(id);
+      return {
+        ...r,
+        id,
+        pts: r.pts.map(p => ({ x: p.x, y: p.y + OFFSET })),
+      };
+    });
+    const clonedPeqs = peqs.map(s => {
+      const id = `peq-${peqN++}`;
+      newPeqIds.push(id);
+      // Shared group offset (not per-item length+2) so relative layout holds.
+      return { ...s, id, x: s.x, y: s.y + OFFSET };
+    });
+    const before = snapOf(get(), `Duplicated ${ids.length} placed item${ids.length === 1 ? '' : 's'}`);
+    set({
+      layoutEdits: {
+        ...prev,
+        ...(clonedRoads.length || (prev.customRoads ?? []).length
+          ? { customRoads: [...(prev.customRoads ?? []), ...clonedRoads] }
+          : {}),
+        ...(clonedPeqs.length || (prev.placedEquipment ?? []).length
+          ? { placedEquipment: [...(prev.placedEquipment ?? []), ...clonedPeqs] }
+          : {}),
+      },
+      manualSelectionIds: [...newRoadIds, ...newPeqIds],
+    });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
+    return null;
+  },
+
+  moveManualSelection: (dx: number, dy: number): string | null => {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return 'Invalid position.';
+    if (!dx && !dy) return null;
+    const ids = get().manualSelectionIds.filter(id => id !== 'gate');
+    if (!ids.length) return 'Nothing selected.';
+    const prev = get().layoutEdits;
+    const idSet = new Set(ids);
+    const hasRoad = (prev.customRoads ?? []).some(r => idSet.has(r.id));
+    const hasPeq = (prev.placedEquipment ?? []).some(s => idSet.has(s.id));
+    if (!hasRoad && !hasPeq) return 'Nothing selected.';
+    const before = snapOf(get(), `Moved ${ids.length} placed item${ids.length === 1 ? '' : 's'}`);
+    set({
+      layoutEdits: {
+        ...prev,
+        ...(hasRoad ? {
+          customRoads: (prev.customRoads ?? []).map(r => idSet.has(r.id)
+            ? { ...r, pts: r.pts.map(p => ({ x: p.x + dx, y: p.y + dy })) }
+            : r),
+        } : {}),
+        ...(hasPeq ? {
+          placedEquipment: (prev.placedEquipment ?? []).map(s => idSet.has(s.id)
+            ? { ...s, x: s.x + dx, y: s.y + dy }
+            : s),
+        } : {}),
+      },
+    });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
+    return null;
+  },
+
+  removeManualSelection: (): void => {
+    const ids = get().manualSelectionIds.filter(id => id !== 'gate');
+    if (!ids.length) return;
+    const prev = get().layoutEdits;
+    const idSet = new Set(ids);
+    const remainingRoads = (prev.customRoads ?? []).filter(r => !idSet.has(r.id));
+    const remainingPeq = (prev.placedEquipment ?? []).filter(s => !idSet.has(s.id));
+    const before = snapOf(get(), `Removed ${ids.length} placed item${ids.length === 1 ? '' : 's'}`);
+    const next = { ...prev };
+    if (remainingRoads.length) next.customRoads = remainingRoads; else delete next.customRoads;
+    if (remainingPeq.length) next.placedEquipment = remainingPeq; else delete next.placedEquipment;
+    set({ layoutEdits: next, manualSelectionIds: [] });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
   },
 
   removeManualPlacement: (id: string): void => {

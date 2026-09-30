@@ -3084,13 +3084,21 @@ export default function DesignControlPanel() {
   // Palette selection. Cleared when the yard is no longer a manual site.
   const manualPlaceItem = useDesignStore(s => s.manualPlaceItem);
   const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
+  const manualSelectTool = useDesignStore(s => s.manualSelectTool);
+  const setManualSelectTool = useDesignStore(s => s.setManualSelectTool);
+  const manualSelectionIds = useDesignStore(s => s.manualSelectionIds);
+  const duplicateManualSelection = useDesignStore(s => s.duplicateManualSelection);
+  const removeManualSelection = useDesignStore(s => s.removeManualSelection);
   const manualRoadWidth = useDesignStore(s => s.manualRoadWidth);
   const setManualRoadWidth = useDesignStore(s => s.setManualRoadWidth);
   const manualSnapFt = useDesignStore(s => s.manualSnapFt);
   const setManualSnapFt = useDesignStore(s => s.setManualSnapFt);
   useEffect(() => {
-    if (!manualYard) setManualPlaceItem(null);
-  }, [manualYard, setManualPlaceItem]);
+    if (!manualYard) {
+      setManualPlaceItem(null);
+      setManualSelectTool(false);
+    }
+  }, [manualYard, setManualPlaceItem, setManualSelectTool]);
   // A new KMZ import opens Manual Placement. Later tab changes stay put until
   // the next import bumps the epoch.
   useEffect(() => {
@@ -3507,6 +3515,49 @@ export default function DesignControlPanel() {
                       <path d="M12.5 7.5H3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                     </svg>
                   </button>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
+                    Select
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setManualSelectTool(!manualSelectTool)}
+                    aria-pressed={manualSelectTool}
+                    className={`w-full text-left text-xs px-2.5 py-2 rounded border font-medium transition-colors ${
+                      manualSelectTool
+                        ? 'bg-cyan-700/80 border-cyan-500 text-cyan-50'
+                        : 'bg-slate-900/60 border-slate-600 text-slate-200 hover:border-slate-500 hover:bg-slate-700/60'
+                    }`}
+                  >
+                    Select area
+                  </button>
+                  {manualSelectTool && (
+                    <div className="text-[10px] text-slate-500 mt-1.5">
+                      Drag a rectangle to select equipment and roads. Duplicate copies the group; drag any selected item to move all. Escape clears.
+                    </div>
+                  )}
+                  {manualSelectionIds.length > 0 && (
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const why = duplicateManualSelection();
+                          if (why) toast.error(why);
+                        }}
+                        className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-amber-700/80 text-amber-50 hover:bg-amber-600"
+                      >
+                        Duplicate ({manualSelectionIds.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeManualSelection()}
+                        className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">

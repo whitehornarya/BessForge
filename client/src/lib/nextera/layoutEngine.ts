@@ -1711,8 +1711,12 @@ export function manualAuthoringDesign(
   let roads: RoadSegment[] = [];
   let roadNetwork: SiteDesign['roadNetwork'] = null;
   if (customRoads.length) {
+    // Outer clip = property line (boundary.polygon), not the security fence:
+    // manual roads may run to the lot line. perimeterBand 'flush' drops the
+    // 10 ft fence-road setback that otherwise blocks routes before the fence.
+    // Display fence on SiteDesign stays fencePolygonFor(...) above.
     const built = buildRoads(
-      fence,
+      boundary.polygon,
       equipment,
       [],
       { width: 1, depth: 1, coreWidth: 1 },
@@ -1729,6 +1733,7 @@ export function manualAuthoringDesign(
       null,
       true, // allowEmptyEquipment — roads-only manual yards still pave
       [GATE_ENTRANCE_ROAD_ID], // no auto gate driveway on a manual yard
+      'flush',
     );
     roads = built.roads.filter(r => r.id !== GATE_ENTRANCE_ROAD_ID);
     roadNetwork = built.roadNetwork;

@@ -397,19 +397,24 @@ function RoadCalloutLabels({ road }: { road: NonNullable<SiteDesign['roadNetwork
 // the band reads as “what will generate,” not the thing being drawn.
 function RoadDraftBand({ pts, width = 24, ghost = false }: { pts: Pt[]; width?: number; ghost?: boolean }) {
   const design = useDesignStore(s => s.design);
+  const manualYard = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
   // Legal-region cache: fence + equipment only change on regenerate, so the
   // (relatively expensive) inset + pad-difference booleans run once per
-  // design, not per mouse move.
+  // mouse move.
   const legalRegion = useMemo(() => {
     if (!design) return [];
-    // Compact yards validate against the bare pad rectangles (clearance 0) —
-    // the SAME call the engine's accept gate makes, so the red/grey preview
-    // states always match what commit will decide.
+    // Manual Placement: legal outer = property line + flush (bandInset 0),
+    // matching manualAuthoringDesign → buildRoads. Compact non-manual:
+    // bare pads (clearance 0). Otherwise default fence + frontToFence inset.
     try {
+      if (manualYard) {
+        const lot = design.boundary?.polygon?.length ? design.boundary.polygon : design.fence;
+        return drawnRoadLegalRegion(lot, design.equipment, 0, 0);
+      }
       return drawnRoadLegalRegion(
         design.fence, design.equipment, undefined, design.compact ? 0 : undefined);
     } catch { return []; }
-  }, [design]);
+  }, [design, manualYard]);
   // Non-road yard polygons (sampled from the rendered network) — lets the
   // preview run the commit's nothing-to-add overlap too.
   const islandPolys = useMemo(() => {
@@ -7185,8 +7190,159 @@ type ItemMenu = { id: string; x: number; y: number; duplicate: boolean };
 
 const NO_EQUIP: PlacedEquipment[] = [];
 const NO_CUSTOM_ROADS: { id: string; pts: Pt[]; width?: number }[] = [];
+const NO_SELECTION_IDS: string[] = [];
 
-/** Left-drag moves a placed manual item. Right-click opens delete, duplicate, and rotate. */
+/** Marquee select for Manual Placement: drag a rectangle; centers inside become the selection. */
+function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean) => void }) {
+  const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const armed = useDesignStore(s => s.manualSelectTool);
+  const setManualSelectTool = useDesignStore(s => s.setManualSelectTool);
+  const setManualSelectionIds = useDesignStore(s => s.setManualSelectionIds);
+  const clearManualSelection = useDesignStore(s => s.clearManualSelection);
+  const design = useDesignStore(s => s.design);
+  const customRoads = useDesignStore(s =>
+    s.layoutEdits.yardAuthoring === 'manual'
+      ? (s.layoutEdits.customRoads ?? NO_CUSTOM_ROADS)
+      : NO_CUSTOM_ROADS);
+  const equipment = useDesignStore(s =>
+    s.layoutEdits.yardAuthoring === 'manual' ? (s.design?.equipment ?? NO_EQUIP) : NO_EQUIP);
+  const [box, setBox] = useState<{ start: Pt; cur: Pt } | null>(null);
+  const { gl } = useThree();
+
+  const fence = design?.fence ?? [];
+  const fb = useMemo(() => {
+    if (!fence.length) return { minX: -500, maxX: 500, minY: -500, maxY: 500 };
+    return {
+      minX: Math.min(...fence.map(p => p.x)),
+      maxX: Math.max(...fence.map(p => p.x)),
+      minY: Math.min(...fence.map(p => p.y)),
+      maxY: Math.max(...fence.map(p => p.y)),
+    };
+  }, [fence]);
+
+  const planePt = (e: { point: THREE.Vector3 }): Pt => ({ x: e.point.x, y: -e.point.z });
+
+  const commitBox = useCallback((start: Pt, cur: Pt) => {
+    const minX = Math.min(start.x, cur.x), maxX = Math.max(start.x, cur.x);
+    const minY = Math.min(start.y, cur.y), maxY = Math.max(start.y, cur.y);
+    const inRect = (x: number, y: number) => x >= minX && x <= maxX && y >= minY && y <= maxY;
+    const ids: string[] = [];
+    for (const eq of equipment) {
+      if (eq.id !== 'gate' && inRect(eq.x, eq.y)) ids.push(eq.id);
+    }
+    for (const r of customRoads) {
+      if (!r.pts || r.pts.length < 2) continue;
+      const a = r.pts[0], b = r.pts[r.pts.length - 1];
+      if (inRect((a.x + b.x) / 2, (a.y + b.y) / 2)) ids.push(r.id);
+    }
+    setManualSelectionIds(ids);
+  }, [equipment, customRoads, setManualSelectionIds]);
+
+  useEffect(() => {
+    if (!manual || !armed) {
+      setBox(null);
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (box) {
+        setBox(null);
+        return;
+      }
+      if (useDesignStore.getState().manualSelectionIds.length) {
+        clearManualSelection();
+        return;
+      }
+      setManualSelectTool(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [manual, armed, box, clearManualSelection, setManualSelectTool]);
+
+  useEffect(() => {
+    if (!manual || !armed) return;
+    gl.domElement.style.cursor = 'crosshair';
+    onDraggingChange(!!box);
+    return () => {
+      gl.domElement.style.cursor = '';
+      onDraggingChange(false);
+    };
+  }, [manual, armed, box, gl, onDraggingChange]);
+
+  // Commit on window pointerup so releasing off the catcher still finishes the marquee.
+  const boxRef = useRef(box);
+  boxRef.current = box;
+  useEffect(() => {
+    if (!manual || !armed) return;
+    const up = (ev: PointerEvent) => {
+      if (ev.button !== 0) return;
+      const b = boxRef.current;
+      if (!b) return;
+      setBox(null);
+      commitBox(b.start, b.cur);
+    };
+    window.addEventListener('pointerup', up);
+    return () => window.removeEventListener('pointerup', up);
+  }, [manual, armed, commitBox]);
+
+  if (!manual || !armed) return null;
+
+  const rubber = box ? (() => {
+    const minX = Math.min(box.start.x, box.cur.x), maxX = Math.max(box.start.x, box.cur.x);
+    const minY = Math.min(box.start.y, box.cur.y), maxY = Math.max(box.start.y, box.cur.y);
+    return { minX, maxX, minY, maxY };
+  })() : null;
+
+  return (
+    <group>
+      <mesh
+        position={[(fb.minX + fb.maxX) / 2, 0.55, -(fb.minY + fb.maxY) / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        onPointerDown={e => {
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          const p = planePt(e);
+          setBox({ start: p, cur: p });
+        }}
+        onPointerMove={e => {
+          if (!box) return;
+          e.stopPropagation();
+          setBox(b => b ? { ...b, cur: planePt(e) } : b);
+        }}
+      >
+        <planeGeometry args={[(fb.maxX - fb.minX) * 4 || 2000, (fb.maxY - fb.minY) * 4 || 2000]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+      {rubber && (
+        <group>
+          <mesh
+            position={[(rubber.minX + rubber.maxX) / 2, 0.7, -(rubber.minY + rubber.maxY) / 2]}
+            rotation={[-Math.PI / 2, 0, 0]}
+          >
+            <planeGeometry args={[Math.max(0.1, rubber.maxX - rubber.minX), Math.max(0.1, rubber.maxY - rubber.minY)]} />
+            <meshBasicMaterial color="#22d3ee" transparent opacity={0.12} side={THREE.DoubleSide} depthWrite={false} />
+          </mesh>
+          <Line
+            points={[
+              new THREE.Vector3(rubber.minX, 0.8, -rubber.minY),
+              new THREE.Vector3(rubber.maxX, 0.8, -rubber.minY),
+              new THREE.Vector3(rubber.maxX, 0.8, -rubber.maxY),
+              new THREE.Vector3(rubber.minX, 0.8, -rubber.maxY),
+              new THREE.Vector3(rubber.minX, 0.8, -rubber.minY),
+            ]}
+            color="#22d3ee"
+            lineWidth={2.5}
+            dashed
+            dashSize={5}
+            gapSize={3}
+          />
+        </group>
+      )}
+    </group>
+  );
+}
+
+/** Left-drag moves a placed manual item (or the whole multi-selection). Right-click opens delete, duplicate, and rotate. */
 function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d: boolean) => void; onMenu: (m: ItemMenu | null) => void }) {
   const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
   // Stable empty fallbacks — a fresh [] each snapshot causes infinite re-renders
@@ -7199,6 +7355,8 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
     s.layoutEdits.yardAuthoring === 'manual'
       ? (s.layoutEdits.customRoads ?? NO_CUSTOM_ROADS)
       : NO_CUSTOM_ROADS);
+  const selectionIds = useDesignStore(s =>
+    s.layoutEdits.yardAuthoring === 'manual' ? s.manualSelectionIds : NO_SELECTION_IDS);
   const roads = useMemo(() => customRoads.flatMap(r => {
     if (!r.pts || r.pts.length < 2) return [];
     const a = r.pts[0], b = r.pts[r.pts.length - 1];
@@ -7216,14 +7374,28 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
   }), [customRoads]);
   const gate = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.gate ?? null : null));
   const moveManualPlacement = useDesignStore(s => s.moveManualPlacement);
+  const moveManualSelection = useDesignStore(s => s.moveManualSelection);
+  const removeManualSelection = useDesignStore(s => s.removeManualSelection);
+  const clearManualSelection = useDesignStore(s => s.clearManualSelection);
   const manualSnapFt = useDesignStore(s => s.manualSnapFt);
   const snapFtRef = useRef(manualSnapFt);
   snapFtRef.current = manualSnapFt;
+  const selectionRef = useRef(selectionIds);
+  selectionRef.current = selectionIds;
   const { camera, gl, controls } = useThree();
   const controlsRef = useRef<{ enabled?: boolean } | null>(null);
   controlsRef.current = controls as { enabled?: boolean } | null;
-  const drag = useRef<{ id: string; gx: number; gy: number } | null>(null);
+  type DragState = {
+    id: string;
+    gx: number;
+    gy: number;
+    startCx: number;
+    startCy: number;
+    group: boolean;
+  };
+  const drag = useRef<DragState | null>(null);
   const [ghost, setGhost] = useState<{ x: number; y: number; length: number; width: number; height: number; rotation: number } | null>(null);
+  const [groupDelta, setGroupDelta] = useState<Pt | null>(null);
   const raycaster = useRef(new THREE.Raycaster());
   const ndc = useRef(new THREE.Vector2());
 
@@ -7254,6 +7426,23 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
   }, [manual, gl]);
 
   useEffect(() => {
+    if (!manual) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (!selectionRef.current.length) return;
+        e.preventDefault();
+        removeManualSelection();
+        return;
+      }
+      if (e.key === 'Escape' && selectionRef.current.length && !drag.current) {
+        clearManualSelection();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [manual, removeManualSelection, clearManualSelection]);
+
+  useEffect(() => {
     const el = gl.domElement;
     const move = (ev: PointerEvent) => {
       const d = drag.current;
@@ -7261,7 +7450,12 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
       const p = hitGround(ev);
       if (!p) return;
       const center = snapPlacementCenter({ x: p.x + d.gx, y: p.y + d.gy }, snapFtRef.current);
-      setGhost(g => g ? { ...g, x: center.x, y: center.y } : g);
+      if (d.group) {
+        setGroupDelta({ x: center.x - d.startCx, y: center.y - d.startCy });
+        setGhost(g => g ? { ...g, x: center.x, y: center.y } : g);
+      } else {
+        setGhost(g => g ? { ...g, x: center.x, y: center.y } : g);
+      }
     };
     const up = (ev: PointerEvent) => {
       const d = drag.current;
@@ -7271,10 +7465,16 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
       if (controlsRef.current) controlsRef.current.enabled = true;
       const p = hitGround(ev);
       setGhost(null);
+      setGroupDelta(null);
       if (!p) return;
       const center = snapPlacementCenter({ x: p.x + d.gx, y: p.y + d.gy }, snapFtRef.current);
-      const why = moveManualPlacement(d.id, center.x, center.y);
-      if (why) toast.error(friendlyRejectReason(why));
+      if (d.group) {
+        const why = moveManualSelection(center.x - d.startCx, center.y - d.startCy);
+        if (why) toast.error(friendlyRejectReason(why));
+      } else {
+        const why = moveManualPlacement(d.id, center.x, center.y);
+        if (why) toast.error(friendlyRejectReason(why));
+      }
     };
     el.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -7282,7 +7482,11 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
       el.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
     };
-  }, [gl, hitGround, moveManualPlacement, onDraggingChange]);
+  }, [gl, hitGround, moveManualPlacement, moveManualSelection, onDraggingChange]);
+
+  const selSet = useMemo(() => new Set(selectionIds), [selectionIds]);
+  const gdx = groupDelta?.x ?? 0;
+  const gdy = groupDelta?.y ?? 0;
 
   if (!manual) return null;
 
@@ -7296,8 +7500,17 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
     if (e.button !== 0) return;
     e.stopPropagation();
     onMenu(null);
-    drag.current = { id, gx: center.x - hit.x, gy: center.y - hit.y };
+    const group = id !== 'gate' && selSet.has(id) && selectionIds.length > 1;
+    drag.current = {
+      id,
+      gx: center.x - hit.x,
+      gy: center.y - hit.y,
+      startCx: center.x,
+      startCy: center.y,
+      group,
+    };
     setGhost({ x: center.x, y: center.y, ...size });
+    setGroupDelta(group ? { x: 0, y: 0 } : null);
     onDraggingChange(true);
     if (controlsRef.current) controlsRef.current.enabled = false;
   };
@@ -7307,7 +7520,7 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
       {equipment.map(eq => (
         <mesh
           key={eq.id}
-          position={[eq.x, Math.max(eq.height, 1) / 2, -eq.y]}
+          position={[eq.x + (selSet.has(eq.id) ? gdx : 0), Math.max(eq.height, 1) / 2, -(eq.y + (selSet.has(eq.id) ? gdy : 0))]}
           rotation={[0, eq.rotation, 0]}
           onPointerDown={e => begin(eq.id, eq, { x: e.point.x, y: -e.point.z }, { length: eq.length, width: eq.width, height: eq.height, rotation: eq.rotation }, e)}
           onContextMenu={e => { e.stopPropagation(); e.nativeEvent.preventDefault(); }}
@@ -7319,7 +7532,7 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
       {roads.map(rd => (
         <mesh
           key={rd.id ?? `${rd.x},${rd.y}`}
-          position={[rd.x, 0.6, -rd.y]}
+          position={[rd.x + (rd.id && selSet.has(rd.id) ? gdx : 0), 0.6, -(rd.y + (rd.id && selSet.has(rd.id) ? gdy : 0))]}
           rotation={[-Math.PI / 2, 0, -rd.rotation]}
           onPointerDown={e => {
             if (!rd.id) return;
@@ -7342,6 +7555,37 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
           <meshBasicMaterial transparent opacity={0} depthWrite={false} />
         </mesh>
       )}
+      {/* Selection chrome */}
+      {equipment.filter(eq => selSet.has(eq.id)).map(eq => {
+        const hx = eq.length / 2, hy = eq.width / 2;
+        const c = Math.cos(eq.rotation), s = Math.sin(eq.rotation);
+        const ox = eq.x + gdx, oy = eq.y + gdy;
+        const corner = (lx: number, ly: number) => new THREE.Vector3(
+          ox + c * lx - s * ly, 0.9, -(oy + s * lx + c * ly));
+        return (
+          <Line
+            key={`msel-${eq.id}`}
+            points={[corner(-hx, -hy), corner(hx, -hy), corner(hx, hy), corner(-hx, hy), corner(-hx, -hy)]}
+            color="#22d3ee"
+            lineWidth={2.5}
+          />
+        );
+      })}
+      {roads.filter(rd => rd.id && selSet.has(rd.id)).map(rd => {
+        const hx = rd.length / 2, hy = rd.width / 2;
+        const c = Math.cos(rd.rotation), s = Math.sin(rd.rotation);
+        const ox = rd.x + gdx, oy = rd.y + gdy;
+        const corner = (lx: number, ly: number) => new THREE.Vector3(
+          ox + c * lx - s * ly, 0.9, -(oy + s * lx + c * ly));
+        return (
+          <Line
+            key={`msel-${rd.id}`}
+            points={[corner(-hx, -hy), corner(hx, -hy), corner(hx, hy), corner(-hx, hy), corner(-hx, -hy)]}
+            color="#22d3ee"
+            lineWidth={2.5}
+          />
+        );
+      })}
       {ghost && (
         <mesh position={[ghost.x, ghost.height / 2, -ghost.y]} rotation={[0, ghost.rotation, 0]}>
           <boxGeometry args={[ghost.length, ghost.height, ghost.width]} />
@@ -8700,6 +8944,7 @@ export default function DesignScene() {
           <>
             <DesignContent design={design} editMode={editMode} realistic={realisticModels && viewMode !== '2d'} is3D={viewMode === '3d'} cad={viewMode === 'cad'} onDraggingChange={setDragging} editTool={editTool} onEditToolChange={setEditTool} zoneKind={zoneKind} islandPairs={islandPairs} placeKind={placeKind} placeAug={placeAug} placeAuxGear={placeAuxGear} placeEquipType={placeEquipType} placeAngleDeg={placeAngleDeg} placeSnap={placeSnap} roadDrawWidth={roadDrawWidth} onSelectedIslandChange={setSelIsland} onSelectedTargetChange={setNudgeTarget} onSelectedEquipChange={setSelEquip} onRoadSelectionChange={setRoadSelInfo} cadLayerVis={cadLayerVis} onSelectText={setCadSelectedText} />
             <ManualSiteGrid />
+            <ManualSelectLayer onDraggingChange={setDragging} />
             <PlacedItemHandles onDraggingChange={setDragging} onMenu={setItemMenu} />
             <PcsDrop onDraggingChange={setDragging} onGroundDown={() => setItemMenu(null)} realistic={realisticModels && viewMode !== '2d'} />
             <ManualRoadDraw onDraggingChange={setDragging} />

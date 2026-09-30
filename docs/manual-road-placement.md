@@ -21,6 +21,8 @@ You mark a **centerline path**; the code **generates** the full-width filleted p
 
 **Preview:** thin dashed centerline + vertex dots are what you are authoring. The translucent filleted band is a **ghost** of the strip that will generate on commit — not freehand pavement painting. Red/grey states still mirror the commit gates (blocked / nothing-to-add).
 
+**Property line:** Manual authoring validates and clips drawn roads against the **property line** (`boundary.polygon`) with a **flush** perimeter band (`bandInset = 0`). The usual 10 ft fence-road setback does **not** apply, so routes can run out to the lot line. The security fence on the design is unchanged for display. Preview (`RoadDraftBand`) uses the same legal region.
+
 ---
 
 ## What shipped
