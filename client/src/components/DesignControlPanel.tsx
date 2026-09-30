@@ -433,6 +433,74 @@ function ZoneDimField({ label, value, step, min, max, onCommit }: {
   );
 }
 
+/** Editable rotate delta with ±90° steppers (live preview; scene Click/Enter commits). */
+function ManualRotateAngleStepper({ deltaDeg }: { deltaDeg: number }) {
+  const setManualRotateDelta = useDesignStore(s => s.setManualRotateDelta);
+  const [draft, setDraft] = useState(String(Math.round(deltaDeg)));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setDraft(String(Math.round(deltaDeg)));
+  }, [deltaDeg, editing]);
+  const apply = () => {
+    setEditing(false);
+    const v = Number(draft);
+    if (draft.trim() === '' || !Number.isFinite(v)) {
+      setDraft(String(Math.round(deltaDeg)));
+      return;
+    }
+    setManualRotateDelta(v);
+  };
+  const stepBy = (d: number) => {
+    setEditing(false);
+    setManualRotateDelta(deltaDeg + d);
+  };
+  return (
+    <div className="flex items-center gap-1 mt-1.5">
+      <button
+        type="button"
+        onClick={() => stepBy(-90)}
+        className="px-2 py-1 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+        title="Decrease rotation by 90°"
+        aria-label="Decrease rotation by 90 degrees"
+      >
+        −
+      </button>
+      <div className="flex items-center gap-0.5 flex-1 min-w-0">
+        <input
+          type="number"
+          step={1}
+          value={draft}
+          onFocus={() => setEditing(true)}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={apply}
+          onKeyDown={e => {
+            e.stopPropagation();
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            if (e.key === 'Escape') {
+              setDraft(String(Math.round(deltaDeg)));
+              setEditing(false);
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          className="w-full min-w-0 px-2 py-1 text-xs rounded border border-slate-600 bg-slate-900 text-slate-200 text-center tabular-nums"
+          aria-label="Rotation angle in degrees"
+          title="Rotation from start (degrees). Type a custom angle or use ±90°."
+        />
+        <span className="text-[10px] text-slate-400 shrink-0">°</span>
+      </div>
+      <button
+        type="button"
+        onClick={() => stepBy(90)}
+        className="px-2 py-1 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+        title="Increase rotation by 90°"
+        aria-label="Increase rotation by 90 degrees"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
 // Drainage number field with sanitizer-true clamping. min/max come straight
 // from DRAINAGE_NUM_LIMITS (the exact ranges sanitizeDrainageInputs enforces
 // on export), so the displayed value can never silently differ from what
@@ -3087,11 +3155,17 @@ export default function DesignControlPanel() {
   const manualSelectTool = useDesignStore(s => s.manualSelectTool);
   const setManualSelectTool = useDesignStore(s => s.setManualSelectTool);
   const manualSelectionIds = useDesignStore(s => s.manualSelectionIds);
-  const manualSelectionLocked = useDesignStore(s => s.manualSelectionLocked);
-  const groupManualSelection = useDesignStore(s => s.groupManualSelection);
-  const ungroupManualSelection = useDesignStore(s => s.ungroupManualSelection);
+  const activeManualGroupId = useDesignStore(s => s.activeManualGroupId);
+  const setActiveManualGroup = useDesignStore(s => s.setActiveManualGroup);
+  const renameManualGroup = useDesignStore(s => s.renameManualGroup);
+  const dissolveManualGroup = useDesignStore(s => s.dissolveManualGroup);
+  const manualGroups = useDesignStore(s => s.layoutEdits.manualGroups);
   const duplicateManualSelection = useDesignStore(s => s.duplicateManualSelection);
   const removeManualSelection = useDesignStore(s => s.removeManualSelection);
+  const clearManualSelection = useDesignStore(s => s.clearManualSelection);
+  const manualRotateSession = useDesignStore(s => s.manualRotateSession);
+  const beginManualRotate = useDesignStore(s => s.beginManualRotate);
+  const cancelManualRotate = useDesignStore(s => s.cancelManualRotate);
   const manualRoadWidth = useDesignStore(s => s.manualRoadWidth);
   const setManualRoadWidth = useDesignStore(s => s.setManualRoadWidth);
   const manualSnapFt = useDesignStore(s => s.manualSnapFt);
@@ -3537,12 +3611,117 @@ export default function DesignControlPanel() {
                   </button>
                   {manualSelectTool && (
                     <div className="text-[10px] text-slate-500 mt-1.5">
-                      Drag a rectangle to select. Duplicate offsets copies and leaves them selected so you can drag the new group. Group locks the selection; Escape / Ungroup clears.
+                      Drag a box only — equipment inside becomes a named group. Roads stay frozen unless Road is armed. Escape clears the active group highlight.
                     </div>
                   )}
-                  {manualSelectionIds.length > 0 && (
-                    <div className="flex flex-col gap-1.5 mt-2">
-                      <div className="flex gap-2">
+                  {manualRotateSession && (
+                    <div className="mt-1.5">
+                      <div className="text-[10px] text-cyan-300">
+                        Rotate mode — click-drag on the plan to turn; release to finish. Or set an angle below, then Enter. Shift snaps 15°. Esc cancels.
+                      </div>
+                      <ManualRotateAngleStepper deltaDeg={manualRotateSession.deltaDeg} />
+                    </div>
+                  )}
+                  <div className="mt-2">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">
+                      Groups
+                    </div>
+                    <select
+                      className="w-full px-2 py-1.5 text-xs rounded border border-slate-600 bg-slate-900 text-slate-200"
+                      value={activeManualGroupId ?? ''}
+                      onChange={e => setActiveManualGroup(e.target.value || null)}
+                    >
+                      <option value="">No group selected</option>
+                      {(manualGroups ?? []).map(g => (
+                        <option key={g.id} value={g.id}>
+                          {g.name} ({g.memberIds.length})
+                        </option>
+                      ))}
+                    </select>
+                    {activeManualGroupId && (() => {
+                      const g = (manualGroups ?? []).find(x => x.id === activeManualGroupId);
+                      if (!g) return null;
+                      const toggleRotate = () => {
+                        const members = g.memberIds.filter(id => id !== 'gate' && !id.startsWith('mroad-'));
+                        const sess = manualRotateSession;
+                        if (sess && sess.memberIds.length === members.length && members.every(id => sess.memberIds.includes(id))) {
+                          cancelManualRotate();
+                          return;
+                        }
+                        const why = beginManualRotate(members);
+                        if (why) toast.error(why);
+                      };
+                      return (
+                        <div className="flex flex-col gap-1.5 mt-1.5">
+                          <input
+                            type="text"
+                            defaultValue={g.name}
+                            key={g.id + g.name}
+                            onBlur={e => {
+                              if (e.target.value.trim() !== g.name) renameManualGroup(g.id, e.target.value);
+                            }}
+                            onKeyDown={e => {
+                              e.stopPropagation();
+                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                            }}
+                            className="w-full px-2 py-1 text-xs rounded border border-slate-600 bg-slate-900 text-slate-200"
+                            aria-label="Group name"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const why = duplicateManualSelection();
+                                if (why) toast.error(why);
+                              }}
+                              className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-amber-700/80 text-amber-50 hover:bg-amber-600"
+                            >
+                              Duplicate
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeManualSelection()}
+                              className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={toggleRotate}
+                              className={`flex-1 px-2 py-1.5 text-xs font-medium rounded border ${
+                                manualRotateSession
+                                  ? 'border-cyan-500 bg-cyan-700/80 text-cyan-50'
+                                  : 'border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700'
+                              }`}
+                              title="Click to arm rotate, then click-drag on the plan; release to finish"
+                            >
+                              Rotate
+                            </button>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => dissolveManualGroup(g.id)}
+                              className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                            >
+                              Dissolve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => clearManualSelection()}
+                              className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                            >
+                              Deselect
+                            </button>
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            Active group — drag any member to move the whole group. Roads are a separate layer.
+                          </div>
+                        </div>
+                      );
+                    })()}
+                    {!activeManualGroupId && manualSelectionIds.length > 0 && (
+                      <div className="flex gap-2 mt-1.5">
                         <button
                           type="button"
                           onClick={() => {
@@ -3560,31 +3739,30 @@ export default function DesignControlPanel() {
                         >
                           Delete
                         </button>
-                      </div>
-                      {manualSelectionIds.length >= 2 && (
                         <button
                           type="button"
                           onClick={() => {
-                            if (manualSelectionLocked) ungroupManualSelection();
-                            else groupManualSelection();
+                            const members = manualSelectionIds.filter(id => id !== 'gate' && !id.startsWith('mroad-'));
+                            const sess = manualRotateSession;
+                            if (sess && sess.memberIds.length === members.length && members.every(id => sess.memberIds.includes(id))) {
+                              cancelManualRotate();
+                              return;
+                            }
+                            const why = beginManualRotate(members);
+                            if (why) toast.error(why);
                           }}
-                          aria-pressed={manualSelectionLocked}
-                          className={`w-full px-2 py-1.5 text-xs font-medium rounded border ${
-                            manualSelectionLocked
-                              ? 'bg-cyan-700/80 border-cyan-500 text-cyan-50'
-                              : 'bg-slate-900/60 border-slate-600 text-slate-200 hover:bg-slate-700'
+                          className={`flex-1 px-2 py-1.5 text-xs font-medium rounded border ${
+                            manualRotateSession
+                              ? 'border-cyan-500 bg-cyan-700/80 text-cyan-50'
+                              : 'border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700'
                           }`}
+                          title="Click to arm rotate, then click-drag on the plan; release to finish"
                         >
-                          {manualSelectionLocked ? 'Ungroup' : 'Group'}
+                          Rotate
                         </button>
-                      )}
-                      {manualSelectionLocked && (
-                        <div className="text-[10px] text-slate-500">
-                          Group locked — drag any member to move all. Ungroup or Escape to clear.
-                        </div>
-                      )}
-                    </div>
-                  )}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">

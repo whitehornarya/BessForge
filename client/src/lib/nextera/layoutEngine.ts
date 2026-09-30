@@ -391,6 +391,9 @@ export interface LayoutConstraints {
   // (KMZ auto-fill, catalog-dimension gear drops); those are honoured exactly
   // as drawn and only ever warn. See PlacedEquipmentSpec.
   placedEquipment?: PlacedEquipmentSpec[];
+  // Named Manual Placement groups (equipment peq-* ids only). Survive
+  // regenerate / undo. Roads stay on the Road layer and are never members.
+  manualGroups?: { id: string; name: string; memberIds: string[] }[];
   // tracedRatings: client-declared nameplate for a traced yard, derived at
   // trace-apply time from the package's sheet specifications (declared site
   // MW / MWh split evenly across every BUILT traced PCS / container on the
@@ -9609,12 +9612,40 @@ export function previewPlacedEquipmentDrop(
 /** Prefix every manually placed equipment id carries. */
 export const MANUAL_EQUIPMENT_ID_PREFIX = 'peq-';
 
-/** Normalized quarter-turn angle (0 | 90 | 180 | 270) for a manual item. */
+/** Normalized plan angle in degrees [0, 360), 1° resolution. */
 export function manualEquipmentAngle(spec: { angleDeg?: number }): number {
   const a = spec.angleDeg;
   if (!Number.isFinite(a)) return 0;
-  const n = ((Math.round((a as number) / 90) * 90) % 360 + 360) % 360;
-  return n;
+  return ((Math.round(a as number) % 360) + 360) % 360;
+}
+
+/** Apply an absolute plan angle (degrees) to a placed equipment spec. */
+export function setPlacedSpecAngle(spec: PlacedEquipmentSpec, angleDeg: number): PlacedEquipmentSpec {
+  const a = ((Math.round(angleDeg) % 360) + 360) % 360;
+  if (isManualEquipmentSpec(spec)) {
+    const next: ManualEquipmentSpec = { ...spec };
+    if (a === 0) delete next.angleDeg; else next.angleDeg = a;
+    return next;
+  }
+  const next: TracedEquipmentSpec = { ...spec };
+  if (a === 0) delete next.rotationDeg; else next.rotationDeg = a;
+  return next;
+}
+
+/** Read absolute plan angle (degrees) from a placed equipment spec. */
+export function placedSpecAngle(spec: PlacedEquipmentSpec): number {
+  if (isManualEquipmentSpec(spec)) return manualEquipmentAngle(spec);
+  const a = spec.rotationDeg;
+  if (!Number.isFinite(a)) return 0;
+  return ((Math.round(a as number) % 360) + 360) % 360;
+}
+
+/** Rotate a point about (cx, cy) by deltaDeg (CCW, degrees). */
+export function rotatePtAbout(p: Pt, cx: number, cy: number, deltaDeg: number): Pt {
+  const r = (deltaDeg * Math.PI) / 180;
+  const c = Math.cos(r), s = Math.sin(r);
+  const dx = p.x - cx, dy = p.y - cy;
+  return { x: cx + dx * c - dy * s, y: cy + dx * s + dy * c };
 }
 
 export const MANUAL_EQUIPMENT_TYPES: readonly ManualEquipmentType[] = [

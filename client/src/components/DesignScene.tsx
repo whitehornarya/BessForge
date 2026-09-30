@@ -7192,18 +7192,14 @@ const NO_EQUIP: PlacedEquipment[] = [];
 const NO_CUSTOM_ROADS: { id: string; pts: Pt[]; width?: number }[] = [];
 const NO_SELECTION_IDS: string[] = [];
 
-/** Marquee select for Manual Placement: drag a rectangle; centers inside become the selection. */
+/** Screenshot-style marquee: box only (no element clicks); auto-creates a named group. */
 function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean) => void }) {
   const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
   const armed = useDesignStore(s => s.manualSelectTool);
   const setManualSelectTool = useDesignStore(s => s.setManualSelectTool);
-  const setManualSelectionIds = useDesignStore(s => s.setManualSelectionIds);
+  const createManualGroup = useDesignStore(s => s.createManualGroup);
   const clearManualSelection = useDesignStore(s => s.clearManualSelection);
   const design = useDesignStore(s => s.design);
-  const customRoads = useDesignStore(s =>
-    s.layoutEdits.yardAuthoring === 'manual'
-      ? (s.layoutEdits.customRoads ?? NO_CUSTOM_ROADS)
-      : NO_CUSTOM_ROADS);
   const equipment = useDesignStore(s =>
     s.layoutEdits.yardAuthoring === 'manual' ? (s.design?.equipment ?? NO_EQUIP) : NO_EQUIP);
   const [box, setBox] = useState<{ start: Pt; cur: Pt } | null>(null);
@@ -7223,22 +7219,18 @@ function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean
   const planePt = (e: { point: THREE.Vector3 }): Pt => ({ x: e.point.x, y: -e.point.z });
 
   const commitBox = useCallback((start: Pt, cur: Pt) => {
-    // Locked group: marquee must not replace or clear the selection.
-    if (useDesignStore.getState().manualSelectionLocked) return;
     const minX = Math.min(start.x, cur.x), maxX = Math.max(start.x, cur.x);
     const minY = Math.min(start.y, cur.y), maxY = Math.max(start.y, cur.y);
+    // Tiny click with no drag — ignore (do not clear active group).
+    if (maxX - minX < 1 && maxY - minY < 1) return;
     const inRect = (x: number, y: number) => x >= minX && x <= maxX && y >= minY && y <= maxY;
-    const ids: string[] = [];
-    for (const eq of equipment) {
-      if (eq.id !== 'gate' && inRect(eq.x, eq.y)) ids.push(eq.id);
-    }
-    for (const r of customRoads) {
-      if (!r.pts || r.pts.length < 2) continue;
-      const a = r.pts[0], b = r.pts[r.pts.length - 1];
-      if (inRect((a.x + b.x) / 2, (a.y + b.y) / 2)) ids.push(r.id);
-    }
-    setManualSelectionIds(ids);
-  }, [equipment, customRoads, setManualSelectionIds]);
+    // Equipment only — roads stay on the Road layer and are never marquee-grouped.
+    const ids = equipment
+      .filter(eq => eq.id !== 'gate' && !eq.id.startsWith('mroad-') && inRect(eq.x, eq.y))
+      .map(eq => eq.id);
+    if (!ids.length) return;
+    createManualGroup(ids);
+  }, [equipment, createManualGroup]);
 
   useEffect(() => {
     if (!manual || !armed) {
@@ -7251,7 +7243,8 @@ function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean
         setBox(null);
         return;
       }
-      if (useDesignStore.getState().manualSelectionIds.length) {
+      // Esc while Select armed: clear active group highlight, then disarm Select.
+      if (useDesignStore.getState().activeManualGroupId || useDesignStore.getState().manualSelectionIds.length) {
         clearManualSelection();
         return;
       }
@@ -7271,7 +7264,6 @@ function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean
     };
   }, [manual, armed, box, gl, onDraggingChange]);
 
-  // Commit on window pointerup so releasing off the catcher still finishes the marquee.
   const boxRef = useRef(box);
   boxRef.current = box;
   useEffect(() => {
@@ -7297,8 +7289,9 @@ function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean
 
   return (
     <group>
+      {/* High catcher so Select area is screenshot-style — no element hits underneath. */}
       <mesh
-        position={[(fb.minX + fb.maxX) / 2, 0.55, -(fb.minY + fb.maxY) / 2]}
+        position={[(fb.minX + fb.maxX) / 2, 2.5, -(fb.minY + fb.maxY) / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
         onPointerDown={e => {
           if (e.button !== 0) return;
@@ -7318,7 +7311,7 @@ function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean
       {rubber && (
         <group>
           <mesh
-            position={[(rubber.minX + rubber.maxX) / 2, 0.7, -(rubber.minY + rubber.maxY) / 2]}
+            position={[(rubber.minX + rubber.maxX) / 2, 2.6, -(rubber.minY + rubber.maxY) / 2]}
             rotation={[-Math.PI / 2, 0, 0]}
           >
             <planeGeometry args={[Math.max(0.1, rubber.maxX - rubber.minX), Math.max(0.1, rubber.maxY - rubber.minY)]} />
@@ -7326,11 +7319,11 @@ function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean
           </mesh>
           <Line
             points={[
-              new THREE.Vector3(rubber.minX, 0.8, -rubber.minY),
-              new THREE.Vector3(rubber.maxX, 0.8, -rubber.minY),
-              new THREE.Vector3(rubber.maxX, 0.8, -rubber.maxY),
-              new THREE.Vector3(rubber.minX, 0.8, -rubber.maxY),
-              new THREE.Vector3(rubber.minX, 0.8, -rubber.minY),
+              new THREE.Vector3(rubber.minX, 2.7, -rubber.minY),
+              new THREE.Vector3(rubber.maxX, 2.7, -rubber.minY),
+              new THREE.Vector3(rubber.maxX, 2.7, -rubber.maxY),
+              new THREE.Vector3(rubber.minX, 2.7, -rubber.maxY),
+              new THREE.Vector3(rubber.minX, 2.7, -rubber.minY),
             ]}
             color="#22d3ee"
             lineWidth={2.5}
@@ -7344,9 +7337,150 @@ function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean
   );
 }
 
-/** Left-drag moves a placed manual item (or the whole multi-selection). Right-click opens delete, duplicate, and rotate. */
+/** Mouse-driven rotate tool: click-drag to set angle about centroid; release to commit. */
+function ManualRotateLayer({ onDraggingChange }: { onDraggingChange: (d: boolean) => void }) {
+  const session = useDesignStore(s => s.manualRotateSession);
+  const previewManualRotate = useDesignStore(s => s.previewManualRotate);
+  const commitManualRotate = useDesignStore(s => s.commitManualRotate);
+  const cancelManualRotate = useDesignStore(s => s.cancelManualRotate);
+  const equipment = useDesignStore(s => s.design?.equipment ?? NO_EQUIP);
+  const design = useDesignStore(s => s.design);
+  const { gl } = useThree();
+  const shiftRef = useRef(false);
+  const draggingRef = useRef(false);
+
+  const fence = design?.fence ?? [];
+  const fb = useMemo(() => {
+    if (!fence.length) return { minX: -500, maxX: 500, minY: -500, maxY: 500 };
+    return {
+      minX: Math.min(...fence.map(p => p.x)),
+      maxX: Math.max(...fence.map(p => p.x)),
+      minY: Math.min(...fence.map(p => p.y)),
+      maxY: Math.max(...fence.map(p => p.y)),
+    };
+  }, [fence]);
+
+  const planePt = (e: { point: THREE.Vector3 }): Pt => ({ x: e.point.x, y: -e.point.z });
+
+  useEffect(() => {
+    if (!session) return;
+    onDraggingChange(true);
+    gl.domElement.style.cursor = 'crosshair';
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') shiftRef.current = e.type === 'keydown';
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        draggingRef.current = false;
+        cancelManualRotate();
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        draggingRef.current = false;
+        const why = commitManualRotate();
+        if (why) toast.error(friendlyRejectReason(why));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    return () => {
+      draggingRef.current = false;
+      onDraggingChange(false);
+      gl.domElement.style.cursor = '';
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
+    };
+  }, [session, gl, onDraggingChange, cancelManualRotate, commitManualRotate]);
+
+  const eqById = useMemo(() => {
+    const m = new Map<string, PlacedEquipment>();
+    for (const eq of equipment) m.set(eq.id, eq);
+    return m;
+  }, [equipment]);
+
+  if (!session) return null;
+
+  const ghosts = session.startPoses.map(st => {
+    const r = (session.deltaDeg * Math.PI) / 180;
+    const c = Math.cos(r), s = Math.sin(r);
+    const dx = st.x - session.cx, dy = st.y - session.cy;
+    const x = session.cx + dx * c - dy * s;
+    const y = session.cy + dx * s + dy * c;
+    const angle = ((st.angleDeg + session.deltaDeg) % 360 + 360) % 360;
+    const eq = eqById.get(st.id);
+    return {
+      id: st.id,
+      x, y,
+      length: eq?.length ?? 10,
+      width: eq?.width ?? 4,
+      height: eq?.height ?? 8,
+      rotation: (angle * Math.PI) / 180,
+    };
+  });
+
+  return (
+    <group>
+      <mesh
+        position={[(fb.minX + fb.maxX) / 2, 3, -(fb.minY + fb.maxY) / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        onPointerDown={e => {
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          gl.domElement.setPointerCapture(e.pointerId);
+          draggingRef.current = true;
+          // First call sets startAngleRad baseline without applying a delta.
+          previewManualRotate(planePt(e), shiftRef.current || e.shiftKey);
+        }}
+        onPointerMove={e => {
+          if (!draggingRef.current) return;
+          e.stopPropagation();
+          previewManualRotate(planePt(e), shiftRef.current || e.shiftKey);
+        }}
+        onPointerUp={e => {
+          if (e.button !== 0 || !draggingRef.current) return;
+          e.stopPropagation();
+          draggingRef.current = false;
+          try { gl.domElement.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+          const why = commitManualRotate();
+          if (why) toast.error(friendlyRejectReason(why));
+        }}
+        onPointerCancel={e => {
+          if (!draggingRef.current) return;
+          draggingRef.current = false;
+          try { gl.domElement.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+          const why = commitManualRotate();
+          if (why) toast.error(friendlyRejectReason(why));
+        }}
+      >
+        <planeGeometry args={[(fb.maxX - fb.minX) * 4 || 2000, (fb.maxY - fb.minY) * 4 || 2000]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh position={[session.cx, 1.2, -session.cy]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[2.5, 20]} />
+        <meshBasicMaterial color="#22d3ee" transparent opacity={0.7} side={THREE.DoubleSide} />
+      </mesh>
+      {ghosts.map(g => (
+        <mesh
+          key={`rot-ghost-${g.id}`}
+          position={[g.x, g.height / 2, -g.y]}
+          rotation={[0, g.rotation, 0]}
+        >
+          <boxGeometry args={[g.length, g.height, g.width]} />
+          <meshStandardMaterial color="#22d3ee" transparent opacity={0.4} depthWrite={false} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/** Left-drag moves a placed manual item (or the active named group). Right-click opens delete / duplicate (and rotate for gate/roads).
+ * Roads are frozen unless the Road palette is armed. While Select area is armed, hit meshes are omitted
+ * so the marquee is screenshot-style. */
 function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d: boolean) => void; onMenu: (m: ItemMenu | null) => void }) {
   const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const selectArmed = useDesignStore(s => s.manualSelectTool);
+  const roadArmed = useDesignStore(s => s.manualPlaceItem === 'road');
+  const activeManualGroupId = useDesignStore(s => s.activeManualGroupId);
+  const rotateArmed = useDesignStore(s => !!s.manualRotateSession);
   // Stable empty fallbacks — a fresh [] each snapshot causes infinite re-renders
   // (useSyncExternalStore getSnapshot must be referentially stable).
   const equipment = useDesignStore(s =>
@@ -7430,7 +7564,11 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
   useEffect(() => {
     if (!manual) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Delete' || e.key === 'Backspace') {
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (
+        t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable
+      );
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) {
         if (!selectionRef.current.length) return;
         e.preventDefault();
         removeManualSelection();
@@ -7502,7 +7640,8 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
     if (e.button !== 0) return;
     e.stopPropagation();
     onMenu(null);
-    const group = id !== 'gate' && selSet.has(id) && selectionIds.length > 1;
+    // Active named group (or multi-selection): drag any member moves the whole set.
+    const group = id !== 'gate' && selSet.has(id) && (selectionIds.length > 1 || !!activeManualGroupId);
     drag.current = {
       id,
       gx: center.x - hit.x,
@@ -7517,9 +7656,12 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
     if (controlsRef.current) controlsRef.current.enabled = false;
   };
 
+  // Selection chrome always renders; hit meshes omit while Select or Rotate is armed.
+  const interactive = !selectArmed && !rotateArmed;
+
   return (
     <group>
-      {equipment.map(eq => (
+      {interactive && equipment.map(eq => (
         <mesh
           key={eq.id}
           position={[eq.x + (selSet.has(eq.id) ? gdx : 0), Math.max(eq.height, 1) / 2, -(eq.y + (selSet.has(eq.id) ? gdy : 0))]}
@@ -7531,10 +7673,11 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
           <meshBasicMaterial transparent opacity={0} depthWrite={false} />
         </mesh>
       ))}
-      {roads.map(rd => (
+      {/* Road layer: frozen unless Road palette is armed. */}
+      {interactive && roadArmed && roads.map(rd => (
         <mesh
           key={rd.id ?? `${rd.x},${rd.y}`}
-          position={[rd.x + (rd.id && selSet.has(rd.id) ? gdx : 0), 0.6, -(rd.y + (rd.id && selSet.has(rd.id) ? gdy : 0))]}
+          position={[rd.x, 0.6, -rd.y]}
           rotation={[-Math.PI / 2, 0, -rd.rotation]}
           onPointerDown={e => {
             if (!rd.id) return;
@@ -7546,7 +7689,7 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
           <meshBasicMaterial transparent opacity={0} depthWrite={false} />
         </mesh>
       ))}
-      {gate && (
+      {interactive && gate && (
         <mesh
           position={[gate.x, 4, -gate.y]}
           rotation={[0, gate.rotation, 0]}
@@ -7567,21 +7710,6 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
         return (
           <Line
             key={`msel-${eq.id}`}
-            points={[corner(-hx, -hy), corner(hx, -hy), corner(hx, hy), corner(-hx, hy), corner(-hx, -hy)]}
-            color="#22d3ee"
-            lineWidth={2.5}
-          />
-        );
-      })}
-      {roads.filter(rd => rd.id && selSet.has(rd.id)).map(rd => {
-        const hx = rd.length / 2, hy = rd.width / 2;
-        const c = Math.cos(rd.rotation), s = Math.sin(rd.rotation);
-        const ox = rd.x + gdx, oy = rd.y + gdy;
-        const corner = (lx: number, ly: number) => new THREE.Vector3(
-          ox + c * lx - s * ly, 0.9, -(oy + s * lx + c * ly));
-        return (
-          <Line
-            key={`msel-${rd.id}`}
             points={[corner(-hx, -hy), corner(hx, -hy), corner(hx, hy), corner(-hx, hy), corner(-hx, -hy)]}
             color="#22d3ee"
             lineWidth={2.5}
@@ -8947,6 +9075,7 @@ export default function DesignScene() {
             <DesignContent design={design} editMode={editMode} realistic={realisticModels && viewMode !== '2d'} is3D={viewMode === '3d'} cad={viewMode === 'cad'} onDraggingChange={setDragging} editTool={editTool} onEditToolChange={setEditTool} zoneKind={zoneKind} islandPairs={islandPairs} placeKind={placeKind} placeAug={placeAug} placeAuxGear={placeAuxGear} placeEquipType={placeEquipType} placeAngleDeg={placeAngleDeg} placeSnap={placeSnap} roadDrawWidth={roadDrawWidth} onSelectedIslandChange={setSelIsland} onSelectedTargetChange={setNudgeTarget} onSelectedEquipChange={setSelEquip} onRoadSelectionChange={setRoadSelInfo} cadLayerVis={cadLayerVis} onSelectText={setCadSelectedText} />
             <ManualSiteGrid />
             <ManualSelectLayer onDraggingChange={setDragging} />
+            <ManualRotateLayer onDraggingChange={setDragging} />
             <PlacedItemHandles onDraggingChange={setDragging} onMenu={setItemMenu} />
             <PcsDrop onDraggingChange={setDragging} onGroundDown={() => setItemMenu(null)} realistic={realisticModels && viewMode !== '2d'} />
             <ManualRoadDraw onDraggingChange={setDragging} />
@@ -9030,13 +9159,19 @@ export default function DesignScene() {
                 Duplicate
               </button>
             )}
-            <button
-              type="button"
-              className="px-3 py-1.5 text-left text-xs text-slate-100 hover:bg-slate-700"
-              onClick={() => { useDesignStore.getState().rotateManualPlacement(itemMenu.id); setItemMenu(null); }}
-            >
-              Rotate
-            </button>
+            {(itemMenu.id === 'gate' || itemMenu.id.startsWith('mroad-')) && (
+              <button
+                type="button"
+                className="px-3 py-1.5 text-left text-xs text-slate-100 hover:bg-slate-700"
+                onClick={() => {
+                  const why = useDesignStore.getState().rotateManualPlacement(itemMenu.id);
+                  setItemMenu(null);
+                  if (why) toast.error(friendlyRejectReason(why));
+                }}
+              >
+                Rotate
+              </button>
+            )}
           </div>
         </>
       )}

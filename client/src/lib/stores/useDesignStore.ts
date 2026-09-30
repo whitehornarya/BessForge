@@ -6,7 +6,19 @@ import { analyzeReferenceDrawing, classifyTraceName, traceKindHeight, fitRectPos
 // Tag choices for the scene bulk-tag tool: any traceable equipment kind, a
 // normal drawn road, or a wide (entrance-width) road.
 export type BulkTagKind = TraceEquipKind | 'road' | 'wideRoad';
-import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PAIR_INNER_GAP_FT, A3_GAP_FT, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
+
+/** Transient mouse-rotate session for Manual Placement groups / items. */
+export type ManualRotateSession = {
+  memberIds: string[];
+  cx: number;
+  cy: number;
+  /** Pointer angle at first move; null until the cursor sets the baseline. */
+  startAngleRad: number | null;
+  startPoses: { id: string; x: number; y: number; angleDeg: number }[];
+  /** Live delta from start poses (degrees, CCW). */
+  deltaDeg: number;
+};
+import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PAIR_INNER_GAP_FT, A3_GAP_FT, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
 
 // Re-export the traced-road fingerprint helpers at their historical home:
 // the tombstone flow was built here, and external callers (tests) import
@@ -610,10 +622,10 @@ export const sanitizeLayoutEdits = (v: unknown): LayoutConstraints => {
       // nothing but the pose is stored.
       if (it.type !== undefined) {
         if (!isManualEquipmentType(it.type)) return [];
-        // Quarter-turns only; 0 stays absent so an unrotated item round-trips
-        // exactly as it was written.
+        // Free degrees (1° resolution) so mouse-rotate survives reload.
+        // Absent / 0 stays omitted so unrotated items stay byte-identical.
         const a = typeof it.angleDeg === 'number' && Number.isFinite(it.angleDeg)
-          ? ((Math.round(it.angleDeg / 90) * 90) % 360 + 360) % 360
+          ? ((Math.round(it.angleDeg) % 360) + 360) % 360
           : 0;
         return [{
           id: it.id, type: it.type, x: it.x, y: it.y,
@@ -679,6 +691,27 @@ export const sanitizeLayoutEdits = (v: unknown): LayoutConstraints => {
       // Cap sized for full-site KMZ traces (Big Iron: ~1,100 drawn units).
     }).slice(0, 4000);
     if (clean.length) out.placedEquipment = clean;
+  }
+  if (Array.isArray(e.manualGroups)) {
+    const peqIds = new Set((out.placedEquipment ?? []).map(p => p.id));
+    const seen = new Set<string>();
+    const clean = (e.manualGroups as unknown[]).flatMap(r => {
+      if (!r || typeof r !== 'object') return [];
+      const g = r as { id?: unknown; name?: unknown; memberIds?: unknown };
+      if (typeof g.id !== 'string' || !/^mgrp-\d+$/.test(g.id) || seen.has(g.id)) return [];
+      seen.add(g.id);
+      const name = typeof g.name === 'string' && g.name.trim()
+        ? g.name.trim().slice(0, 48)
+        : g.id;
+      if (!Array.isArray(g.memberIds)) return [];
+      const memberIds = [...new Set(
+        (g.memberIds as unknown[]).filter((id): id is string =>
+          typeof id === 'string' && /^peq-\d+$/.test(id) && peqIds.has(id))
+      )];
+      if (!memberIds.length) return [];
+      return [{ id: g.id, name, memberIds }];
+    }).slice(0, 200);
+    if (clean.length) out.manualGroups = clean;
   }
   {
     const r = e.ringOffsets as Record<string, unknown> | null | undefined;
@@ -3482,16 +3515,25 @@ interface DesignState {
   // rectangle select and clears palette drop / road draw.
   manualSelectTool: boolean;
   setManualSelectTool: (on: boolean) => void;
-  // Ids currently selected for group duplicate / move / delete (peq-* and
-  // custom road ids). Gate is never included. Session UI.
+  // Ids highlighted for chrome / drag (usually the active group's members).
+  // Equipment peq-* only for named groups. Session UI.
   manualSelectionIds: string[];
   setManualSelectionIds: (ids: string[]) => void;
   clearManualSelection: () => void;
-  // When true, the current multi-selection is "grouped": empty marquee does
-  // not replace it; Esc / Ungroup clears. Session UI, not persisted.
-  manualSelectionLocked: boolean;
-  groupManualSelection: () => void;
-  ungroupManualSelection: () => void;
+  // Active named group ("layer") — null means no group layer is armed.
+  activeManualGroupId: string | null;
+  setActiveManualGroup: (id: string | null) => void;
+  createManualGroup: (memberIds: string[], name?: string) => string | null;
+  renameManualGroup: (id: string, name: string) => void;
+  dissolveManualGroup: (id: string) => void;
+  // Interactive mouse-rotate session for peq members (group or single).
+  manualRotateSession: ManualRotateSession | null;
+  beginManualRotate: (memberIds: string[]) => string | null;
+  previewManualRotate: (pointer: Pt, snap15: boolean) => void;
+  /** Set live rotate delta without committing (panel stepper / typed angle). */
+  setManualRotateDelta: (deg: number) => void;
+  commitManualRotate: () => string | null;
+  cancelManualRotate: () => void;
   // Manual Placement Road draw width (24 / 30 / 36). Session UI; Edit Layout
   // keeps its own local roadDrawWidth chrome.
   manualRoadWidth: 24 | 30 | 36;
@@ -4180,6 +4222,8 @@ interface DesignState {
   duplicateManualSelection: () => string | null;
   moveManualSelection: (dx: number, dy: number) => string | null;
   removeManualSelection: () => void;
+  /** Rotate active group / selection (or session start poses) by deltaDeg about centroid. */
+  rotateManualGroup: (deltaDeg: number, session?: ManualRotateSession | null) => string | null;
 
   // ---- scene bulk tagging (manual auto-fill fallback) ---------------------
   // Arm a tag, then marquee-drag over the reference drawing in the scene:
@@ -4438,22 +4482,142 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   setManualSelectTool: (on: boolean): void => set({
     manualSelectTool: on,
     ...(on ? { manualPlaceItem: null } : {}),
-    // Disarming Select keeps the selection so Duplicate / Group drag still work.
   }),
   manualSelectionIds: [] as string[],
   setManualSelectionIds: (ids: string[]): void => set({
-    manualSelectionIds: [...new Set(ids.filter(id => id && id !== 'gate'))],
-    // A fresh marquee selection is unlocked until Group is clicked.
-    manualSelectionLocked: false,
+    manualSelectionIds: [...new Set(ids.filter(id => id && id !== 'gate' && !id.startsWith('mroad-')))],
   }),
-  clearManualSelection: (): void => set({ manualSelectionIds: [], manualSelectionLocked: false }),
-  manualSelectionLocked: false,
-  groupManualSelection: (): void => {
-    const ids = get().manualSelectionIds.filter(id => id !== 'gate');
-    if (ids.length < 2) return;
-    set({ manualSelectionLocked: true, manualSelectionIds: ids });
+  clearManualSelection: (): void => set({
+    manualSelectionIds: [],
+    activeManualGroupId: null,
+  }),
+  activeManualGroupId: null as string | null,
+  setActiveManualGroup: (id: string | null): void => {
+    if (!id) {
+      set({ activeManualGroupId: null, manualSelectionIds: [] });
+      return;
+    }
+    const g = (get().layoutEdits.manualGroups ?? []).find(x => x.id === id);
+    if (!g) {
+      set({ activeManualGroupId: null, manualSelectionIds: [] });
+      return;
+    }
+    set({ activeManualGroupId: g.id, manualSelectionIds: [...g.memberIds] });
   },
-  ungroupManualSelection: (): void => set({ manualSelectionIds: [], manualSelectionLocked: false }),
+  createManualGroup: (memberIds: string[], name?: string): string | null => {
+    const peqIds = new Set((get().layoutEdits.placedEquipment ?? []).map(p => p.id));
+    const members = [...new Set(memberIds.filter(id => peqIds.has(id)))];
+    if (!members.length) return 'Nothing to group.';
+    const prev = get().layoutEdits;
+    let n = 1;
+    for (const g of prev.manualGroups ?? []) {
+      const m = /^mgrp-(\d+)$/.exec(g.id);
+      if (m) n = Math.max(n, parseInt(m[1], 10) + 1);
+    }
+    const id = `mgrp-${n}`;
+    const label = (name && name.trim()) ? name.trim().slice(0, 48) : `Group ${n}`;
+    const before = snapOf(get(), `Created ${label}`);
+    set({
+      layoutEdits: {
+        ...prev,
+        manualGroups: [...(prev.manualGroups ?? []), { id, name: label, memberIds: members }],
+      },
+      activeManualGroupId: id,
+      manualSelectionIds: members,
+    });
+    get().pushHistory(before);
+    return null;
+  },
+  renameManualGroup: (id: string, name: string): void => {
+    const prev = get().layoutEdits;
+    const groups = prev.manualGroups ?? [];
+    if (!groups.some(g => g.id === id)) return;
+    const label = name.trim().slice(0, 48) || id;
+    const before = snapOf(get(), `Renamed group`);
+    set({
+      layoutEdits: {
+        ...prev,
+        manualGroups: groups.map(g => g.id === id ? { ...g, name: label } : g),
+      },
+    });
+    get().pushHistory(before);
+  },
+  dissolveManualGroup: (id: string): void => {
+    const prev = get().layoutEdits;
+    const groups = prev.manualGroups ?? [];
+    if (!groups.some(g => g.id === id)) return;
+    const before = snapOf(get(), 'Dissolved group');
+    const remaining = groups.filter(g => g.id !== id);
+    const next = { ...prev };
+    if (remaining.length) next.manualGroups = remaining; else delete next.manualGroups;
+    set({
+      layoutEdits: next,
+      ...(get().activeManualGroupId === id
+        ? { activeManualGroupId: null, manualSelectionIds: [] }
+        : {}),
+    });
+    get().pushHistory(before);
+  },
+  manualRotateSession: null as ManualRotateSession | null,
+  beginManualRotate: (memberIds: string[]): string | null => {
+    const peqs = get().layoutEdits.placedEquipment ?? [];
+    const byId = new Map(peqs.map(s => [s.id, s]));
+    const ids = [...new Set(memberIds.filter(id => byId.has(id)))];
+    if (!ids.length) return 'Nothing to rotate.';
+    let sx = 0, sy = 0;
+    const startPoses = ids.map(id => {
+      const s = byId.get(id)!;
+      sx += s.x;
+      sy += s.y;
+      return { id, x: s.x, y: s.y, angleDeg: placedSpecAngle(s) };
+    });
+    set({
+      manualRotateSession: {
+        memberIds: ids,
+        cx: sx / ids.length,
+        cy: sy / ids.length,
+        startAngleRad: null,
+        startPoses,
+        deltaDeg: 0,
+      },
+      manualSelectionIds: ids,
+    });
+    return null;
+  },
+  previewManualRotate: (pointer: Pt, snap15: boolean): void => {
+    const sess = get().manualRotateSession;
+    if (!sess) return;
+    const ang = Math.atan2(pointer.y - sess.cy, pointer.x - sess.cx);
+    if (sess.startAngleRad == null) {
+      set({ manualRotateSession: { ...sess, startAngleRad: ang, deltaDeg: 0 } });
+      return;
+    }
+    let deg = ((ang - sess.startAngleRad) * 180) / Math.PI;
+    // Normalize to (-180, 180]
+    deg = ((deg + 180) % 360 + 360) % 360 - 180;
+    const step = snap15 ? 15 : 1;
+    const snapped = Math.round(deg / step) * step;
+    if (snapped === sess.deltaDeg) return;
+    set({ manualRotateSession: { ...sess, deltaDeg: snapped } });
+  },
+  setManualRotateDelta: (deg: number): void => {
+    const sess = get().manualRotateSession;
+    if (!sess || !Number.isFinite(deg)) return;
+    // Normalize to (-180, 180] and round to 1° — matches mouse preview.
+    let next = ((deg + 180) % 360 + 360) % 360 - 180;
+    next = Math.round(next);
+    if (next === sess.deltaDeg) return;
+    set({ manualRotateSession: { ...sess, deltaDeg: next } });
+  },
+  commitManualRotate: (): string | null => {
+    const sess = get().manualRotateSession;
+    if (!sess) return 'Not rotating.';
+    const delta = sess.deltaDeg;
+    set({ manualRotateSession: null });
+    if (!delta) return null;
+    return get().rotateManualGroup(delta, sess);
+  },
+  cancelManualRotate: (): void => set({ manualRotateSession: null }),
   manualRoadWidth: 24 as 24 | 30 | 36,
   setManualRoadWidth: (w: 24 | 30 | 36): void => set({ manualRoadWidth: w }),
   manualSnapFt: 0,
@@ -7574,6 +7738,49 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     return null;
   },
 
+  rotateManualGroup: (deltaDeg: number, session?: ManualRotateSession | null): string | null => {
+    if (!Number.isFinite(deltaDeg) || !deltaDeg) return null;
+    const prev = get().layoutEdits;
+    const sess = session ?? get().manualRotateSession;
+    let startPoses = sess?.startPoses;
+    let cx = sess?.cx;
+    let cy = sess?.cy;
+    if (!startPoses?.length) {
+      const activeId = get().activeManualGroupId;
+      const active = activeId
+        ? (prev.manualGroups ?? []).find(g => g.id === activeId)
+        : null;
+      const ids = (active?.memberIds ?? get().manualSelectionIds)
+        .filter(id => id !== 'gate' && !id.startsWith('mroad-'));
+      const peqs = (prev.placedEquipment ?? []).filter(s => ids.includes(s.id));
+      if (!peqs.length) return 'Nothing to rotate.';
+      let sx = 0, sy = 0;
+      startPoses = peqs.map(s => {
+        sx += s.x;
+        sy += s.y;
+        return { id: s.id, x: s.x, y: s.y, angleDeg: placedSpecAngle(s) };
+      });
+      cx = sx / peqs.length;
+      cy = sy / peqs.length;
+    }
+    const byStart = new Map(startPoses.map(p => [p.id, p]));
+    const before = snapOf(get(), `Rotated ${startPoses.length} placed item${startPoses.length === 1 ? '' : 's'} ${deltaDeg > 0 ? '+' : ''}${Math.round(deltaDeg)}°`);
+    set({
+      layoutEdits: {
+        ...prev,
+        placedEquipment: (prev.placedEquipment ?? []).map(s => {
+          const st = byStart.get(s.id);
+          if (!st) return s;
+          const pos = rotatePtAbout({ x: st.x, y: st.y }, cx as number, cy as number, deltaDeg);
+          return setPlacedSpecAngle(movePlacedSpec(s, pos.x, pos.y), st.angleDeg + deltaDeg);
+        }),
+      },
+    });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
+    return null;
+  },
+
   duplicateManualPlacement: (id: string): string | null => {
     const prev = get().layoutEdits;
     const road = (prev.customRoads ?? []).find(r => r.id === id);
@@ -7619,59 +7826,50 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   },
 
   duplicateManualSelection: (): string | null => {
-    const ids = get().manualSelectionIds.filter(id => id !== 'gate');
+    // Duplicate the active named group (or current peq selection) as a new group.
+    const activeId = get().activeManualGroupId;
+    const active = activeId
+      ? (get().layoutEdits.manualGroups ?? []).find(g => g.id === activeId)
+      : null;
+    const ids = (active?.memberIds ?? get().manualSelectionIds)
+      .filter(id => id !== 'gate' && !id.startsWith('mroad-'));
     if (!ids.length) return 'Nothing selected.';
     const prev = get().layoutEdits;
     const idSet = new Set(ids);
-    const roads = (prev.customRoads ?? []).filter(r => idSet.has(r.id));
     const peqs = (prev.placedEquipment ?? []).filter(s => idSet.has(s.id));
-    if (!roads.length && !peqs.length) return 'Nothing selected.';
-    // Small shared nudge so copies sit on the originals but are visibly offset.
+    if (!peqs.length) return 'Nothing selected.';
     const OX = 10;
     const OY = 10;
-    const keepLocked = get().manualSelectionLocked && ids.length >= 2;
-    let roadN = 1;
-    for (const r of prev.customRoads ?? []) {
-      const m = /^mroad-(\d+)$/.exec(r.id);
-      if (m) roadN = Math.max(roadN, parseInt(m[1], 10) + 1);
-    }
     let peqN = 1;
     for (const p of prev.placedEquipment ?? []) {
       const m = /^peq-(\d+)$/.exec(p.id);
       if (m) peqN = Math.max(peqN, parseInt(m[1], 10) + 1);
     }
-    const newRoadIds: string[] = [];
+    let grpN = 1;
+    for (const g of prev.manualGroups ?? []) {
+      const m = /^mgrp-(\d+)$/.exec(g.id);
+      if (m) grpN = Math.max(grpN, parseInt(m[1], 10) + 1);
+    }
     const newPeqIds: string[] = [];
-    const clonedRoads = roads.map(r => {
-      const id = `mroad-${roadN++}`;
-      newRoadIds.push(id);
-      return {
-        ...r,
-        id,
-        pts: r.pts.map(p => ({ x: p.x + OX, y: p.y + OY })),
-      };
-    });
     const clonedPeqs = peqs.map(s => {
       const id = `peq-${peqN++}`;
       newPeqIds.push(id);
-      // Shared group offset (not per-item length+2) so relative layout holds.
       return { ...s, id, x: s.x + OX, y: s.y + OY };
     });
-    const newIds = [...newRoadIds, ...newPeqIds];
-    const before = snapOf(get(), `Duplicated ${ids.length} placed item${ids.length === 1 ? '' : 's'}`);
+    const newGroupId = `mgrp-${grpN}`;
+    const newGroupName = active ? `${active.name} copy` : `Group ${grpN}`;
+    const before = snapOf(get(), `Duplicated ${peqs.length} placed item${peqs.length === 1 ? '' : 's'}`);
     set({
       layoutEdits: {
         ...prev,
-        ...(clonedRoads.length || (prev.customRoads ?? []).length
-          ? { customRoads: [...(prev.customRoads ?? []), ...clonedRoads] }
-          : {}),
-        ...(clonedPeqs.length || (prev.placedEquipment ?? []).length
-          ? { placedEquipment: [...(prev.placedEquipment ?? []), ...clonedPeqs] }
-          : {}),
+        placedEquipment: [...(prev.placedEquipment ?? []), ...clonedPeqs],
+        manualGroups: [
+          ...(prev.manualGroups ?? []),
+          { id: newGroupId, name: newGroupName.slice(0, 48), memberIds: newPeqIds },
+        ],
       },
-      manualSelectionIds: newIds,
-      // Copies stay selected for group drag; preserve lock if the source was grouped.
-      manualSelectionLocked: keepLocked && newIds.length >= 2,
+      activeManualGroupId: newGroupId,
+      manualSelectionIds: newPeqIds,
     });
     get().regenerate({ sync: true });
     get().pushHistory(before);
@@ -7681,27 +7879,24 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   moveManualSelection: (dx: number, dy: number): string | null => {
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return 'Invalid position.';
     if (!dx && !dy) return null;
-    const ids = get().manualSelectionIds.filter(id => id !== 'gate');
+    const activeId = get().activeManualGroupId;
+    const active = activeId
+      ? (get().layoutEdits.manualGroups ?? []).find(g => g.id === activeId)
+      : null;
+    const ids = (active?.memberIds ?? get().manualSelectionIds)
+      .filter(id => id !== 'gate' && !id.startsWith('mroad-'));
     if (!ids.length) return 'Nothing selected.';
     const prev = get().layoutEdits;
     const idSet = new Set(ids);
-    const hasRoad = (prev.customRoads ?? []).some(r => idSet.has(r.id));
     const hasPeq = (prev.placedEquipment ?? []).some(s => idSet.has(s.id));
-    if (!hasRoad && !hasPeq) return 'Nothing selected.';
+    if (!hasPeq) return 'Nothing selected.';
     const before = snapOf(get(), `Moved ${ids.length} placed item${ids.length === 1 ? '' : 's'}`);
     set({
       layoutEdits: {
         ...prev,
-        ...(hasRoad ? {
-          customRoads: (prev.customRoads ?? []).map(r => idSet.has(r.id)
-            ? { ...r, pts: r.pts.map(p => ({ x: p.x + dx, y: p.y + dy })) }
-            : r),
-        } : {}),
-        ...(hasPeq ? {
-          placedEquipment: (prev.placedEquipment ?? []).map(s => idSet.has(s.id)
-            ? { ...s, x: s.x + dx, y: s.y + dy }
-            : s),
-        } : {}),
+        placedEquipment: (prev.placedEquipment ?? []).map(s => idSet.has(s.id)
+          ? { ...s, x: s.x + dx, y: s.y + dy }
+          : s),
       },
     });
     get().regenerate({ sync: true });
@@ -7710,17 +7905,24 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   },
 
   removeManualSelection: (): void => {
-    const ids = get().manualSelectionIds.filter(id => id !== 'gate');
+    const activeId = get().activeManualGroupId;
+    const active = activeId
+      ? (get().layoutEdits.manualGroups ?? []).find(g => g.id === activeId)
+      : null;
+    const ids = (active?.memberIds ?? get().manualSelectionIds)
+      .filter(id => id !== 'gate' && !id.startsWith('mroad-'));
     if (!ids.length) return;
     const prev = get().layoutEdits;
     const idSet = new Set(ids);
-    const remainingRoads = (prev.customRoads ?? []).filter(r => !idSet.has(r.id));
     const remainingPeq = (prev.placedEquipment ?? []).filter(s => !idSet.has(s.id));
+    const remainingGroups = (prev.manualGroups ?? [])
+      .map(g => ({ ...g, memberIds: g.memberIds.filter(id => !idSet.has(id)) }))
+      .filter(g => g.memberIds.length > 0);
     const before = snapOf(get(), `Removed ${ids.length} placed item${ids.length === 1 ? '' : 's'}`);
     const next = { ...prev };
-    if (remainingRoads.length) next.customRoads = remainingRoads; else delete next.customRoads;
     if (remainingPeq.length) next.placedEquipment = remainingPeq; else delete next.placedEquipment;
-    set({ layoutEdits: next, manualSelectionIds: [], manualSelectionLocked: false });
+    if (remainingGroups.length) next.manualGroups = remainingGroups; else delete next.manualGroups;
+    set({ layoutEdits: next, manualSelectionIds: [], activeManualGroupId: null });
     get().regenerate({ sync: true });
     get().pushHistory(before);
   },
@@ -8662,7 +8864,18 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       const r = { ...next.equipRots }; delete r[id];
       if (Object.keys(r).length) next.equipRots = r; else delete next.equipRots;
     }
-    set({ layoutEdits: next });
+    if (next.manualGroups?.length) {
+      const groups = next.manualGroups
+        .map(g => ({ ...g, memberIds: g.memberIds.filter(m => m !== id) }))
+        .filter(g => g.memberIds.length > 0);
+      if (groups.length) next.manualGroups = groups; else delete next.manualGroups;
+    }
+    const activeId = get().activeManualGroupId;
+    const stillActive = activeId && (next.manualGroups ?? []).some(g => g.id === activeId);
+    set({
+      layoutEdits: next,
+      ...(!stillActive && activeId ? { activeManualGroupId: null, manualSelectionIds: [] } : {}),
+    });
     get().regenerate({ sync: true });
     get().pushHistory(before);
   },

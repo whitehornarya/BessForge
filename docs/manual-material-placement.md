@@ -72,7 +72,7 @@ Manual drops do not change achieved MW or `tracedPcsUnits`. Feeder routing stays
 
 Left click on a placed item drags that item. Releasing rewrites its stored `x` / `y` and does not add another copy. A new copy is only created by dragging on empty ground while that palette button is armed. Free placement is the default.
 
-Right click opens **Delete**, **Duplicate** (offset so the copy is not stacked on the original), and **Rotate** (one quarter turn). The gate can be deleted and rotated; a second gate replaces the first, so it has no duplicate. Roads move, rotate, duplicate, and delete the same way.
+Right click opens **Delete**, **Duplicate** (offset so the copy is not stacked on the original), and for gate/roads **Rotate** (one quarter turn). Equipment rotation uses the Groups panel **Rotate** button (click-drag / release). The gate can be deleted and rotated; a second gate replaces the first, so it has no duplicate. Roads move, rotate, duplicate, and delete the same way.
 
 ## Slice 6 — Grid or free (done)
 
@@ -81,16 +81,17 @@ A placement-mode control on Manual Placement, above the palette. The choice is s
 - **Grid** draws black lines across the fenced site and snaps a new drop, a road endpoint, or a move so the item center aligns to that grid. Spacing is 0.1, 0.5, 1, 5, 10, or 20 ft, using `snapPlacementCenter` in [`layoutEngine.ts`](../client/src/lib/nextera/layoutEngine.ts). Turning Grid on starts at `PLACEMENT_SNAP_DEFAULT_FT` (1 ft).
 - **Free** keeps the pointer position. `snapPlacementCenter` with a step of 0 records it to 0.01 ft and does not snap to the grid.
 
-## Slice 7a — Multi-select duplicate (done)
+## Slice 7a — Named groups + road layer (done)
 
-**Select area** on Manual Placement arms a marquee. Drag a rectangle; equipment centers and road midpoints inside become the selection (cyan outlines). Gate is never selected. Disarming Select keeps the selection until Escape / Ungroup.
+**Select area** is screenshot-style: while armed, you only draw a rubber-band (equipment under the pointer is not clickable). On release, equipment centers inside the box become a **named group** (`layoutEdits.manualGroups`). Roads are never marquee-grouped.
 
-- **Duplicate** clones the selection with a shared **+10 ft X/Y** nudge (copies sit on the originals but are visibly offset), one undo step, and selects **only the new ids** so you can drag the new group immediately.
-- Drag any selected item to move the selection together (`moveManualSelection`).
-- **Group** (when 2+ selected) locks the selection so a new marquee cannot clear it; **Ungroup** or Escape clears lock + selection. Duplicating a locked group leaves the copies locked.
-- **Delete** (panel or Delete key) removes the selection in one step.
+**Roads** are a separate frozen layer: road handles only work when the **Road** palette button is armed.
 
-Align X / Y / rotation remains Slice 7 later.
+**Groups** dropdown lists named groups. Selecting one activates that group as a moveable unit (cyan chrome). Drag any member to move the whole group. Rename inline (Backspace edits the name; it does not delete the group); **Dissolve** drops the group record but keeps members; **Duplicate** offsets copies (+10 ft X/Y) into a new named group.
+
+**Rotate** is a Groups panel button (no right-click for equipment). Click **Rotate** to arm, then **click-drag** on the plan to turn about the group/item centroid (1° snap; Shift = 15°); **release** to commit. The panel also shows an editable angle field with **− / +** steppers (±90°); Enter commits after typing an angle; Esc cancels. Gate and roads still use discrete +90° from the right-click menu.
+
+Escape clears the active group highlight (does not delete the group). Align X / Y / rotation remains Slice 7 later.
 
 ## Slice 7 — Align a group
 
@@ -107,4 +108,4 @@ Cases live in [`scripts/nextera.test.ts`](../scripts/nextera.test.ts).
 - Slice 4: a dropped PCS stays on its catalog footprint and adds no roads or MW. A trace apply does not move that point.
 - Slice 5: dragging a placed PCS changes that id’s pose and does not add a second id; delete removes it; duplicate adds one offset copy; rotate changes `rotationDeg` by 90.
 - Slice 6: grid mode snaps a drop onto the grid; free mode keeps the raw point.
-- Slice 7a: marquee selects multiple peq/roads; Duplicate offsets copies (+10,+10) and selects them; Group locks selection; group drag moves them together.
+- Slice 7a: Select area auto-creates named groups (equipment only); roads frozen unless Road armed; active group moves as a unit; Duplicate creates a new named group; Rotate is a panel button with click-drag/release about the group centroid and an editable ±90° angle stepper; renaming is Backspace-safe.
