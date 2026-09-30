@@ -66,7 +66,7 @@ import { showcaseFrameCount, showcaseFrameMs } from '../lib/tourShowcaseTimeline
 // Signed area of a plan polygon (positive = CCW)
 import { partitionSceneEquipment } from '../lib/nextera/sceneEquipment';
 import { PROPERTY_LINE_HEX, PROPERTY_LINE_DIM_HEX, drawingLayerColor, showSeparateFence } from '../lib/nextera/propertyLineColor';
-import { snapToGrid, snapToAugLattice, composeRowMove, validateRowShift, validateAisleShift, validateEquipmentShift, laydownFitReason, futureAugFitReason, filletPolylineStrip, drawnRoadLegalRegion, evaluateDrawnRoad, roadNetworkIslandPolys, DRAWN_ROAD_MIN_NEW_SQFT, roadRegionFromNetwork, roadSpanCutPoly, roadPieceAt, pointOnRoad, pointOnRoadFast, ringSpanCutAt, roadPathBetween, roadCorridorCutPoly, roadRunAt, type RoadPick, tracedRoadRendersUnpaved, tracedRoadFingerprint, tracedRoadFingerprintMatch, placedIslandPlanDims, placedIslandFootprints, composePlacedIsland, previewPlacedIslandDrop, placedEquipmentFootprints, composePlacedEquipment, previewPlacedEquipmentDrop, isManualEquipmentId, isManualEquipmentSpec, MANUAL_EQUIPMENT_TYPES, MANUAL_EQUIPMENT_CATALOG, type ManualEquipmentType, type PlacedIslandSpec, snapPlacementCenter, PLACEMENT_SNAP_STEPS_FT, PLACEMENT_SNAP_DEFAULT_FT, PLACEMENT_NUDGE_FT, ISLAND_PCS_PER_SIDE, MIN_LAYDOWN_EDGE_FT, GATE_PIN_SNAP_FT, equipmentForRouting } from '../lib/nextera/layoutEngine';
+import { snapToGrid, snapToAugLattice, composeRowMove, validateRowShift, validateAisleShift, validateEquipmentShift, laydownFitReason, futureAugFitReason, filletPolylineStrip, drawnRoadLegalRegion, evaluateDrawnRoad, roadNetworkIslandPolys, DRAWN_ROAD_MIN_NEW_SQFT, roadRegionFromNetwork, roadSpanCutPoly, roadPieceAt, pointOnRoad, pointOnRoadFast, ringSpanCutAt, roadPathBetween, roadCorridorCutPoly, roadRunAt, type RoadPick, tracedRoadRendersUnpaved, tracedRoadFingerprint, tracedRoadFingerprintMatch, placedIslandPlanDims, placedIslandFootprints, composePlacedIsland, previewPlacedIslandDrop, placedEquipmentFootprints, composePlacedEquipment, previewPlacedEquipmentDrop, isManualEquipmentId, isManualEquipmentSpec, MANUAL_EQUIPMENT_TYPES, MANUAL_EQUIPMENT_CATALOG, type ManualEquipmentType, type PlacedIslandSpec, snapPlacementCenter, PLACEMENT_SNAP_STEPS_FT, PLACEMENT_SNAP_DEFAULT_FT, PLACEMENT_NUDGE_FT, ISLAND_PCS_PER_SIDE, MIN_LAYDOWN_EDGE_FT, GATE_PIN_SNAP_FT, equipmentForRouting, composeManualPcsBatteries } from '../lib/nextera/layoutEngine';
 function polySignedArea(ps: { x: number; y: number }[]): number {
   return ps.reduce((s, p, i) => {
     const q = ps[(i + 1) % ps.length];
@@ -6911,9 +6911,12 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
   );
   const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
   const addPlacedGear = useDesignStore(s => s.addPlacedGear);
+  const addPlacedPcsBlock = useDesignStore(s => s.addPlacedPcsBlock);
   const addPlacedEquipment = useDesignStore(s => s.addPlacedEquipment);
   const setPlacedGate = useDesignStore(s => s.setPlacedGate);
   const manualSnapFt = useDesignStore(s => s.manualSnapFt);
+  const manualPcsBatteryCount = useDesignStore(s => s.manualPcsBatteryCount);
+  const hotClimate = useDesignStore(s => s.hotClimate);
   const snapFtRef = useRef(manualSnapFt);
   snapFtRef.current = manualSnapFt;
   const configId = useDesignStore(s => s.configId);
@@ -6926,28 +6929,47 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
   const raycaster = useRef(new THREE.Raycaster());
   const ndc = useRef(new THREE.Vector2());
 
-  const ghost = useMemo((): PlacedEquipment | null => {
-    if (!pos || !arm || arm.drop === 'gate') return null;
+  const ghosts = useMemo((): PlacedEquipment[] => {
+    if (!pos || !arm || arm.drop === 'gate') return [];
+    if (arm.drop === 'gear' && arm.kind === 'inverter' && (manualPcsBatteryCount === 2 || manualPcsBatteryCount === 3)) {
+      const config = getConfiguration(configId);
+      if (!config) return [];
+      const pcsClearance = hotClimate ? CLEARANCES.pcsHotClimate : CLEARANCES.pcsStandard;
+      try {
+        const c = composeManualPcsBatteries(
+          { x: pos.x, y: pos.y, rotationDeg: 0 },
+          manualPcsBatteryCount,
+          config,
+          pcsClearance,
+        );
+        return [
+          { ...c.pcs, id: 'place-ghost-pcs', label: 'PCS' },
+          ...c.batteries.map((b, i) => ({ ...b, id: `place-ghost-batt-${i}`, label: 'BESS' })),
+        ];
+      } catch {
+        return [];
+      }
+    }
     if (arm.drop === 'gear') {
       const spec = specForKind(arm.kind, getConfiguration(configId));
-      if (!spec) return null;
-      return {
+      if (!spec) return [];
+      return [{
         id: 'place-ghost',
         kind: arm.kind,
         label: arm.kind === 'bess' ? 'BESS' : 'PCS',
         x: pos.x, y: pos.y, rotation: 0,
         length: spec.dims.length, width: spec.dims.width, height: spec.dims.height,
-      };
+      }];
     }
     const cat = MANUAL_EQUIPMENT_CATALOG[arm.type];
-    return {
+    return [{
       id: 'place-ghost',
       kind: cat.kind,
       label: cat.short,
       x: pos.x, y: pos.y, rotation: 0,
       length: cat.dims.length, width: cat.dims.width, height: cat.dims.height,
-    };
-  }, [pos, arm, configId]);
+    }];
+  }, [pos, arm, configId, manualPcsBatteryCount, hotClimate]);
 
   const hitGround = useCallback((ev: PointerEvent): Pt | null => {
     const rect = gl.domElement.getBoundingClientRect();
@@ -7000,11 +7022,14 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
       setPos(null);
       if (!raw || !arm) return;
       const p = snapPlacementCenter(raw, snapFtRef.current);
+      const battCount = useDesignStore.getState().manualPcsBatteryCount;
       const why = arm.drop === 'gate'
         ? setPlacedGate(p.x, p.y)
-        : arm.drop === 'gear'
-          ? addPlacedGear(arm.kind, p.x, p.y)
-          : addPlacedEquipment(arm.type, { x: p.x, y: p.y });
+        : arm.drop === 'gear' && arm.kind === 'inverter'
+          ? addPlacedPcsBlock(p.x, p.y, 0, battCount)
+          : arm.drop === 'gear'
+            ? addPlacedGear(arm.kind, p.x, p.y)
+            : addPlacedEquipment(arm.type, { x: p.x, y: p.y });
       if (why) toast.error(friendlyRejectReason(why));
     };
     el.addEventListener('pointermove', move);
@@ -7015,7 +7040,7 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
     };
-  }, [gl, hitGround, onDraggingChange, addPlacedGear, addPlacedEquipment, setPlacedGate, arm]);
+  }, [gl, hitGround, onDraggingChange, addPlacedGear, addPlacedPcsBlock, addPlacedEquipment, setPlacedGate, arm]);
 
   if (!arm) return null;
   return (
@@ -7041,16 +7066,22 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
         <planeGeometry args={[200000, 200000]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
-      {ghost && (realistic && REALISTIC_KINDS.has(ghost.kind) ? (
+      {ghosts.length > 0 && (realistic && ghosts.every(g => REALISTIC_KINDS.has(g.kind)) ? (
         <Suspense fallback={null}>
-          <RealisticEquipment equipment={[ghost]} ghost />
+          <RealisticEquipment equipment={ghosts} ghost />
         </Suspense>
-      ) : ghost ? (
-        <mesh position={[ghost.x, ghost.height / 2, -ghost.y]}>
-          <boxGeometry args={[ghost.length, ghost.height, ghost.width]} />
-          <meshStandardMaterial color="#3f8f5f" transparent opacity={0.55} />
-        </mesh>
-      ) : null)}
+      ) : (
+        ghosts.map(g => (
+          <mesh
+            key={g.id}
+            position={[g.x, g.height / 2, -g.y]}
+            rotation={[0, g.rotation, 0]}
+          >
+            <boxGeometry args={[g.length, g.height, g.width]} />
+            <meshStandardMaterial color="#3f8f5f" transparent opacity={0.55} />
+          </mesh>
+        ))
+      ))}
       {arm.drop === 'gate' && pos && (
         <mesh position={[pos.x, 4, -pos.y]} rotation={[0, 0, 0]}>
           <boxGeometry args={[24, 8, 1.5]} />
@@ -7070,6 +7101,7 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
 function ManualRoadDraw({ onDraggingChange }: { onDraggingChange: (d: boolean) => void }) {
   const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
   const armed = useDesignStore(s => s.manualPlaceItem === 'road');
+  const selectArmed = useDesignStore(s => s.manualSelectTool);
   const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
   const addCustomRoad = useDesignStore(s => s.addCustomRoad);
   const roadDrawWidth = useDesignStore(s => s.manualRoadWidth);
@@ -7099,6 +7131,10 @@ function ManualRoadDraw({ onDraggingChange }: { onDraggingChange: (d: boolean) =
     setRoadCursor(null);
   }, [roadPts, addCustomRoad, roadDrawWidth]);
 
+  // Path drawing owns the ground plane only when Select is off — Select + Road
+  // together still unfreezes road handles; marquee needs the Select catcher.
+  const drawPlane = armed && !selectArmed;
+
   useEffect(() => {
     if (!manual || !armed) {
       setRoadPts([]);
@@ -7124,46 +7160,48 @@ function ManualRoadDraw({ onDraggingChange }: { onDraggingChange: (d: boolean) =
   }, [manual, armed, roadPts, roadCursor, commit, setManualPlaceItem]);
 
   useEffect(() => {
-    if (!manual || !armed) return;
+    if (!manual || !drawPlane) return;
     gl.domElement.style.cursor = 'crosshair';
     onDraggingChange(true);
     return () => {
       gl.domElement.style.cursor = '';
       onDraggingChange(false);
     };
-  }, [manual, armed, gl, onDraggingChange]);
+  }, [manual, drawPlane, gl, onDraggingChange]);
 
   if (!manual || !armed) return null;
 
-  const previewPts = [...roadPts, ...(roadCursor ? [roadCursor] : [])];
+  const previewPts = [...roadPts, ...(roadCursor && drawPlane ? [roadCursor] : [])];
 
   return (
     <group>
-      <mesh
-        position={[(fb.minX + fb.maxX) / 2, 0.6, -(fb.minY + fb.maxY) / 2]}
-        rotation={[-Math.PI / 2, 0, 0]}
-        onPointerMove={e => {
-          e.stopPropagation();
-          setRoadCursor(snapRoadPoint(planePt(e), roadPts[roadPts.length - 1]));
-        }}
-        onPointerDown={e => {
-          if (e.button !== 0) return;
-          e.stopPropagation();
-          const pt = snapRoadPoint(planePt(e), roadPts[roadPts.length - 1]);
-          setRoadPts(prev => {
-            const last = prev[prev.length - 1];
-            if (last && Math.hypot(pt.x - last.x, pt.y - last.y) < 1) return prev;
-            return [...prev, pt];
-          });
-        }}
-        onDoubleClick={e => {
-          e.stopPropagation();
-          commit();
-        }}
-      >
-        <planeGeometry args={[(fb.maxX - fb.minX) * 4 || 2000, (fb.maxY - fb.minY) * 4 || 2000]} />
-        <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
-      </mesh>
+      {drawPlane && (
+        <mesh
+          position={[(fb.minX + fb.maxX) / 2, 0.6, -(fb.minY + fb.maxY) / 2]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          onPointerMove={e => {
+            e.stopPropagation();
+            setRoadCursor(snapRoadPoint(planePt(e), roadPts[roadPts.length - 1]));
+          }}
+          onPointerDown={e => {
+            if (e.button !== 0) return;
+            e.stopPropagation();
+            const pt = snapRoadPoint(planePt(e), roadPts[roadPts.length - 1]);
+            setRoadPts(prev => {
+              const last = prev[prev.length - 1];
+              if (last && Math.hypot(pt.x - last.x, pt.y - last.y) < 1) return prev;
+              return [...prev, pt];
+            });
+          }}
+          onDoubleClick={e => {
+            e.stopPropagation();
+            commit();
+          }}
+        >
+          <planeGeometry args={[(fb.maxX - fb.minX) * 4 || 2000, (fb.maxY - fb.minY) * 4 || 2000]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+        </mesh>
+      )}
       {/* Ghost of generated strip (path-then-generate): subordinate to the path. */}
       {previewPts.length >= 2 && <RoadDraftBand pts={previewPts} width={roadDrawWidth} ghost />}
       {previewPts.length >= 2 && (
@@ -7473,8 +7511,8 @@ function ManualRotateLayer({ onDraggingChange }: { onDraggingChange: (d: boolean
 }
 
 /** Left-drag moves a placed manual item (or the active named group). Right-click opens delete / duplicate (and rotate for gate/roads).
- * Roads are frozen unless the Road palette is armed. While Select area is armed, hit meshes are omitted
- * so the marquee is screenshot-style. */
+ * Roads are frozen unless the Road palette is armed. Select area and Road may be
+ * armed together: equipment hits stay off for the marquee, road handles stay on. */
 function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d: boolean) => void; onMenu: (m: ItemMenu | null) => void }) {
   const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
   const selectArmed = useDesignStore(s => s.manualSelectTool);
@@ -7656,8 +7694,12 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
     if (controlsRef.current) controlsRef.current.enabled = false;
   };
 
-  // Selection chrome always renders; hit meshes omit while Select or Rotate is armed.
+  // Selection chrome always renders; equipment hit meshes omit while Select or
+  // Rotate is armed. Roads stay hittable when Road is armed even if Select is
+  // also on (handles sit above the Select catcher).
   const interactive = !selectArmed && !rotateArmed;
+  const roadInteractive = roadArmed && !rotateArmed;
+  const roadHitY = selectArmed ? 3.2 : 0.6;
 
   return (
     <group>
@@ -7674,10 +7716,10 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
         </mesh>
       ))}
       {/* Road layer: frozen unless Road palette is armed. */}
-      {interactive && roadArmed && roads.map(rd => (
+      {roadInteractive && roads.map(rd => (
         <mesh
           key={rd.id ?? `${rd.x},${rd.y}`}
-          position={[rd.x, 0.6, -rd.y]}
+          position={[rd.x, roadHitY, -rd.y]}
           rotation={[-Math.PI / 2, 0, -rd.rotation]}
           onPointerDown={e => {
             if (!rd.id) return;

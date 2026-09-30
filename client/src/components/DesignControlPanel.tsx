@@ -3170,6 +3170,10 @@ export default function DesignControlPanel() {
   const setManualRoadWidth = useDesignStore(s => s.setManualRoadWidth);
   const manualSnapFt = useDesignStore(s => s.manualSnapFt);
   const setManualSnapFt = useDesignStore(s => s.setManualSnapFt);
+  const manualPcsBatteryCount = useDesignStore(s => s.manualPcsBatteryCount);
+  const setManualPcsBatteryCount = useDesignStore(s => s.setManualPcsBatteryCount);
+  const manualPcsPlaceMode = useDesignStore(s => s.manualPcsPlaceMode);
+  const setManualPcsPlaceMode = useDesignStore(s => s.setManualPcsPlaceMode);
   useEffect(() => {
     if (!manualYard) {
       setManualPlaceItem(null);
@@ -3611,7 +3615,7 @@ export default function DesignControlPanel() {
                   </button>
                   {manualSelectTool && (
                     <div className="text-[10px] text-slate-500 mt-1.5">
-                      Drag a box only — equipment inside becomes a named group. Roads stay frozen unless Road is armed. Escape clears the active group highlight.
+                      Drag a box only — equipment inside becomes a named group. Road may stay armed so existing roads stay editable. Escape clears the active group highlight.
                     </div>
                   )}
                   {manualRotateSession && (
@@ -3792,34 +3796,67 @@ export default function DesignControlPanel() {
                       const icon = PLACEMENT_BUTTON_ICONS[iconKey];
                       const placeholder = opt.id === 'auxSwitchPanel' || opt.id === 'road' || opt.id === 'gate';
                       return (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          onClick={() => setManualPlaceItem(selected ? null : opt.id)}
-                          aria-pressed={selected}
-                          className={`flex items-center gap-2 text-left text-xs px-2.5 py-2 rounded border font-medium transition-colors ${
-                            selected
-                              ? 'bg-cyan-700/80 border-cyan-500 text-cyan-50'
-                              : 'bg-slate-900/60 border-slate-600 text-slate-200 hover:border-slate-500 hover:bg-slate-700/60'
-                          }`}
-                        >
-                          {icon && (
-                            <svg
-                              viewBox={`0 0 ${PLACEMENT_BUTTON_ICON_SIZE} ${PLACEMENT_BUTTON_ICON_SIZE}`}
-                              className="w-8 h-8 shrink-0"
-                              aria-hidden
-                            >
-                              <path
-                                d={icon}
-                                fill="currentColor"
-                                fillRule="evenodd"
-                                stroke={placeholder ? 'currentColor' : 'none'}
-                                strokeWidth={placeholder ? 1.25 : 0}
-                              />
-                            </svg>
+                        <div key={opt.id} className="flex flex-col gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setManualPlaceItem(selected ? null : opt.id)}
+                            aria-pressed={selected}
+                            className={`flex items-center gap-2 text-left text-xs px-2.5 py-2 rounded border font-medium transition-colors ${
+                              selected
+                                ? 'bg-cyan-700/80 border-cyan-500 text-cyan-50'
+                                : 'bg-slate-900/60 border-slate-600 text-slate-200 hover:border-slate-500 hover:bg-slate-700/60'
+                            }`}
+                          >
+                            {icon && (
+                              <svg
+                                viewBox={`0 0 ${PLACEMENT_BUTTON_ICON_SIZE} ${PLACEMENT_BUTTON_ICON_SIZE}`}
+                                className="w-8 h-8 shrink-0"
+                                aria-hidden
+                              >
+                                <path
+                                  d={icon}
+                                  fill="currentColor"
+                                  fillRule="evenodd"
+                                  stroke={placeholder ? 'currentColor' : 'none'}
+                                  strokeWidth={placeholder ? 1.25 : 0}
+                                />
+                              </svg>
+                            )}
+                            {opt.label}
+                          </button>
+                          {opt.id === 'pcs' && selected && (
+                            <div className="flex flex-col gap-1.5 pl-1">
+                              <label className="flex items-center gap-2 text-[10px] text-slate-400">
+                                <span className="shrink-0 w-16">Batteries</span>
+                                <select
+                                  value={manualPcsBatteryCount}
+                                  onChange={e => {
+                                    const v = Number(e.target.value);
+                                    setManualPcsBatteryCount(v === 2 || v === 3 ? v : 0);
+                                  }}
+                                  className="flex-1 px-2 py-1 rounded border border-slate-600 bg-slate-900 text-slate-200 text-xs"
+                                  aria-label="Batteries with PCS"
+                                >
+                                  <option value={0}>Off</option>
+                                  <option value={2}>2</option>
+                                  <option value={3}>3</option>
+                                </select>
+                              </label>
+                              <label className="flex items-center gap-2 text-[10px] text-slate-400">
+                                <span className="shrink-0 w-16">Place as</span>
+                                <select
+                                  value={manualPcsPlaceMode}
+                                  onChange={e => setManualPcsPlaceMode(e.target.value === 'ghost' ? 'ghost' : 'live')}
+                                  className="flex-1 px-2 py-1 rounded border border-slate-600 bg-slate-900 text-slate-200 text-xs"
+                                  aria-label="Place PCS as live or ghost"
+                                >
+                                  <option value="live">Live</option>
+                                  <option value="ghost">Ghost</option>
+                                </select>
+                              </label>
+                            </div>
                           )}
-                          {opt.label}
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -3828,6 +3865,10 @@ export default function DesignControlPanel() {
                       ? 'Mark the road path (click vertices). Enter / double-click generates the road. Escape cancels.'
                       : manualPlaceItem === 'gate'
                       ? 'Gate armed — drag on the site to drop the gate. Escape cancels.'
+                      : manualPlaceItem === 'pcs'
+                      ? (manualPcsBatteryCount
+                        ? `PCS armed (${manualPcsPlaceMode}) — drag to drop PCS + ${manualPcsBatteryCount} batteries. Escape cancels.`
+                        : `PCS armed (${manualPcsPlaceMode}) — drag to drop one PCS. Escape cancels.`)
                       : manualPlaceItem
                       ? 'Armed — drag on the site to drop one. Escape cancels.'
                       : 'Select an item, then drag it onto the site.'}

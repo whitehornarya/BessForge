@@ -1701,6 +1701,8 @@ export function manualAuthoringDesign(
       length: spec.lengthFt,
       width: spec.widthFt,
       height: Number.isFinite(spec.heightFt) && (spec.heightFt as number) > 0 ? (spec.heightFt as number) : 8,
+      ...(spec.augmented ? { augmented: true } : {}),
+      ...(spec.future ? { future: true } : {}),
     };
     if (outside(item.x, item.y, item.length, item.width, rad)) {
       warnings.push(`Placed equipment ${spec.id} placed with warning: the ${label} extends outside the fence line at its drawn position — the reference geometry was kept as drawn; review the fence or move it.`);
@@ -4807,6 +4809,47 @@ export function placedIslandPlanDims(
     },
     config, pcsClearance, 1, 1);
   return { hx: c.bbox.hx, hy: c.bbox.hy };
+}
+
+/**
+ * Manual Placement: PCS + 2 or 3 batteries using the same single / single2
+ * mirrored-pair geometry as Edit Layout. Click is the PCS center.
+ * `rotationDeg` is an extra CCW turn of the whole module about the PCS
+ * (0 = canonical horizontal single: PCS long-axis E-W, batteries on the
+ * corridor side — same as Place single at angleDeg 0).
+ */
+export function composeManualPcsBatteries(
+  pcs: Pt & { rotationDeg?: number },
+  batteryCount: 2 | 3,
+  config: BessConfiguration,
+  pcsClearance: number,
+): { pcs: PlacedEquipment; batteries: PlacedEquipment[] } {
+  const kind: PlacedIslandKind = batteryCount === 2 ? 'single2' : 'single';
+  const comp = composePlacedIsland(
+    { id: 'manual-pcs', x: 0, y: 0, kind, aug: false, auxGear: false },
+    config, pcsClearance, 1, 1,
+  );
+  const localPcs = comp.equipment.find(e => e.kind === 'inverter');
+  if (!localPcs) {
+    throw new Error('composeManualPcsBatteries: single module produced no PCS');
+  }
+  // Preserve single-module local poses; only add the caller's extra turn.
+  const deltaDeg = ((((pcs.rotationDeg ?? 0) % 360) + 360) % 360);
+  const θ = (deltaDeg * Math.PI) / 180;
+  const cosθ = Math.cos(θ), sinθ = Math.sin(θ);
+  const map = (e: PlacedEquipment): PlacedEquipment => {
+    const dx = e.x - localPcs.x, dy = e.y - localPcs.y;
+    return {
+      ...e,
+      x: pcs.x + dx * cosθ - dy * sinθ,
+      y: pcs.y + dx * sinθ + dy * cosθ,
+      rotation: e.rotation + θ,
+    };
+  };
+  return {
+    pcs: map(localPcs),
+    batteries: comp.equipment.filter(e => e.kind === 'bess').map(map),
+  };
 }
 
 // ---- interactive placement: snapping + orientation-correct footprints -----

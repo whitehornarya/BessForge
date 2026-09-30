@@ -18,7 +18,7 @@ export type ManualRotateSession = {
   /** Live delta from start poses (degrees, CCW). */
   deltaDeg: number;
 };
-import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PAIR_INNER_GAP_FT, A3_GAP_FT, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
+import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PAIR_INNER_GAP_FT, A3_GAP_FT, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, composeManualPcsBatteries, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
 
 // Re-export the traced-road fingerprint helpers at their historical home:
 // the tombstone flow was built here, and external callers (tests) import
@@ -3542,6 +3542,12 @@ interface DesignState {
   // PLACEMENT_SNAP_STEPS_FT and snaps new drops and moves. Session UI.
   manualSnapFt: number;
   setManualSnapFt: (ft: number) => void;
+  // When PCS is armed: 0 = PCS only; 2/3 auto-places batteries (single/single2).
+  manualPcsBatteryCount: 0 | 2 | 3;
+  setManualPcsBatteryCount: (n: 0 | 2 | 3) => void;
+  // Live = built peq; Ghost = future-flagged (auto-aug fade look). Session UI.
+  manualPcsPlaceMode: 'live' | 'ghost';
+  setManualPcsPlaceMode: (m: 'live' | 'ghost') => void;
   // Drafter text-label overrides (position/height/content deltas). Applied to
   // the CAD view and all DXF/PDF exports. Keyed by label fingerprint.
   // Empty map = no overrides (default, keeps all outputs byte-identical).
@@ -4212,6 +4218,8 @@ interface DesignState {
   gearPlacement: { kind: TraceEquipKind } | null;
   setGearPlacement: (kind: TraceEquipKind | null) => void;
   addPlacedGear: (kind: TraceEquipKind, x: number, y: number, rotationDeg?: number) => string | null;
+  /** Place a PCS, optionally with 2 or 3 batteries (single/single2 geometry). */
+  addPlacedPcsBlock: (x: number, y: number, rotationDeg?: number, batteryCount?: 0 | 2 | 3) => string | null;
   addManualRoad: (a: Pt, b: Pt) => string | null;
   setPlacedGate: (x: number, y: number) => string | null;
   moveManualPlacement: (id: string, x: number, y: number) => string | null;
@@ -4221,6 +4229,8 @@ interface DesignState {
   // Batch ops for Manual Placement multi-select (one history entry each).
   duplicateManualSelection: () => string | null;
   moveManualSelection: (dx: number, dy: number) => string | null;
+  /** Snap active group / selection centers onto shared X or Y (centroid). */
+  alignManualSelection: (axis: 'x' | 'y') => string | null;
   removeManualSelection: () => void;
   /** Rotate active group / selection (or session start poses) by deltaDeg about centroid. */
   rotateManualGroup: (deltaDeg: number, session?: ManualRotateSession | null) => string | null;
@@ -4476,13 +4486,17 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   manualPlaceItem: null,
   setManualPlaceItem: (id: string | null): void => set({
     manualPlaceItem: id,
-    ...(id ? { manualSelectTool: false } : {}),
+    // Select area may stay on with Road; other place tools still clear Select.
+    ...(id && id !== 'road' ? { manualSelectTool: false } : {}),
   }),
   manualSelectTool: false,
-  setManualSelectTool: (on: boolean): void => set({
+  setManualSelectTool: (on: boolean): void => set(s => ({
     manualSelectTool: on,
-    ...(on ? { manualPlaceItem: null } : {}),
-  }),
+    // Arming Select clears non-road palette tools; Road may stay armed.
+    ...(on && s.manualPlaceItem && s.manualPlaceItem !== 'road'
+      ? { manualPlaceItem: null }
+      : {}),
+  })),
   manualSelectionIds: [] as string[],
   setManualSelectionIds: (ids: string[]): void => set({
     manualSelectionIds: [...new Set(ids.filter(id => id && id !== 'gate' && !id.startsWith('mroad-')))],
@@ -4622,6 +4636,14 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   setManualRoadWidth: (w: 24 | 30 | 36): void => set({ manualRoadWidth: w }),
   manualSnapFt: 0,
   setManualSnapFt: (ft: number): void => set({ manualSnapFt: Number.isFinite(ft) && ft > 0 ? ft : 0 }),
+  manualPcsBatteryCount: 0 as 0 | 2 | 3,
+  setManualPcsBatteryCount: (n: 0 | 2 | 3): void => set({
+    manualPcsBatteryCount: n === 2 || n === 3 ? n : 0,
+  }),
+  manualPcsPlaceMode: 'live' as 'live' | 'ghost',
+  setManualPcsPlaceMode: (m: 'live' | 'ghost'): void => set({
+    manualPcsPlaceMode: m === 'ghost' ? 'ghost' : 'live',
+  }),
   yardRotationDeg: 0,
   textOverrides: {},
   setTextOverride: (key, ov) => set(s => ({ textOverrides: { ...s.textOverrides, [key]: ov } })),
@@ -7622,6 +7644,116 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     });
     get().regenerate({ sync: true });
     const warns = (get().design?.warnings ?? []).filter(w => w.startsWith(`Placed equipment ${item.id} `));
+    set({ lastPlacedWarning: warns.length ? warns.join('\n') : null });
+    get().pushHistory(before);
+    return null;
+  },
+
+  addPlacedPcsBlock: (x: number, y: number, rotationDeg = 0, batteryCount: 0 | 2 | 3 = 0): string | null => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return 'Invalid placement point.';
+    const count = batteryCount === 2 || batteryCount === 3 ? batteryCount : 0;
+    const ghost = get().manualPcsPlaceMode === 'ghost';
+    const prevEdits = get().layoutEdits;
+    let nextPeq = 1;
+    for (const p of prevEdits.placedEquipment ?? []) {
+      const m = /^peq-(\d+)$/.exec(p.id);
+      if (m) nextPeq = Math.max(nextPeq, parseInt(m[1], 10) + 1);
+    }
+    const config = getConfiguration(get().configId);
+    if (!config) return 'No equipment configuration selected.';
+
+    const stamp = (
+      kind: 'inverter' | 'bess',
+      px: number, py: number,
+      rotRad: number,
+      length: number, width: number, height: number,
+    ): TracedEquipmentSpec => {
+      const rot = ((((rotRad * 180) / Math.PI) % 360) + 360) % 360;
+      const rounded = Math.round(rot);
+      return {
+        id: `peq-${nextPeq++}`,
+        kind,
+        x: px,
+        y: py,
+        ...(rounded ? { rotationDeg: rounded } : {}),
+        lengthFt: length,
+        widthFt: width,
+        heightFt: height,
+        source: 'manual' as const,
+        ...(ghost ? {
+          future: true as const,
+          label: kind === 'bess' ? 'FUTURE BESS' : 'FUTURE PCS',
+        } : {}),
+      };
+    };
+
+    let items: TracedEquipmentSpec[];
+    if (!count) {
+      const inv = config.inverterDims;
+      items = [stamp('inverter', x, y, (rotationDeg * Math.PI) / 180, inv.length, inv.width, inv.height)];
+    } else {
+      const pcsClearance = get().hotClimate ? CLEARANCES.pcsHotClimate : CLEARANCES.pcsStandard;
+      let composed: ReturnType<typeof composeManualPcsBatteries>;
+      try {
+        composed = composeManualPcsBatteries(
+          { x, y, rotationDeg },
+          count,
+          config,
+          pcsClearance,
+        );
+      } catch {
+        return 'Could not compose PCS with batteries.';
+      }
+      items = [
+        stamp(
+          'inverter', composed.pcs.x, composed.pcs.y, composed.pcs.rotation,
+          composed.pcs.length, composed.pcs.width, composed.pcs.height,
+        ),
+        ...composed.batteries.map(b =>
+          stamp('bess', b.x, b.y, b.rotation, b.length, b.width, b.height),
+        ),
+      ];
+    }
+
+    const memberIds = items.map(i => i.id);
+    const before = snapOf(
+      get(),
+      ghost
+        ? (count ? `Placed ghost PCS with ${count} batteries` : 'Placed ghost PCS')
+        : (count ? `Placed PCS with ${count} batteries` : 'Placed PCS'),
+    );
+
+    let nextGroups = prevEdits.manualGroups ?? [];
+    let activeId: string | null = get().activeManualGroupId;
+    let selection = get().manualSelectionIds;
+    if (memberIds.length > 1) {
+      let groupN = 1;
+      for (const g of nextGroups) {
+        const m = /^mgrp-(\d+)$/.exec(g.id);
+        if (m) groupN = Math.max(groupN, parseInt(m[1], 10) + 1);
+      }
+      const groupId = `mgrp-${groupN}`;
+      const groupName = ghost ? `Ghost PCS + ${count} batt` : `PCS + ${count} batt`;
+      nextGroups = [...nextGroups, { id: groupId, name: groupName, memberIds }];
+      activeId = groupId;
+      selection = memberIds;
+    }
+
+    set({
+      layoutEdits: {
+        ...prevEdits,
+        placedEquipment: [...(prevEdits.placedEquipment ?? []), ...items],
+        ...(memberIds.length > 1 ? { manualGroups: nextGroups } : {}),
+      },
+      ...(memberIds.length > 1
+        ? { activeManualGroupId: activeId, manualSelectionIds: selection }
+        : {}),
+      gearPlacement: null,
+    });
+    get().regenerate({ sync: true });
+    const warns = (get().design?.warnings ?? []).filter(w =>
+      memberIds.some(id => w.startsWith(`Placed equipment ${id} `)),
+    );
     set({ lastPlacedWarning: warns.length ? warns.join('\n') : null });
     get().pushHistory(before);
     return null;

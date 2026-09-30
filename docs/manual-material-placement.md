@@ -58,7 +58,7 @@ Buttons are visible and selectable. Each one places its item (slice 4).
 
 **PCS, battery, aux items, road, and gate (done).** Selecting a button arms a drag on the manual yard. Pointer up commits:
 
-- **PCS** — `addPlacedGear('inverter', …)`, catalog size for the active GE or PE configuration, same model as a scanned PCS.
+- **PCS** — `addPlacedPcsBlock` / catalog size for the active GE or PE configuration. While PCS is selected, dropdowns under the button: **Batteries** (`Off` / `2` / `3`) and **Place as** (`Live` / `Ghost`). Off drops PCS only; 2 or 3 uses `composeManualPcsBatteries` (same `single` / `single2` spacing as auto layout) and creates a named group. **Ghost** stamps `future: true` so units render like auto-layout augmentation ghosts (faded models); **Live** places built equipment.
 - **Battery container** — `addPlacedGear('bess', …)`, LG JF2 model.
 - **Aux transformer, aux switchgear, comms cabinet, aux switch panel, fiber patch panel, fire control panel** — `addPlacedEquipment` (`ManualEquipmentSpec`). Realistic models where the scene already has one; otherwise the catalog box.
 - **Road** — click centerline vertices; Enter or double-click finishes. Width chips **24 / 30 / 36** ft. Stored in `customRoads` and composed into a filleted `roadNetwork` under manual authoring (same compact builder as Edit Layout). Not `traced: true`.
@@ -83,9 +83,9 @@ A placement-mode control on Manual Placement, above the palette. The choice is s
 
 ## Slice 7a — Named groups + road layer (done)
 
-**Select area** is screenshot-style: while armed, you only draw a rubber-band (equipment under the pointer is not clickable). On release, equipment centers inside the box become a **named group** (`layoutEdits.manualGroups`). Roads are never marquee-grouped.
+**Select area** is screenshot-style: while armed, you only draw a rubber-band (equipment under the pointer is not clickable). On release, equipment centers inside the box become a **named group** (`layoutEdits.manualGroups`). Roads are never marquee-grouped. **Select area** and **Road** may be armed together — Select keeps the marquee; Road keeps road handles editable (path drawing pauses until Select is off).
 
-**Roads** are a separate frozen layer: road handles only work when the **Road** palette button is armed.
+**Roads** are a separate layer: road handles only work when the **Road** palette button is armed.
 
 **Groups** dropdown lists named groups. Selecting one activates that group as a moveable unit (cyan chrome). Drag any member to move the whole group. Rename inline (Backspace edits the name; it does not delete the group); **Dissolve** drops the group record but keeps members; **Duplicate** offsets copies (+10 ft X/Y) into a new named group.
 
@@ -105,7 +105,7 @@ Later, after several item types can be placed.
 Cases live in [`scripts/nextera.test.ts`](../scripts/nextera.test.ts).
 
 - Slice 1: an empty manual yard has no equipment, roads, cables, or surfacing, and an unflagged layout still places blocks.
-- Slice 4: a dropped PCS stays on its catalog footprint and adds no roads or MW. A trace apply does not move that point.
+- Slice 4: a dropped PCS stays on its catalog footprint and adds no roads or MW. A trace apply does not move that point. With Batteries 2/3, the drop also places batteries at single/single2 spacing and groups them with the PCS. Place as Ghost stamps future-flagged models (auto-aug fade).
 - Slice 5: dragging a placed PCS changes that id’s pose and does not add a second id; delete removes it; duplicate adds one offset copy; rotate changes `rotationDeg` by 90.
 - Slice 6: grid mode snaps a drop onto the grid; free mode keeps the raw point.
 - Slice 7a: Select area auto-creates named groups (equipment only); roads frozen unless Road armed; active group moves as a unit; Duplicate creates a new named group; Rotate is a panel button with click-drag/release about the group centroid and an editable ±90° angle stepper; renaming is Backspace-safe.
