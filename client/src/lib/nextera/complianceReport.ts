@@ -23,6 +23,7 @@ import {
 import { nexteraLabel } from './dxfExport';
 import { edgeSegsToRing } from './layoutEngine';
 import { FeederCircuit, VD_LIMIT_PCT } from './feeders';
+import { effectiveYardTrench } from './feederKeepouts';
 import { AreaZone, exclusionRects, routeCrossesExclusion } from './areaZones';
 import { TitleBlockInfo } from '../stores/useDesignStore';
 
@@ -431,17 +432,18 @@ export function buildComplianceReport(
       bad);
   }
 
-  // 480V aux & fiber trench
+  // 480V aux & fiber trench (yard spine — gated by SHOW_YARD_AUX_TRENCH)
+  const yardTrench = effectiveYardTrench(design);
   if (design.blocksPlaced === 0) {
     add('trench', CAT_SHEET34, '480V aux & fiber trench', 'Trench band between container rows',
       'PASS', 'trench band present', 'no blocks placed');
-  } else if (!design.trench) {
+  } else if (!yardTrench) {
     add('trench', CAT_SHEET34, '480V aux & fiber trench', 'Trench band between container rows',
       'WARN', 'trench band present', 'no trench band in this layout');
   } else {
     add('trench', CAT_SHEET34, '480V aux & fiber trench', 'Trench band between container rows',
       'PASS', 'trench band present',
-      `trench at x = ${design.trench.x.toFixed(0)} ft, ${design.trench.width.toFixed(0)} ft wide`);
+      `trench at x = ${yardTrench.x.toFixed(0)} ft, ${yardTrench.width.toFixed(0)} ft wide`);
   }
 
   // Cable classes: presence + all non-reference points inside the fence

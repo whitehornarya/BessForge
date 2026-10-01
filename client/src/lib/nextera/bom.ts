@@ -7,6 +7,7 @@ import { FeederCircuit } from './feeders';
 import { feederDisplayName } from './feederNaming';
 import { buildCableScheduleRows, DEFAULT_SLACK_PCT, ScheduleRow } from './cableSchedule';
 import { GroundingPlan } from './grounding';
+import { effectiveYardTrench } from './feederKeepouts';
 
 export interface BomRow {
   qty: number;
@@ -115,7 +116,7 @@ export function buildBomRows(design: SiteDesign, config?: BessConfiguration, fee
     if (r) rows.push(r);
   }
   // Trench footage is civil scope, not cable — keep the routed basis.
-  const cl = summarizeCableLengths(design.cables, design.trench, design.corridorTrenches);
+  const cl = summarizeCableLengths(design.cables, effectiveYardTrench(design), design.corridorTrenches);
   if (cl.trench > 0) rows.push({ qty: Math.ceil(cl.trench), unit: 'LF', description: '480V AUX & FIBER TRENCH' });
   if (feeders && feeders.length) {
     // Group MV feeder schedule rows by conductor pick (size/material/sets).

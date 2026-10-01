@@ -15,6 +15,7 @@ import {
   OptimizeBaseOptions,
 } from './optimizer';
 import { polygonArea, classifyLoopDepths } from './kmz';
+import { effectiveYardTrench } from './feederKeepouts';
 
 // ---------------------------------------------------------------------------
 // Scorecard: every metric a scenario card compares, computed 1:1 from the
@@ -104,7 +105,10 @@ export function scorecardOf(design: SiteDesign): Scorecard {
     achievedMWh: design.achievedMWh,
     blockCount: design.blocksPlaced,
     cableFt: design.cables.reduce((s, c) => s + runLen(c.pts), 0),
-    trenchFt: design.trench ? Math.max(0, design.trench.yTop - design.trench.yBottom) : 0,
+    trenchFt: (() => {
+      const t = effectiveYardTrench(design);
+      return t ? Math.max(0, t.yTop - t.yBottom) : 0;
+    })(),
     roadAreaSqFt: roadRegionAreaSqFt(design),
     fencePerimeterFt: fencePerimeterFt(design),
     fenceAcres: design.fence.length >= 3 ? Math.abs(polygonArea(design.fence)) / 43560 : 0,

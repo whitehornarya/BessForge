@@ -7769,6 +7769,10 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
 }
 
 export default function DesignScene() {
+  // Flip to true to restore Tour / Record / 4K toolbar buttons (handlers kept).
+  const SHOW_MARKETING_TOUR_UI = false;
+  // Flip to true to restore the Edit Layout toolbar toggle.
+  const SHOW_EDIT_LAYOUT_UI = false;
   const design = useDesignStore(s => s.design);
   const [itemMenu, setItemMenu] = useState<{ id: string; x: number; y: number; duplicate: boolean } | null>(null);
   const alignRows = useDesignStore(s => s.alignRows);
@@ -9257,9 +9261,13 @@ export default function DesignScene() {
         </div>
       )}
 
-      {/* Marketing capture bar: cinematic tour, tour recording, stills */}
+      {/* Marketing capture bar: cinematic tour, tour recording, stills.
+          Tour / Record / 4K are hidden for now (flag below); restore by
+          flipping SHOW_MARKETING_TOUR_UI. Stills + tour options stay visible. */}
       {design && !tourActive && !stillsProgress && (
         <div className="absolute top-3 left-3 z-10 flex rounded overflow-hidden border border-slate-600 shadow">
+          {SHOW_MARKETING_TOUR_UI && (
+            <>
           <button
             onClick={() => startCinematicTour(false)}
             title="Cinematic site tour: orbits the yard from above, dives to the gate entrance, glides through the site and pulls up to the full-yard view (~45–60 s; Esc stops)"
@@ -9289,6 +9297,8 @@ export default function DesignScene() {
           >
             ▾
           </button>
+            </>
+          )}
           <button
             onClick={() => setShowTourOptions(v => !v)}
             title="Tour options: duration preset and which stops the camera visits"
@@ -9307,7 +9317,7 @@ export default function DesignScene() {
       )}
 
       {/* Offline render quality popover: fps for the ✨ render (both files saved) */}
-      {design && !tourActive && !stillsProgress && showOfflineQuality && (
+      {SHOW_MARKETING_TOUR_UI && design && !tourActive && !stillsProgress && showOfflineQuality && (
         <div className="absolute top-12 left-3 z-20 w-56 bg-slate-900/95 border border-slate-600 rounded shadow-lg p-3 text-xs text-slate-200 space-y-3" data-testid="offline-quality-popover">
           <div>
             <div className="font-semibold text-slate-100 mb-1.5">Frame rate</div>
@@ -9766,6 +9776,7 @@ export default function DesignScene() {
       {!tourActive && (
       <div className="absolute top-3 right-3" style={{ zIndex: 10 }}>
         <div className="flex rounded overflow-hidden border border-slate-600 shadow">
+          {SHOW_EDIT_LAYOUT_UI && (
           <button
             onClick={() => { setEditMode(m => !m); setEditTool('move'); setDragging(false); }}
             disabled={!design}
@@ -9774,6 +9785,7 @@ export default function DesignScene() {
           >
             Edit Layout
           </button>
+          )}
           {viewMode !== '2d' && (
           <button
             type="button"

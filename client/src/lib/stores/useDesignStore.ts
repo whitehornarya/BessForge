@@ -2750,6 +2750,7 @@ export interface ProjectFile {
   // bandwidth-heavy), and fence/gate 3D models are per-machine performance
   // choices. Unlike textureSetId/showFeederColors they never change how the
   // shared design content reads, so a shared file must not override them.
+  // Default ON for all three; persisted localStorage opt-out ('false') is respected.
   arrangement: ArrangementStrategy;
   // True only when the drafter actually picked an arrangement. Absent means
   // "no choice recorded", which is what lets an untouched multi-area
@@ -3868,11 +3869,24 @@ interface DesignState {
     kmlText: string;
     options: BoundaryOption[];
   } | null;
+  // After KMZ parse (and optional area pick), require PE vs GE before applyBoundary.
+  // `options` is set when the user came through the multi-area picker so Cancel
+  // can restore it; null for a single-polygon upload.
+  pendingKmzVendor: {
+    sourceName: string;
+    kmlText: string;
+    options: BoundaryOption[] | null;
+    selection:
+      | { type: 'single'; boundary: SiteBoundary }
+      | { type: 'all' };
+  } | null;
   applyBoundary: (boundary: SiteBoundary) => void;
   loadKmlWithPicker: (kmlText: string, sourceName: string, boundaryNames?: string[]) => void;
   loadKmz: (file: File) => Promise<void>;
   loadSample: (url: string, name: string, boundaryNames?: string[]) => Promise<void>;
   chooseBoundary: (index: number) => void;
+  // Stage “show all areas” for PE/GE confirmation (does not apply yet).
+  requestAllBoundariesVendor: () => void;
   // Import EVERY outline in the picker as one multi-area site (all footprints
   // in one shared frame, one layout each) instead of picking a single parcel.
   chooseAllBoundaries: () => void;
@@ -3889,6 +3903,11 @@ interface DesignState {
   // `skipFeederRecompute` defers MV routing (used when phasing one area at a time).
   regenerateAreas: (opts?: { only?: string; skipFeederRecompute?: boolean }) => void;
   cancelBoundaryPicker: () => void;
+  confirmKmzVendor: (
+    vendor: 'pe' | 'ge',
+    onProgress?: (frac: number, label: string) => void,
+  ) => Promise<void>;
+  cancelKmzVendor: () => void;
   setConfigId: (id: string) => void;
   setTargetMW: (mw: number) => void;
   setTargetMWh: (mwh: number) => void;
@@ -4676,16 +4695,18 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   })(),
   showGateModel: (() => {
     try {
-      return localStorage.getItem('nextera-show-gate-model') === 'true';
+      // Default ON; persisted opt-out ('false') is respected.
+      return localStorage.getItem('nextera-show-gate-model') !== 'false';
     } catch {
-      return false;
+      return true;
     }
   })(),
   showFence3D: (() => {
     try {
-      return localStorage.getItem('nextera-show-fence-3d') === 'true';
+      // Default ON; persisted opt-out ('false') is respected.
+      return localStorage.getItem('nextera-show-fence-3d') !== 'false';
     } catch {
-      return false;
+      return true;
     }
   })(),
   // Default ON (colored); persisted opt-out ('false') is respected.
@@ -5070,6 +5091,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   hiddenFeeders: new Set<number>(),
 
   boundaryPicker: null,
+  pendingKmzVendor: null,
 
   // Shared post-parse path for KMZ upload, sample load, and picker choice:
   // new site = fresh imagery + fresh history + auto-filled title block.
@@ -5126,7 +5148,8 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   },
 
   // Load KML text: if more than one parcel-scale polygon exists, open the
-  // boundary picker instead of silently taking the first polygon.
+  // boundary picker instead of silently taking the first polygon. A single
+  // parcel still waits for PE/GE confirmation before applyBoundary.
   loadKmlWithPicker: (kmlText: string, sourceName: string, boundaryNames?: string[]) => {
     let options = listKmlBoundaryOptions(kmlText);
     if (boundaryNames?.length) {
@@ -5135,13 +5158,26 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       if (filtered.length) options = filtered;
     }
     if (options.length > 1) {
-      set({ boundaryPicker: { sourceName, kmlText, options }, isLoading: false, error: null });
+      set({
+        boundaryPicker: { sourceName, kmlText, options },
+        pendingKmzVendor: null,
+        isLoading: false,
+        error: null,
+      });
       return;
     }
     const boundary = parseKmlText(kmlText, sourceName, options[0]?.index ?? 0);
     boundary.name = sourceName;
-    get().applyBoundary(boundary);
-    get().captureDrawing(kmlText, sourceName, boundary.origin);
+    set({
+      pendingKmzVendor: {
+        sourceName,
+        kmlText,
+        options: null,
+        selection: { type: 'single', boundary },
+      },
+      isLoading: false,
+      error: null,
+    });
   },
 
   loadKmz: async (file: File) => {
@@ -5175,11 +5211,35 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     try {
       const boundary = parseKmlText(picker.kmlText, picker.sourceName, index);
       boundary.name = picker.sourceName;
-      get().applyBoundary(boundary);
-      get().captureDrawing(picker.kmlText, picker.sourceName, boundary.origin);
+      set({
+        pendingKmzVendor: {
+          sourceName: picker.sourceName,
+          kmlText: picker.kmlText,
+          options: picker.options,
+          selection: { type: 'single', boundary },
+        },
+        boundaryPicker: null,
+        error: null,
+      });
     } catch (e: any) {
       set({ error: e?.message || 'Failed to load the selected boundary', boundaryPicker: null });
     }
+  },
+
+  // Stage the multi-area import for PE/GE confirmation (does not apply yet).
+  requestAllBoundariesVendor: () => {
+    const picker = get().boundaryPicker;
+    if (!picker) return;
+    set({
+      pendingKmzVendor: {
+        sourceName: picker.sourceName,
+        kmlText: picker.kmlText,
+        options: picker.options,
+        selection: { type: 'all' },
+      },
+      boundaryPicker: null,
+      error: null,
+    });
   },
 
   // Import every listed outline as ONE multi-area site. All areas share a
@@ -5494,7 +5554,61 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     else get().regenerate({ sync: true });
   },
 
-  cancelBoundaryPicker: () => set({ boundaryPicker: null }),
+  cancelBoundaryPicker: () => set({ boundaryPicker: null, pendingKmzVendor: null }),
+
+  cancelKmzVendor: () => {
+    const pending = get().pendingKmzVendor;
+    if (!pending) return;
+    // Restore the multi-area picker when the user backed out of vendor pick
+    // after choosing an area / "show all".
+    if (pending.options?.length) {
+      set({
+        pendingKmzVendor: null,
+        boundaryPicker: {
+          sourceName: pending.sourceName,
+          kmlText: pending.kmlText,
+          options: pending.options,
+        },
+      });
+      return;
+    }
+    set({ pendingKmzVendor: null });
+  },
+
+  // Apply PE/GE choice then commit the staged KMZ (single parcel or show-all).
+  confirmKmzVendor: async (vendor, onProgress) => {
+    const pending = get().pendingKmzVendor;
+    if (!pending) return;
+    const id = vendor === 'pe' ? 'pe-aux-200' : DEFAULT_CONFIGURATION_ID;
+    const cfg = getConfiguration(id);
+    // Set catalog targets without regenerating yet — applyBoundary / show-all
+    // will regenerate against the new site.
+    set({
+      configId: id,
+      targetMW: cfg.refMW,
+      targetMWh: cfg.refMWh,
+      containersPerPcs: cfg.containersPerBlock,
+      pendingKmzVendor: null,
+    });
+    if (pending.selection.type === 'all') {
+      if (!pending.options?.length) {
+        set({ error: 'Missing site areas for import' });
+        return;
+      }
+      set({
+        boundaryPicker: {
+          sourceName: pending.sourceName,
+          kmlText: pending.kmlText,
+          options: pending.options,
+        },
+      });
+      await get().chooseAllBoundariesWithProgress(onProgress ?? (() => {}));
+      return;
+    }
+    const { boundary } = pending.selection;
+    get().applyBoundary(boundary);
+    get().captureDrawing(pending.kmlText, pending.sourceName, boundary.origin);
+  },
 
   setConfigId: (id: string) => {
     if (id === get().configId) return;
@@ -10133,6 +10247,8 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       computing: false,
       boundary: null,
       design: null,
+      boundaryPicker: null,
+      pendingKmzVendor: null,
       // Multi-area state is site-specific — never carry footprints from the
       // cleared site into whatever gets loaded next.
       siteAreas: [],

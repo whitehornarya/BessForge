@@ -11,6 +11,7 @@ import { GroundingPlan } from './grounding';
 import { summarizeCableLengths } from './cableRouting';
 import { roadRegionAreaSqFt } from './scenarios';
 import { buildPartsBomLines, designCounts } from './bomCatalog';
+import { effectiveYardTrench } from './feederKeepouts';
 
 export const CONDUIT_STICK_FT = 20;      // standard Sch 40 PVC stick length
 export const CONDUIT_WASTE_PCT = 5;      // cut/waste factor on conduit runs
@@ -90,7 +91,7 @@ export function buildBomRollup(
   // --- Civil quantities ----------------------------------------------------
   const civil: RollupLine[] = [];
   const trenchLf = summarizeCableLengths(
-    design.cables, design.trench, design.corridorTrenches,
+    design.cables, effectiveYardTrench(design), design.corridorTrenches,
   ).trench;
   if (trenchLf > 0) {
     civil.push({ qty: ceil(trenchLf), unit: 'LF', description: '480V AUX & FIBER TRENCH (T-1)' });

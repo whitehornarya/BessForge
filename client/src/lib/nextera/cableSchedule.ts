@@ -22,6 +22,7 @@ import {
 } from './catalog';
 import { FeederCircuit } from './feeders';
 import { feederDisplayName, auxDisplayName } from './feederNaming';
+import { effectiveYardTrench } from './feederKeepouts';
 import {
   DxfWriter,
   LAYERS,
@@ -119,7 +120,7 @@ function endpointsForRun(
   };
   const auxS = design.equipment.find(e => e.kind === 'auxSwitchgear');
   const auxX = design.equipment.find(e => e.kind === 'auxTransformer');
-  const trench = design.trench ? 'T-1' : '-';
+  const trench = effectiveYardTrench(design) ? 'T-1' : '-';
 
   let m: RegExpMatchArray | null;
   if ((m = id.match(/^dc-(bess-.+)$/))) {
@@ -152,7 +153,7 @@ function endpointsForRun(
     return {
       from: fpp ? nexteraLabel(fpp) : 'FIBER PATCH PANEL',
       to: fjb ? nexteraLabel(fjb) : `ISLAND ${m[1]} FJB`,
-      trenchRef: design.trench ? 'T-1' : '-',
+      trenchRef: effectiveYardTrench(design) ? 'T-1' : '-',
     };
   }
   if ((m = id.match(/^catl-ring-(\d+)(?:-\d+)?$/))) {

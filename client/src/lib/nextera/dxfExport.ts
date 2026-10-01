@@ -30,6 +30,7 @@ import {
   drawingVisibilityRuleEnabled,
   sanitizeDrawingVisibilityProfile,
 } from './drawingVisibility';
+import { effectiveYardTrench } from './feederKeepouts';
 
 // ---------------------------------------------------------------------------
 // Vendor clearance NOTES (register F-05): the LG battery-container notes are
@@ -3003,7 +3004,8 @@ export function nudgeCalloutClear(
 // compose order emits later) — see dimensionTextExtents.
 export function drawTrench(dxf: DxfWriter, design: SiteDesign) {
   if (!dxf.visibilityEnabled(['fiber', 'auxiliaryCables'])) return;
-  const hasTrench = !!design.trench || (design.corridorTrenches ?? []).length > 0;
+  const yardTrench = effectiveYardTrench(design);
+  const hasTrench = !!yardTrench || (design.corridorTrenches ?? []).length > 0;
   // Blockers: dimension text (emitted later in compose order) PLUS the
   // future-augmentation footprints — a trench callout hidden inside an aug
   // block's mesh is unreadable (user-reported on the mirrored-island plan).
@@ -3026,7 +3028,7 @@ export function drawTrench(dxf: DxfWriter, design: SiteDesign) {
   // slide along their own band where equipment always flanks the corridor —
   // blocking on it would leave them no clear slot at all.
   const eqExts: TextRect[] = [];
-  if (hasTrench && design.trench) {
+  if (hasTrench && yardTrench) {
     for (const eq of design.equipment) {
       const a = eq.rotation ?? 0;
       const hx = Math.abs(Math.cos(a)) * eq.length / 2 + Math.abs(Math.sin(a)) * eq.width / 2;
@@ -3073,8 +3075,8 @@ export function drawTrench(dxf: DxfWriter, design: SiteDesign) {
     }
   }
   // Yard spine trench: band + callout, emitted before the corridor texts.
-  if (design.trench) {
-    const t = design.trench;
+  if (yardTrench) {
+    const t = yardTrench;
     dxf.addPolyline(
       [
         [t.x - t.width / 2, t.yBottom],

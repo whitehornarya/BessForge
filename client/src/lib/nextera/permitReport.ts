@@ -23,6 +23,7 @@ import {
 } from './complianceReport';
 import { validateDesign, ValidationReport } from './validateDesign';
 import { buildBomRows, buildSiteBom, BomRow } from './bom';
+import { effectiveYardTrench } from './feederKeepouts';
 import { FeederCircuit } from './feeders';
 import { CutFillEstimate, SteepZoneReport, ContourSet } from './terrain';
 import { GroundingPlan } from './grounding';
@@ -229,7 +230,7 @@ function rowFrom(findings: ComplianceFinding[], ruleId: string, item: string, re
 export function buildTrenchSectionRows(design: SiteDesign, feeders?: FeederCircuit[]): TrenchSectionRow[] {
   const mvRuns = design.cables.filter(c => c.class === 'MV' && !c.ref).length;
   const dcRuns = design.cables.filter(c => c.class === 'DC' && !c.ref).length;
-  const auxBands = (design.trench ? 1 : 0) + (design.corridorTrenches?.length ?? 0);
+  const auxBands = (effectiveYardTrench(design) ? 1 : 0) + (design.corridorTrenches?.length ?? 0);
   const feederCount = feeders?.length ?? 0;
   const none = 'not used in this design';
   return [

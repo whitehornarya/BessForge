@@ -27,6 +27,7 @@ import type {
   RoadSegment,
   SiteDesign,
 } from './types';
+import { effectiveYardTrench } from './feederKeepouts';
 
 const FEEDER_CABLE_CLASSES: readonly LegacyCableClass[] = [
   'bess-feeder-14a1', 'bess-feeder-14a2', 'bess-feeder-14b1', 'bess-feeder-14b2',
@@ -210,8 +211,9 @@ function mapReservedZone(z: ReservedZone): LegacyReservedZone {
 
 function trenchFromBand(design: SiteDesign): TrenchRun[] {
   const out: TrenchRun[] = [];
-  if (design.trench) {
-    const t = design.trench;
+  const yardTrench = effectiveYardTrench(design);
+  if (yardTrench) {
+    const t = yardTrench;
     out.push({
       id: 'trench-aux-spine',
       class: 'aux-fiber',

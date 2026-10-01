@@ -26,7 +26,6 @@ import CompliancePanel from './CompliancePanel';
 import ScenarioComparePanel from './ScenarioComparePanel';
 import { assetUrl } from '../lib/assetUrl';
 import { YARD_TEXTURE_SETS } from '../lib/textureSets';
-import { GE_PCS_GREEN } from '../lib/pcsRecolor';
 import { saveBlob } from '../lib/saveFile';
 import {
   LEGACY_TEMPLATE_CONTRACT,
@@ -501,6 +500,61 @@ function ManualRotateAngleStepper({ deltaDeg }: { deltaDeg: number }) {
   );
 }
 
+/** Editable rock depth with Apply so regenerate does not fire on every spinner tick. */
+function RockDepthField({ value, onCommit }: { value: number; onCommit: (v: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setDraft(String(value));
+  }, [value, editing]);
+  const apply = () => {
+    setEditing(false);
+    const v = Number(draft);
+    if (draft.trim() === '' || !Number.isFinite(v)) {
+      setDraft(String(value));
+      return;
+    }
+    const clamped = Math.min(24, Math.max(1, Math.round(v)));
+    setDraft(String(clamped));
+    if (clamped !== value) onCommit(clamped);
+  };
+  return (
+    <label className="text-xs text-slate-400">
+      Rock depth (inches)
+      <div className="flex gap-1.5 mt-1">
+        <input
+          type="number"
+          min={1}
+          max={24}
+          step={1}
+          value={draft}
+          onFocus={() => setEditing(true)}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            if (e.key === 'Escape') {
+              setDraft(String(value));
+              setEditing(false);
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          onBlur={apply}
+          className="flex-1 min-w-0 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
+        />
+        <button
+          type="button"
+          onClick={apply}
+          disabled={draft.trim() === '' || !Number.isFinite(Number(draft)) || Math.min(24, Math.max(1, Math.round(Number(draft)))) === value}
+          className="shrink-0 px-2.5 py-1.5 rounded border border-slate-600 bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100 disabled:opacity-40 disabled:hover:bg-slate-700"
+          title="Apply rock depth (regenerates yard surfacing)"
+        >
+          Apply
+        </button>
+      </div>
+    </label>
+  );
+}
+
 // Drainage number field with sanitizer-true clamping. min/max come straight
 // from DRAINAGE_NUM_LIMITS (the exact ranges sanitizeDrainageInputs enforces
 // on export), so the displayed value can never silently differ from what
@@ -972,7 +1026,7 @@ export default function DesignControlPanel() {
   // areas list can show a busy state instead of appearing frozen.
   const [switchingAreaId, setSwitchingAreaId] = useState<string | null>(null);
   const {
-    boundary, boundaryPicker, chooseBoundary, chooseAllBoundariesWithProgress, siteAreas, activeAreaId, setActiveArea, cancelBoundaryPicker, design, areaZones, configId, targetMW, targetMWh, hotClimate, containersPerPcs, roadMode, autoRoadWrap, ringMode, perimeterBand, fencePlacement, laydownPct, augmentPct, futurePhaseUnits, surfacingMode, surfacingDepthIn, deadSpaceTrim, dcRouting, textureSetId, gePcsColor, showGateModel, showFence3D, showFeederColors, showSatellite, satelliteStatus, satelliteError, terrain, terrainStatus, terrainError, showTerrain, labelDistanceScaling, showSlopeHeatmap, maxGradePct, showContours, contourIntervalFt, showGradingLimits, gradingSlopeRatio, exportContoursDxf, exportCutFillShading, showGrounding, groundingXray, groundingRodSpacingFt, exportGroundingDxf, exportTrenchSectionsDxf, exportSurfacingMesh, titleBlock, lgiaInputs, isLoading, busyOverlay, setBusyOverlay, error,
+    boundary, boundaryPicker, chooseBoundary, requestAllBoundariesVendor, siteAreas, activeAreaId, setActiveArea, cancelBoundaryPicker, pendingKmzVendor, confirmKmzVendor, cancelKmzVendor, design, areaZones, configId, targetMW, targetMWh, hotClimate, containersPerPcs, roadMode, autoRoadWrap, ringMode, perimeterBand, fencePlacement, laydownPct, augmentPct, futurePhaseUnits, surfacingMode, surfacingDepthIn, deadSpaceTrim, dcRouting, textureSetId, gePcsColor, showGateModel, showFence3D, showFeederColors, showSatellite, satelliteStatus, satelliteError, terrain, terrainStatus, terrainError, showTerrain, labelDistanceScaling, showSlopeHeatmap, maxGradePct, showContours, contourIntervalFt, showGradingLimits, gradingSlopeRatio, exportContoursDxf, exportCutFillShading, showGrounding, groundingXray, groundingRodSpacingFt, exportGroundingDxf, exportTrenchSectionsDxf, exportSurfacingMesh, titleBlock, lgiaInputs, isLoading, busyOverlay, setBusyOverlay, computing, error,
     loadKmz, setConfigId, setTargetMW, setTargetMWh, setHotClimate, setContainersPerPcs, setRoadMode, setAutoRoadWrap, setRingMode, setPerimeterBand, setFencePlacement, setLaydownPct, setAugmentPct, setFuturePhaseUnits, setIslandAugUnits, setIslandAugEnd, adjustIslandBlocks, setSurfacingMode, setSurfacingDepthIn, setDeadSpaceTrim, setDcRouting, setTextureSetId, setGePcsColor, setShowGateModel, setShowFence3D, setShowFeederColors, setShowSatellite, loadSatellite, setShowTerrain, setLabelDistanceScaling, setShowSlopeHeatmap, setMaxGradePct, setShowContours, setContourIntervalFt, setShowGradingLimits, setGradingSlopeRatio, setExportContoursDxf, setExportCutFillShading, setShowGrounding, setGroundingXray, setGroundingRodSpacingFt, setExportGroundingDxf, setExportTrenchSectionsDxf, setExportSurfacingMesh, requestInspectTrench, requestOverview, setTitleBlock, setLgiaInputs, clearSite,
     eciLegend, setEciLegend,
     substation, placingSubstation, feeders, feederAssignments, feederMaterial,
@@ -1754,7 +1808,9 @@ export default function DesignControlPanel() {
     await loadKmz(file);
     const st = useDesignStore.getState();
     if (st.error) toastCaught('Could not load the site boundary', st.error);
-    else if (!st.boundaryPicker) toast.success('Site boundary loaded');
+    else if (st.boundaryPicker) { /* multi-area picker shown */ }
+    else if (st.pendingKmzVendor) toast.success('KMZ parsed — choose PCS vendor');
+    else if (st.boundary) toast.success('Site boundary loaded');
   };
 
   // Opt-in existing-grade contours (reference layer), shared by every export
@@ -3315,30 +3371,16 @@ export default function DesignControlPanel() {
               {/* Primary path for phase-footprint drawings: bring every
                   outline in as ONE project, positioned relative to each
                   other, instead of designing a single footprint in
-                  isolation. */}
+                  isolation. Vendor (PE/GE) is confirmed next. */}
               <button
                 disabled={!!busyOverlay}
                 onClick={() => {
-                  void (async () => {
-                    setBusyOverlay({ label: 'Loading all site areas…', frac: 0 });
-                    try {
-                      await chooseAllBoundariesWithProgress((frac, label) => {
-                        setBusyOverlay({ label, frac });
-                      });
-                      const err = useDesignStore.getState().error;
-                      if (err) toastCaught('Could not load all site areas', err);
-                      else {
-                        const n = useDesignStore.getState().siteAreas.length;
-                        toast.success(`Whole site loaded — ${n} areas`);
-                      }
-                    } finally {
-                      setBusyOverlay(null);
-                    }
-                  })();
+                  requestAllBoundariesVendor();
+                  toast.success('Choose PCS vendor to finish import');
                 }}
                 className="w-full mb-2 py-2 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-xs font-semibold text-white transition-colors"
               >
-                {busyOverlay ? 'Loading…' : `Show all ${boundaryPicker.options.length} areas as one site`}
+                {`Show all ${boundaryPicker.options.length} areas as one site`}
               </button>
               <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1.5">
                 or design a single area
@@ -3348,12 +3390,10 @@ export default function DesignControlPanel() {
                   <button
                     key={o.index}
                     onClick={() => {
-                      void withBusyOverlay('Loading site drawing…', () => {
-                        chooseBoundary(o.index);
-                        const err = useDesignStore.getState().error;
-                        if (err) toastCaught('Could not load that site area', err);
-                        else toast.success(`${o.name} loaded`);
-                      });
+                      chooseBoundary(o.index);
+                      const err = useDesignStore.getState().error;
+                      if (err) toastCaught('Could not load that site area', err);
+                      else toast.success(`${o.name} selected — choose PCS vendor`);
                     }}
                     className="text-left text-xs px-2 py-1.5 rounded bg-slate-900 hover:bg-slate-700 border border-slate-600 text-slate-200 transition-colors"
                   >
@@ -3364,6 +3404,73 @@ export default function DesignControlPanel() {
               </div>
               <button
                 onClick={cancelBoundaryPicker}
+                className="mt-2 w-full py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs text-slate-300"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          {pendingKmzVendor && (
+            <div className="mt-3 bg-slate-800 border border-cyan-700 rounded p-3">
+              <div className="text-xs font-medium text-cyan-200 mb-1">
+                Choose PCS vendor
+              </div>
+              <div className="text-[11px] text-slate-400 mb-3">
+                {pendingKmzVendor.sourceName}
+                {pendingKmzVendor.selection.type === 'all'
+                  ? ` — all ${pendingKmzVendor.options?.length ?? 0} areas`
+                  : ' — apply site with PE or GE equipment'}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  disabled={!!busyOverlay}
+                  onClick={() => {
+                    void (async () => {
+                      const isAll = pendingKmzVendor.selection.type === 'all';
+                      if (isAll) setBusyOverlay({ label: 'Loading all site areas…', frac: 0 });
+                      try {
+                        await confirmKmzVendor('pe', isAll
+                          ? (frac, label) => setBusyOverlay({ label, frac })
+                          : undefined);
+                        const st = useDesignStore.getState();
+                        if (st.error) toastCaught('Could not apply site boundary', st.error);
+                        else if (st.siteAreas.length > 1) toast.success(`Whole site loaded with PE — ${st.siteAreas.length} areas`);
+                        else toast.success('Site loaded with Power Electronics');
+                      } finally {
+                        if (isAll) setBusyOverlay(null);
+                      }
+                    })();
+                  }}
+                  className="flex-1 py-2 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-xs font-semibold text-white transition-colors"
+                >
+                  PE
+                </button>
+                <button
+                  disabled={!!busyOverlay}
+                  onClick={() => {
+                    void (async () => {
+                      const isAll = pendingKmzVendor.selection.type === 'all';
+                      if (isAll) setBusyOverlay({ label: 'Loading all site areas…', frac: 0 });
+                      try {
+                        await confirmKmzVendor('ge', isAll
+                          ? (frac, label) => setBusyOverlay({ label, frac })
+                          : undefined);
+                        const st = useDesignStore.getState();
+                        if (st.error) toastCaught('Could not apply site boundary', st.error);
+                        else if (st.siteAreas.length > 1) toast.success(`Whole site loaded with GE — ${st.siteAreas.length} areas`);
+                        else toast.success('Site loaded with GE');
+                      } finally {
+                        if (isAll) setBusyOverlay(null);
+                      }
+                    })();
+                  }}
+                  className="flex-1 py-2 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-xs font-semibold text-white transition-colors"
+                >
+                  GE
+                </button>
+              </div>
+              <button
+                onClick={cancelKmzVendor}
                 className="mt-2 w-full py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs text-slate-300"
               >
                 Cancel
@@ -4001,10 +4108,22 @@ export default function DesignControlPanel() {
             <input
               type="checkbox"
               checked={hotClimate}
+              disabled={computing}
               onChange={e => setHotClimate(e.target.checked)}
             />
             <span>Hot climate site (&gt;40°C) — 14 ft PCS clearance and 14 ft between blocks (10 ft each below 40°C)</span>
           </label>
+          {computing && (
+            <div className="mt-2 flex items-center gap-2" role="status" aria-live="polite">
+              <div className="w-3.5 h-3.5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] text-slate-400 mb-1">Updating layout for climate clearances…</div>
+                <div className="h-1.5 rounded bg-slate-700 overflow-hidden">
+                  <div className="h-full w-1/3 bg-cyan-500 rounded animate-pulse" />
+                </div>
+              </div>
+            </div>
+          )}
         </PanelSection>
 
         {/* Step 3: Target */}
@@ -4066,50 +4185,7 @@ export default function DesignControlPanel() {
               </span>
             </label>
           )}
-          <label className="text-xs text-slate-400 block mt-3">
-            Site Access Roads
-            <select
-              value={roadMode}
-              onChange={e => setRoadMode(e.target.value as 'auto' | 'roads' | 'compact')}
-              className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
-            >
-              <option value="auto">Auto — preserve roads for multi-area sites; report any shortfall</option>
-              <option value="roads">Always include roads (perimeter + drive aisles)</option>
-              <option value="compact">Compact — no interior roads (max blocks)</option>
-            </select>
-          </label>
-          <label className="flex items-center gap-2 text-xs text-slate-400 mt-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoRoadWrap}
-              onChange={e => setAutoRoadWrap(e.target.checked)}
-              className="accent-sky-500"
-            />
-            Auto-wrap roads around placed equipment
-          </label>
-          <label className="text-xs text-slate-400 block mt-3">
-            Perimeter Road Ring
-            <select
-              value={ringMode}
-              onChange={e => setRingMode(e.target.value as 'fence' | 'shrink' | 'hybrid')}
-              className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
-            >
-              <option value="fence">Full fence ring — follow the entire fence line</option>
-              <option value="shrink">Shrink-wrap — hug the equipment cluster</option>
-              <option value="hybrid">Hybrid — hug only sides far from the fence</option>
-            </select>
-          </label>
-          <label className="text-xs text-slate-400 block mt-3">
-            Perimeter Road Outer Edge
-            <select
-              value={perimeterBand ?? 'standard'}
-              onChange={e => setPerimeterBand(e.target.value as 'standard' | 'flush')}
-              className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
-            >
-              <option value="standard">Standard — 10 ft inset from fence (NFPA 855 default)</option>
-              <option value="flush">Flush with fence line — road reaches the boundary</option>
-            </select>
-          </label>
+          {/* Site Access Roads / Auto-wrap / Perimeter Ring / Outer Edge — hidden from Target Rating UI (engine defaults unchanged). */}
           <label className="text-xs text-slate-400 block mt-3">
             DC run routing (container to PCS)
             <select
@@ -4121,15 +4197,7 @@ export default function DesignControlPanel() {
               <option value="direct">Direct — straight-line runs</option>
             </select>
           </label>
-          <label className="flex items-center gap-2 mt-3 text-xs text-slate-400 cursor-pointer" data-testid="toggle-dead-space-trim">
-            <input
-              type="checkbox"
-              checked={deadSpaceTrim}
-              onChange={e => setDeadSpaceTrim(e.target.checked)}
-              className="accent-emerald-500"
-            />
-            Dead-space trim — shrink fence to minimum compliant hull, clip rock courtyards to contents
-          </label>
+          {/* Dead-space trim — hidden from Target Rating UI (engine default unchanged). */}
           {(design?.islands?.length ?? 0) >= 2 && (
             <label
               className="flex items-center gap-2 mt-2 text-xs text-slate-400 cursor-pointer"
@@ -4157,18 +4225,7 @@ export default function DesignControlPanel() {
                 <option value="full-yard">Everything inside fence</option>
               </select>
             </label>
-            <label className="text-xs text-slate-400">
-              Rock depth (inches)
-              <input
-                type="number"
-                min={1}
-                max={24}
-                step={1}
-                value={surfacingDepthIn}
-                onChange={e => setSurfacingDepthIn(Number(e.target.value) || 4)}
-                className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
+            <RockDepthField value={surfacingDepthIn} onCommit={setSurfacingDepthIn} />
           </div>
           {design?.surfacing && design.surfacing.areaSqFt > 0 && (
             <div className="text-[11px] text-slate-400 mt-2 bg-slate-800 rounded p-2">
@@ -4205,57 +4262,7 @@ export default function DesignControlPanel() {
               CC0 textures from Poly Haven / ambientCG. Does not affect DXF/PDF exports.
             </div>
           </div>
-          {getEffectiveConfiguration(configId, containersPerPcs)?.inverterModel === 'GE FLEX 1571' && (
-            <div className="mt-3" data-testid="ge-pcs-color-control">
-              <div className="text-xs text-slate-400 mb-1" title="Repaint the GE PCS container exterior in the 3D preview: body panels take the chosen color, the baked GE Vernova logos and lettering go white — like the factory green units. Display only, DXF/PDF exports unaffected.">
-                GE PCS exterior color (3D preview only)
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => setGePcsColor(null)}
-                  data-testid="ge-pcs-color-factory"
-                  className={`px-2 py-1.5 rounded border text-xs transition-colors ${
-                    gePcsColor === null
-                      ? 'border-cyan-500 bg-slate-800 text-slate-100'
-                      : 'border-slate-700 bg-slate-800/40 text-slate-300 hover:border-slate-500'
-                  }`}
-                >
-                  Factory
-                </button>
-                <button
-                  onClick={() => setGePcsColor(GE_PCS_GREEN)}
-                  data-testid="ge-pcs-color-green"
-                  className={`flex items-center gap-1.5 px-2 py-1.5 rounded border text-xs transition-colors ${
-                    gePcsColor === GE_PCS_GREEN
-                      ? 'border-cyan-500 bg-slate-800 text-slate-100'
-                      : 'border-slate-700 bg-slate-800/40 text-slate-300 hover:border-slate-500'
-                  }`}
-                >
-                  <span className="w-3 h-3 rounded-sm inline-block border border-slate-600" style={{ background: GE_PCS_GREEN }} />
-                  GE green
-                </button>
-                <label
-                  data-testid="ge-pcs-color-custom"
-                  className={`flex items-center gap-1.5 px-2 py-1.5 rounded border text-xs cursor-pointer transition-colors ${
-                    gePcsColor !== null && gePcsColor !== GE_PCS_GREEN
-                      ? 'border-cyan-500 bg-slate-800 text-slate-100'
-                      : 'border-slate-700 bg-slate-800/40 text-slate-300 hover:border-slate-500'
-                  }`}
-                >
-                  <input
-                    type="color"
-                    value={gePcsColor ?? GE_PCS_GREEN}
-                    onChange={e => setGePcsColor(e.target.value)}
-                    className="w-4 h-4 p-0 border-0 bg-transparent cursor-pointer"
-                  />
-                  Custom
-                </label>
-              </div>
-              <div className="text-[10px] text-slate-500 mt-1">
-                Logos and lettering stay white on any body color.
-              </div>
-            </div>
-          )}
+          {/* GE PCS exterior color — hidden from Target Rating UI for now. */}
           <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mt-3 mb-1" title="Heavier preview features are off by default so the 3D view stays fast; turn on what you need. All display-only — DXF/PDF exports unaffected.">
             Display &amp; performance
           </div>
@@ -5565,166 +5572,7 @@ export default function DesignControlPanel() {
           >
             Back to full-site overview (3D)
           </button>
-          <div className="grid grid-cols-2 gap-3 mt-3">
-            <label className="text-xs text-slate-400">
-              Laydown area (% of yard)
-              <input
-                type="number"
-                min={0}
-                max={50}
-                step={1}
-                value={laydownPct}
-                onChange={e => setLaydownPct(Number(e.target.value) || 0)}
-                className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
-            <label className="text-xs text-slate-400">
-              Future augmentation (% of blocks)
-              <input
-                type="number"
-                min={0}
-                max={100}
-                step={1}
-                value={augmentPct}
-                onChange={e => setAugmentPct(Number(e.target.value) || 0)}
-                className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
-            <label className="text-xs text-slate-400">
-              Future phase (augmentation units)
-              <input
-                type="number"
-                min={0}
-                max={50}
-                step={1}
-                value={futurePhaseUnits}
-                onChange={e => setFuturePhaseUnits(Number(e.target.value) || 0)}
-                className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
-          </div>
-          <div className="text-[10px] text-slate-500 mt-1">
-            Each augmentation unit reserves QTY 2 PCS + QTY 6 BESS (one mirrored pair), shown ghosted in 3D and dashed in the DXF.
-          </div>
-          {(design?.islands?.length ?? 0) > 0 && (
-            <div className="mt-2 space-y-1">
-              <div className="text-xs text-slate-400 font-medium">Per-island augmentation units (default {DEFAULT_ISLAND_AUG_UNITS}, 0 disables)</div>
-              {design!.islands!.map(isl => {
-                const count = layoutEdits.islandAugUnits?.[isl.n] ?? DEFAULT_ISLAND_AUG_UNITS;
-                return (
-                  <div key={isl.n} className="flex items-center justify-between text-xs bg-slate-800 rounded px-2 py-1">
-                    <span className="text-slate-300">Island {isl.n}</span>
-                    <span className="flex items-center gap-2">
-                      <button
-                        className="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40"
-                        disabled={count <= 0}
-                        onClick={() => setIslandAugUnits(isl.n, count - 1)}
-                      >
-                        −
-                      </button>
-                      <span className="w-6 text-center text-slate-200">{count}</span>
-                      <button
-                        className="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40"
-                        disabled={count >= MAX_ISLAND_AUG_UNITS}
-                        onClick={() => setIslandAugUnits(isl.n, count + 1)}
-                      >
-                        +
-                      </button>
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {(design?.islands?.length ?? 0) > 0 && (
-            <div className="mt-2 space-y-1">
-              <div className="text-xs text-slate-400 font-medium">Augmentation end (swap left ⇄ right per island)</div>
-              {design!.islands!.map(isl => {
-                // Placed islands are keyed by their pisl id; auto by number.
-                const spec = isl.placed
-                  ? (layoutEdits.placedIslands ?? []).find(p =>
-                      Math.abs(p.x - (isl.cx ?? NaN)) < 0.01 && Math.abs(p.y - (isl.cy ?? NaN)) < 0.01)
-                  : null;
-                const key = isl.placed ? spec?.id : String(isl.n);
-                if (!key) return null;
-                // Current side from the actual zones (works for auto scans too)
-                const zones = (design?.reservedZones ?? []).filter(z => z.id.startsWith(`island-aug-${isl.n}-`));
-                const islCx = isl.vertical ? (isl.cy ?? 0) : (isl.minX + isl.maxX) / 2;
-                const zCx = zones.length ? zones.reduce((s, z) => s + (isl.vertical ? z.y : z.x), 0) / zones.length : null;
-                const curSide: 'east' | 'west' | null = zCx === null ? null : zCx >= islCx ? 'east' : 'west';
-                return (
-                  <div key={`augend-${isl.n}`} className="flex items-center justify-between text-xs bg-slate-800 rounded px-2 py-1">
-                    <span className="text-slate-300">Island {isl.n}{isl.placed ? ' (placed)' : ''}
-                      {curSide && <span className="text-slate-500"> — {curSide}</span>}</span>
-                    <button
-                      className="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40"
-                      disabled={!curSide}
-                      onClick={() => {
-                        const target = curSide === 'east' ? 'west' : 'east';
-                        const why = setIslandAugEnd(key, target);
-                        if (why !== null) toast.error(`Swap rejected — ${friendlyRejectReason(why)}`, { duration: 8000 });
-                      }}
-                    >
-                      ⇄ Swap end
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {(design?.islands?.length ?? 0) > 0 && (
-            <div className="mt-2 space-y-1">
-              <div className="text-xs text-slate-400 font-medium">Per-island PCS+QTY3 blocks (add or remove a block)</div>
-              {design!.islands!.map(isl => {
-                const blockCount = isl.southIds.length + isl.northIds.length;
-                return (
-                  <div key={isl.n} className="flex items-center justify-between text-xs bg-slate-800 rounded px-2 py-1">
-                    <span className="text-slate-300">Island {isl.n} — {blockCount} block{blockCount === 1 ? '' : 's'}</span>
-                    <span className="flex items-center gap-2">
-                      <button
-                        className="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40"
-                        disabled={blockCount <= 1}
-                        onClick={() => {
-                          const err = adjustIslandBlocks(isl.n, -1);
-                          if (err) toast.error(`Could not remove block — ${friendlyRejectReason(err)}`);
-                        }}
-                      >
-                        −
-                      </button>
-                      <button
-                        className="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600"
-                        onClick={() => {
-                          const err = adjustIslandBlocks(isl.n, 1);
-                          if (err) toast.error(`Could not add block — ${friendlyRejectReason(err)}`);
-                        }}
-                      >
-                        +
-                      </button>
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {design?.reserveSummary && (
-            <div className="text-[11px] text-slate-400 mt-2 space-y-0.5 bg-slate-800 rounded p-2">
-              {design.reserveSummary.laydownPct > 0 && (
-                <div>
-                  Laydown: {(design.reserveSummary.laydownPlacedSqFt / 43560).toFixed(2)} of{' '}
-                  {(design.reserveSummary.laydownRequestedSqFt / 43560).toFixed(2)} acres placed
-                </div>
-              )}
-              {(design.reserveSummary.augPct > 0 || design.reserveSummary.augBlocksRequested > 0) && (
-                <div>
-                  Future augmentation: {design.reserveSummary.augBlocksPlaced} of{' '}
-                  {design.reserveSummary.augBlocksRequested} block footprint(s) reserved
-                  {design.reserveSummary.augBlocksPlaced > 0 && (
-                    <> (+{design.reserveSummary.augMW.toFixed(1)} MW / +{design.reserveSummary.augMWh.toFixed(1)} MWh future)</>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+          {/* Laydown / future aug / per-island controls / reserve summary — hidden from Target Rating UI (engine defaults unchanged). */}
         </PanelSection>
 
         {/* Step 4: Title block info */}
