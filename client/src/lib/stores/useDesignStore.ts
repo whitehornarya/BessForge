@@ -8036,6 +8036,37 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     return null;
   },
 
+  alignManualSelection: (axis: 'x' | 'y'): string | null => {
+    if (axis !== 'x' && axis !== 'y') return 'Invalid align axis.';
+    const activeId = get().activeManualGroupId;
+    const active = activeId
+      ? (get().layoutEdits.manualGroups ?? []).find(g => g.id === activeId)
+      : null;
+    const ids = (active?.memberIds ?? get().manualSelectionIds)
+      .filter(id => id !== 'gate' && !id.startsWith('mroad-'));
+    if (ids.length < 2) return 'Select at least two items to align.';
+    const prev = get().layoutEdits;
+    const idSet = new Set(ids);
+    const members = (prev.placedEquipment ?? []).filter(s => idSet.has(s.id));
+    if (members.length < 2) return 'Select at least two items to align.';
+    const target = members.reduce((sum, s) => sum + (axis === 'x' ? s.x : s.y), 0) / members.length;
+    let changed = false;
+    const next = (prev.placedEquipment ?? []).map(s => {
+      if (!idSet.has(s.id)) return s;
+      const nx = axis === 'x' ? target : s.x;
+      const ny = axis === 'y' ? target : s.y;
+      if (nx === s.x && ny === s.y) return s;
+      changed = true;
+      return movePlacedSpec(s, nx, ny);
+    });
+    if (!changed) return null;
+    const before = snapOf(get(), `Aligned ${members.length} items on ${axis.toUpperCase()}`);
+    set({ layoutEdits: { ...prev, placedEquipment: next } });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
+    return null;
+  },
+
   removeManualSelection: (): void => {
     const activeId = get().activeManualGroupId;
     const active = activeId

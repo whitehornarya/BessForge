@@ -3163,6 +3163,7 @@ export default function DesignControlPanel() {
   const duplicateManualSelection = useDesignStore(s => s.duplicateManualSelection);
   const removeManualSelection = useDesignStore(s => s.removeManualSelection);
   const clearManualSelection = useDesignStore(s => s.clearManualSelection);
+  const alignManualSelection = useDesignStore(s => s.alignManualSelection);
   const manualRotateSession = useDesignStore(s => s.manualRotateSession);
   const beginManualRotate = useDesignStore(s => s.beginManualRotate);
   const cancelManualRotate = useDesignStore(s => s.cancelManualRotate);
@@ -3705,6 +3706,30 @@ export default function DesignControlPanel() {
                           <div className="flex gap-2">
                             <button
                               type="button"
+                              onClick={() => {
+                                const why = alignManualSelection('x');
+                                if (why) toast.error(why);
+                              }}
+                              className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                              title="Snap all members to the same X (centroid)"
+                            >
+                              Align X
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const why = alignManualSelection('y');
+                                if (why) toast.error(why);
+                              }}
+                              className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                              title="Snap all members to the same Y (centroid)"
+                            >
+                              Align Y
+                            </button>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
                               onClick={() => dissolveManualGroup(g.id)}
                               className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
                             >
@@ -3725,45 +3750,73 @@ export default function DesignControlPanel() {
                       );
                     })()}
                     {!activeManualGroupId && manualSelectionIds.length > 0 && (
-                      <div className="flex gap-2 mt-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const why = duplicateManualSelection();
-                            if (why) toast.error(why);
-                          }}
-                          className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-amber-700/80 text-amber-50 hover:bg-amber-600"
-                        >
-                          Duplicate ({manualSelectionIds.length})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeManualSelection()}
-                          className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
-                        >
-                          Delete
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const members = manualSelectionIds.filter(id => id !== 'gate' && !id.startsWith('mroad-'));
-                            const sess = manualRotateSession;
-                            if (sess && sess.memberIds.length === members.length && members.every(id => sess.memberIds.includes(id))) {
-                              cancelManualRotate();
-                              return;
-                            }
-                            const why = beginManualRotate(members);
-                            if (why) toast.error(why);
-                          }}
-                          className={`flex-1 px-2 py-1.5 text-xs font-medium rounded border ${
-                            manualRotateSession
-                              ? 'border-cyan-500 bg-cyan-700/80 text-cyan-50'
-                              : 'border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700'
-                          }`}
-                          title="Click to arm rotate, then click-drag on the plan; release to finish"
-                        >
-                          Rotate
-                        </button>
+                      <div className="flex flex-col gap-1.5 mt-1.5">
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const why = duplicateManualSelection();
+                              if (why) toast.error(why);
+                            }}
+                            className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-amber-700/80 text-amber-50 hover:bg-amber-600"
+                          >
+                            Duplicate ({manualSelectionIds.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeManualSelection()}
+                            className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                          >
+                            Delete
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const members = manualSelectionIds.filter(id => id !== 'gate' && !id.startsWith('mroad-'));
+                              const sess = manualRotateSession;
+                              if (sess && sess.memberIds.length === members.length && members.every(id => sess.memberIds.includes(id))) {
+                                cancelManualRotate();
+                                return;
+                              }
+                              const why = beginManualRotate(members);
+                              if (why) toast.error(why);
+                            }}
+                            className={`flex-1 px-2 py-1.5 text-xs font-medium rounded border ${
+                              manualRotateSession
+                                ? 'border-cyan-500 bg-cyan-700/80 text-cyan-50'
+                                : 'border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700'
+                            }`}
+                            title="Click to arm rotate, then click-drag on the plan; release to finish"
+                          >
+                            Rotate
+                          </button>
+                        </div>
+                        {manualSelectionIds.filter(id => id !== 'gate' && !id.startsWith('mroad-')).length >= 2 && (
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const why = alignManualSelection('x');
+                                if (why) toast.error(why);
+                              }}
+                              className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                              title="Snap all members to the same X (centroid)"
+                            >
+                              Align X
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const why = alignManualSelection('y');
+                                if (why) toast.error(why);
+                              }}
+                              className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                              title="Snap all members to the same Y (centroid)"
+                            >
+                              Align Y
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

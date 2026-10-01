@@ -93,12 +93,11 @@ A placement-mode control on Manual Placement, above the palette. The choice is s
 
 Escape clears the active group highlight (does not delete the group). Align X / Y / rotation remains Slice 7 later.
 
-## Slice 7 — Align a group
+## Slice 7 — Align a group (X / Y done)
 
-Later, after several item types can be placed.
+**Align X** / **Align Y** in the Groups panel snap every selected (or active-group) member’s center onto the selection centroid’s X or Y. One undo step; peq only. Writes the same stored poses as a drag.
 
-- Align the selection on X, on Y, or to the rotation of one chosen item in the selection.
-- Writes the same stored poses as a drag, so a later scan still does not move `source: 'manual'` items.
+Still later: align to the rotation of one chosen item in the selection.
 
 ## Checks
 
@@ -108,4 +107,4 @@ Cases live in [`scripts/nextera.test.ts`](../scripts/nextera.test.ts).
 - Slice 4: a dropped PCS stays on its catalog footprint and adds no roads or MW. A trace apply does not move that point. With Batteries 2/3, the drop also places batteries at single/single2 spacing and groups them with the PCS. Place as Ghost stamps future-flagged models (auto-aug fade).
 - Slice 5: dragging a placed PCS changes that id’s pose and does not add a second id; delete removes it; duplicate adds one offset copy; rotate changes `rotationDeg` by 90.
 - Slice 6: grid mode snaps a drop onto the grid; free mode keeps the raw point.
-- Slice 7a: Select area auto-creates named groups (equipment only); roads frozen unless Road armed; active group moves as a unit; Duplicate creates a new named group; Rotate is a panel button with click-drag/release about the group centroid and an editable ±90° angle stepper; renaming is Backspace-safe.
+- Slice 7a: Select area auto-creates named groups (equipment only); roads frozen unless Road armed; active group moves as a unit; Duplicate creates a new named group; Rotate is a panel button with click-drag/release about the group centroid and an editable ±90° angle stepper; renaming is Backspace-safe; Align X / Align Y snap members to the selection centroid.
