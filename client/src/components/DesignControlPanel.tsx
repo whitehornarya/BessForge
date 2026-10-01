@@ -775,20 +775,28 @@ function displayBounds(lim: { min: number; max: number }, perUnit: number, decim
 // Inactive sections stay mounted (hidden via CSS) so controls/file inputs do
 // not remount when switching tabs.
 const PANEL_SECTION_KEY = 'nextera-panel-section';
+/** Flip true to restore Edit Layout / Reset & Arrangements tab bodies. */
+const SHOW_LEGACY_LAYOUT_TABS = false;
 
 const PANEL_SECTIONS = [
   { id: 'site', title: 'Site Boundary (KMZ)' },
+  { id: 'titleblock', title: 'Project Info' },
   { id: 'place', title: 'Manual Placement' },
-  { id: 'equipment', title: 'Equipment Configuration' },
-  { id: 'target', title: 'Target Rating' },
-  { id: 'titleblock', title: 'Title Block' },
-  { id: 'electrical', title: 'Substation & MV Feeders' },
-  { id: 'edit', title: 'Edit Layout' },
-  { id: 'arrangements', title: 'Reset & Arrangements' },
+  { id: 'target', title: 'Settings' },
   { id: 'exports', title: 'Exports' },
 ] as const;
 
-type PanelSectionId = (typeof PANEL_SECTIONS)[number]['id'];
+type ActivePanelSectionId = (typeof PANEL_SECTIONS)[number]['id'];
+/** Removed from nav; kept only for legacy tab bodies / restore flag. */
+type LegacyPanelSectionId = 'equipment' | 'electrical' | 'edit' | 'arrangements';
+type PanelSectionId = ActivePanelSectionId | LegacyPanelSectionId;
+
+const STALE_PANEL_SECTION_MAP: Record<string, ActivePanelSectionId> = {
+  equipment: 'target',
+  electrical: 'place',
+  edit: 'place',
+  arrangements: 'place',
+};
 
 type PanelNavValue = {
   activeId: PanelSectionId;
@@ -800,7 +808,9 @@ const PanelNavContext = createContext<PanelNavValue | null>(null);
 function readStoredPanelSection(): PanelSectionId {
   try {
     const raw = localStorage.getItem(PANEL_SECTION_KEY);
-    if (raw && PANEL_SECTIONS.some(s => s.id === raw)) return raw as PanelSectionId;
+    if (!raw) return 'site';
+    if (PANEL_SECTIONS.some(s => s.id === raw)) return raw as ActivePanelSectionId;
+    if (raw in STALE_PANEL_SECTION_MAP) return STALE_PANEL_SECTION_MAP[raw];
   } catch {
     // storage unavailable / corrupt — default site
   }
@@ -847,10 +857,9 @@ function PanelSection({ id, title, discipline, children }: {
 
 function PanelSectionNav({
   boundaryReady,
-  designReady,
 }: {
   boundaryReady: boolean;
-  designReady: boolean;
+  designReady?: boolean;
 }) {
   const nav = useContext(PanelNavContext);
   if (!nav) return null;
@@ -867,21 +876,13 @@ function PanelSectionNav({
     >
       {PANEL_SECTIONS.map(s => {
         // Site Boundary stays reachable with no KMZ (that is the upload tab).
-        // Everything else — including Exports — waits on a loaded boundary;
-        // Edit / Arrangements also need a generated layout.
+        // Everything else — including Exports — waits on a loaded boundary.
         const needsBoundary = s.id !== 'site';
-        const needsDesign = s.id === 'edit' || s.id === 'arrangements';
-        const blockedByUpload = needsBoundary && !boundaryReady;
-        const blockedByDesign = !blockedByUpload && needsDesign && !designReady;
-        const disabled = blockedByUpload || blockedByDesign;
+        const disabled = needsBoundary && !boundaryReady;
         const active = nav.activeId === s.id;
         // Native title on disabled <button> is unreliable in some browsers —
         // put the hint on a wrapping span so hover still shows it.
-        const hoverHint = blockedByUpload
-          ? 'Please upload a KMZ'
-          : blockedByDesign
-            ? 'Please generate a layout first'
-            : s.title;
+        const hoverHint = disabled ? 'Please upload a KMZ' : s.title;
         return (
           <span
             key={s.id}
@@ -3243,17 +3244,17 @@ export default function DesignControlPanel() {
     if (placeMaterialEpoch > 0) setPanelActiveId('place');
   }, [placeMaterialEpoch, setPanelActiveId]);
   // Fall back to Site Boundary when the active tab is no longer reachable
-  // (no KMZ yet, or Edit/Arrangements without a layout).
+  // (no KMZ yet). Stale legacy tab ids map to an active tab.
   useEffect(() => {
     if (panelActiveId === 'site') return;
     if (!boundary) {
       setPanelActiveId('site');
       return;
     }
-    if (!design && (panelActiveId === 'edit' || panelActiveId === 'arrangements')) {
-      setPanelActiveId('site');
+    if (panelActiveId in STALE_PANEL_SECTION_MAP) {
+      setPanelActiveId(STALE_PANEL_SECTION_MAP[panelActiveId]);
     }
-  }, [boundary, design, panelActiveId, setPanelActiveId]);
+  }, [boundary, panelActiveId, setPanelActiveId]);
 
   const panelNavValue = useMemo<PanelNavValue>(() => ({
     activeId: panelActiveId,
@@ -3278,7 +3279,7 @@ export default function DesignControlPanel() {
       </div>
 
       <div className="relative flex-1 min-h-0">
-      <PanelSectionNav boundaryReady={!!boundary} designReady={!!design} />
+      <PanelSectionNav boundaryReady={!!boundary} />
       <div className="pl-8 h-full overflow-y-auto flex flex-col">
       <div className="p-4 space-y-5 flex-1 flex flex-col min-h-full">
         {/* Saved-session restore banner */}
@@ -3623,6 +3624,87 @@ export default function DesignControlPanel() {
           )}
         </PanelSection>
 
+        {/* Project Info */}
+        <PanelSection id="titleblock" title="Project Info" discipline="Exports">
+          <div className="space-y-2">
+            <label className="text-xs text-slate-400 block">
+              Project Name
+              <input
+                type="text"
+                value={titleBlock.projectName}
+                onChange={e => setTitleBlock({ projectName: e.target.value })}
+                placeholder={boundary ? boundary.name : 'e.g. Hondo BESS'}
+                className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
+              />
+            </label>
+            <label className="text-xs text-slate-400 block">
+              Location (County, State)
+              <input
+                type="text"
+                value={titleBlock.location}
+                onChange={e => setTitleBlock({ location: e.target.value })}
+                placeholder="e.g. Medina County, TX"
+                className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
+              />
+              {(isCoordinateLocation(titleBlock.location) || (!titleBlock.location.trim() && !!boundary)) && (
+                <span className="block mt-0.5 text-[10px] text-slate-500">
+                  Coordinates or blank — county/state auto-fills from the site location (type a place name to override)
+                </span>
+              )}
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              <label className="text-xs text-slate-400 block">
+                Drawn By
+                <input
+                  type="text"
+                  value={titleBlock.drafter}
+                  onChange={e => setTitleBlock({ drafter: e.target.value })}
+                  placeholder="Initials"
+                  className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
+                />
+              </label>
+              <label className="text-xs text-slate-400 block">
+                Rev
+                <input
+                  type="text"
+                  value={titleBlock.revision}
+                  onChange={e => setTitleBlock({ revision: e.target.value })}
+                  placeholder="0A"
+                  className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
+                />
+              </label>
+              <label className="text-xs text-slate-400 block">
+                Date
+                <input
+                  type="text"
+                  value={titleBlock.date}
+                  onChange={e => setTitleBlock({ date: e.target.value })}
+                  placeholder={new Date().toLocaleDateString()}
+                  className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
+                />
+              </label>
+            </div>
+            <label className="text-xs text-slate-400 block">
+              NEER Dwg. Name (10% banner)
+              <input
+                type="text"
+                value={titleBlock.neerDwgName}
+                onChange={e => setTitleBlock({ neerDwgName: e.target.value })}
+                placeholder="e.g. CK1-E-200 (blank = empty cell)"
+                className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
+              />
+            </label>
+            <label className="flex items-center gap-2 mt-2 text-sm" title="Draw the legend equipment symbols in the ECI reference legend style (traced from the issued legend sheets). Only the legend swatch glyphs change — rows, labels and the drawing itself are untouched. Saved with the project.">
+              <input
+                type="checkbox"
+                checked={eciLegend}
+                onChange={e => setEciLegend(e.target.checked)}
+              />
+              <span>ECI legend symbols</span>
+            </label>
+          </div>
+        </PanelSection>
+
         <PanelSection id="place" title="Manual Placement" discipline="Layout">
           <div className="bg-slate-800 rounded p-3 text-sm space-y-3">
             {manualYard ? (
@@ -3959,7 +4041,10 @@ export default function DesignControlPanel() {
                         <div key={opt.id} className="flex flex-col gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setManualPlaceItem(selected ? null : opt.id)}
+                            onClick={() => {
+                              setPlacingSubstation(false);
+                              setManualPlaceItem(selected ? null : opt.id);
+                            }}
                             aria-pressed={selected}
                             className={`flex items-center gap-2 text-left text-xs px-2.5 py-2 rounded border font-medium transition-colors ${
                               selected
@@ -4021,7 +4106,9 @@ export default function DesignControlPanel() {
                     })}
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1.5">
-                    {manualPlaceItem === 'road'
+                    {placingSubstation
+                      ? 'Substation armed — click the map to place or move. Escape cancels.'
+                      : manualPlaceItem === 'road'
                       ? 'Mark the road path (click vertices). Enter / double-click generates the road. Escape cancels.'
                       : manualPlaceItem === 'gate'
                       ? 'Gate armed — drag on the site to drop the gate. Escape cancels.'
@@ -4032,6 +4119,35 @@ export default function DesignControlPanel() {
                       : manualPlaceItem
                       ? 'Armed — drag on the site to drop one. Escape cancels.'
                       : 'Select an item, then drag it onto the site.'}
+                  </div>
+                  <div className="flex gap-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManualPlaceItem(null);
+                        setManualSelectTool(false);
+                        setPlacingSubstation(!placingSubstation);
+                      }}
+                      className={`flex-1 text-xs px-2 py-2 rounded font-semibold transition-colors ${
+                        placingSubstation
+                          ? 'bg-pink-700 hover:bg-pink-600 text-white'
+                          : 'bg-slate-700 hover:bg-slate-600'
+                      }`}
+                    >
+                      {placingSubstation ? 'Click map to place… (cancel)' : substation ? 'Move substation' : 'Place substation'}
+                    </button>
+                    {substation && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const notice = removeSubstation();
+                          if (notice) toast.warning(notice);
+                        }}
+                        className="text-xs px-2 py-2 rounded bg-slate-700 hover:bg-red-800"
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
                   {manualPlaceItem === 'road' && (
                     <div className="flex items-center gap-1 mt-2">
@@ -4055,19 +4171,694 @@ export default function DesignControlPanel() {
                 </div>
               </>
             ) : (
-              <p className="text-xs text-slate-300 leading-relaxed">
-                This yard is a generated layout. Upload a KMZ to open a manual
-                placement site.
-              </p>
+              <div className="space-y-2">
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  This yard is a generated layout. Upload a KMZ to open a manual
+                  placement site.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setManualPlaceItem(null);
+                      setManualSelectTool(false);
+                      setPlacingSubstation(!placingSubstation);
+                    }}
+                    className={`flex-1 text-xs px-2 py-2 rounded font-semibold transition-colors ${
+                      placingSubstation
+                        ? 'bg-pink-700 hover:bg-pink-600 text-white'
+                        : 'bg-slate-700 hover:bg-slate-600'
+                    }`}
+                  >
+                    {placingSubstation ? 'Click map to place… (cancel)' : substation ? 'Move substation' : 'Place substation'}
+                  </button>
+                  {substation && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const notice = removeSubstation();
+                        if (notice) toast.warning(notice);
+                      }}
+                      className="text-xs px-2 py-2 rounded bg-slate-700 hover:bg-red-800"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
+          </div>
+          <div className="mt-4 pt-3 border-t border-slate-700">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
+              MV Feeders
+            </div>
+          {!design ? (
+            <div className="text-xs text-slate-500">Generate a layout first.</div>
+          ) : !substation ? (
+            <div className="text-xs text-slate-500">Place a substation above to size and assign MV feeders.</div>
+          ) : (
+            <div className="space-y-2">
+              {substation && (
+                <>
+                  <label className="text-xs text-slate-400 block">
+                    Conductor material
+                    <select
+                      value={feederMaterial}
+                      onChange={e => handleMaterialChange(e.target.value as ConductorMaterial)}
+                      className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
+                    >
+                      <option value="Al">Aluminum</option>
+                      <option value="Cu">Copper</option>
+                    </select>
+                  </label>
+                  <div className="text-xs text-slate-400">
+                    Feeder standard
+                    <div className="w-full mt-1 bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-300">
+                      7 built + 2 future PCS (9 total) — fixed
+                    </div>
+                  </div>
+                  {feeders.map(f => (
+                    <div key={f.idx} className={`rounded p-2 text-xs space-y-1 border ${f.overLimit || f.overAmpacity ? 'bg-red-950/60 border-red-700' : 'bg-slate-800 border-slate-700'}`}>
+                      <div className="flex justify-between font-semibold">
+                        <span>Feeder #{feederDisplayName(f)}</span>
+                        <span>{f.inverterIds.length} PCS units</span>
+                      </div>
+                      <div className="flex justify-between text-slate-400">
+                        <span>Load</span>
+                        <span className="text-slate-200">{f.loadMW.toFixed(2)} MW / {f.amps.toFixed(0)} A</span>
+                      </div>
+                      <div className="flex justify-between text-slate-400">
+                        <span>Length</span>
+                        <span className="text-slate-200">{Math.ceil(f.totalLengthFt).toLocaleString()} LF</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-400">
+                        <span>Conductor</span>
+                        <select
+                          value={f.size}
+                          onChange={e => setFeederSize(f.idx, e.target.value as FeederConductorSize)}
+                          className="bg-slate-900 border border-slate-600 rounded px-1 py-0.5 text-xs text-slate-100"
+                        >
+                          {FEEDER_CONDUCTOR_SIZES.map(s => (
+                            <option key={s} value={s}>{s} kcmil</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex justify-between text-slate-400">
+                        <span>Ampacity (EOL basis)</span>
+                        <span className={f.overAmpacity ? 'text-red-400 font-semibold' : 'text-emerald-400'}>
+                          BOL {f.amps.toFixed(0)} / EOL {(f.eolAmps || f.amps).toFixed(0)} A of {(Math.max(1, f.parallelSets || 1) * (f.effectiveAmpacity || f.ampacity)).toFixed(0)} A derated
+                        </span>
+                      </div>
+                      {f.overAmpacity && (
+                        <div className="text-red-400">
+                          ⚠ Current exceeds conductor ampacity.{' '}
+                          {f.ampacityRecommendedSize
+                            ? `Recommend ${f.ampacityRecommendedSize} kcmil.`
+                            : `Use ${f.parallelRunsNeeded} parallel conductors per phase, or split the feeder.`}
+                        </div>
+                      )}
+                      <div className="flex justify-between text-slate-400">
+                        <span>Voltage drop</span>
+                        <span className={f.overLimit ? 'text-red-400 font-semibold' : 'text-emerald-400'}>
+                          {f.vdPct.toFixed(2)}% ({f.vdVolts.toFixed(0)} V)
+                        </span>
+                      </div>
+                      {f.overLimit && (
+                        <div className="text-red-400">
+                          ⚠ Exceeds {VD_LIMIT_PCT}% limit.{' '}
+                          {f.recommendedSize
+                            ? `Recommend ${f.recommendedSize} kcmil.`
+                            : 'No larger size meets the limit — split the feeder or move the substation closer.'}
+                        </div>
+                      )}
+                      {feeders.length > 1 && (
+                        <div className="flex justify-between items-center text-slate-400 pt-1 border-t border-slate-700/60">
+                          <span>Move PCS unit…</span>
+                          <select
+                            value=""
+                            onChange={e => {
+                              const [invId, tgt] = e.target.value.split('→');
+                              if (!invId) return;
+                              const ok = assignInverterToFeeder(invId, Number(tgt));
+                              if (!ok) toast.error(`Feeder ${tgt} is full (max 7 PCS units)`);
+                            }}
+                            className="bg-slate-900 border border-slate-600 rounded px-1 py-0.5 text-xs text-slate-100 max-w-[150px]"
+                          >
+                            <option value="">select</option>
+                            {f.inverterIds.map(id =>
+                              feeders
+                                .filter(o => o.idx !== f.idx)
+                                .map(o => (
+                                  <option key={`${id}→${o.idx}`} value={`${id}→${o.idx}`}>
+                                    {id} → Feeder #{feederDisplayName(o)}
+                                  </option>
+                                ))
+                            )}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {Object.keys(feederAssignments).length > 0 && (
+                    <button
+                      onClick={resetFeederOverrides}
+                      className="w-full text-xs px-2 py-1.5 rounded bg-slate-700 hover:bg-slate-600"
+                    >
+                      Reset feeder grouping to auto
+                    </button>
+                  )}
+                  {Object.keys(layoutEdits.feederRoutes ?? {}).length > 0 && (
+                    <div className="rounded p-2 text-xs space-y-1 border bg-slate-800 border-slate-700">
+                      <div className="font-semibold text-slate-200">Custom feeder routes</div>
+                      {Object.keys(layoutEdits.feederRoutes ?? {}).map(key => {
+                        const live = feeders.find(f => feederRouteKey(f.inverterIds) === key);
+                        const forced = (layoutEdits.forcedEdits ?? []).includes(`feeder-route-${key}`);
+                        return (
+                          <div key={key} className="flex items-center justify-between gap-2">
+                            <span className="text-slate-400">
+                              {live ? `Feeder #${feederDisplayName(live)}` : `${key} (inactive)`}
+                              {forced ? ' — engineer override' : ''}
+                              {!live ? ' — no feeder currently anchors on this PCS' : ''}
+                            </span>
+                            <button
+                              onClick={() => removeFeederRoute(key)}
+                              className="text-xs px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 shrink-0"
+                            >
+                              Reset
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {/* Feeder-routing optimizer: re-orients how the MV bundle
+                      leaves the substation. Never auto-applied — the drafter
+                      reviews ranked cards and picks one. */}
+                  {substation && feeders.length > 0 && (
+                    <div className="rounded p-2 text-xs space-y-1.5 border bg-slate-800 border-slate-700">
+                      <div className="font-semibold text-slate-200">Feeder routing optimizer</div>
+                      {!frRunning ? (
+                        <button
+                          onClick={handleRunFeederOptimizer}
+                          className="w-full py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-xs font-semibold text-slate-100"
+                        >
+                          Optimize feeder routing
+                        </button>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-slate-400">
+                            <span>Searching routings… {frProgress ? `${frProgress.done}/${frProgress.total}` : ''}</span>
+                            <button
+                              onClick={() => cancelChannel('feederRouting')}
+                              className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                          <div className="h-1.5 rounded bg-slate-700 overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-500 transition-all"
+                              style={{ width: `${frProgress && frProgress.total > 0 ? Math.round((frProgress.done / frProgress.total) * 100) : 0}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                      <div className="text-[10px] text-slate-500">
+                        Tries 90°, angled and combined home-run orientations plus corridor positions for this yard, and ranks them by fewest crossings, then most uniform lane spacing, then least conductor. Block placement, the substation position and feeder grouping are never changed.
+                      </div>
+                      {frResult && frResult.current && (
+                        <div className="text-[10px] text-slate-500">
+                          Current: {frResult.current.metrics.crossings} crossing{frResult.current.metrics.crossings === 1 ? '' : 's'} ·{' '}
+                          {frResult.current.metrics.uniformityPct.toFixed(0)}% uniform ·{' '}
+                          {frResult.current.metrics.conductorFt.toFixed(0)} ft
+                        </div>
+                      )}
+                      {frResult && frResult.candidates.map((cand, i) => {
+                        const m = cand.metrics;
+                        const cur = frResult.current;
+                        const label = m.angledCount - m.angledFallbacks === 0 ? '90° corridor'
+                          : cand.orientation === 'angled' ? 'Angled corridor'
+                          : `Combined (${m.angledCount - m.angledFallbacks} of ${m.feederCount} angled)`;
+                        return (
+                          <div key={cand.id} className="rounded border border-slate-700 bg-slate-900/60 p-2 space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold text-slate-200">
+                                #{i + 1} — {label}
+                                {i === 0 && <span className="text-emerald-400 font-normal"> — best</span>}
+                              </span>
+                              <button
+                                onClick={() => handleApplyFeederRouting(cand)}
+                                className="shrink-0 px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-xs font-semibold text-slate-100"
+                              >
+                                Apply
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-3 text-slate-400">
+                              <span>Crossings: {m.crossings}{m.auxCrossings > 0 ? ` (+${m.auxCrossings} aux)` : ''}</span>
+                              <span>Spacing: {m.uniformityPct.toFixed(0)}% uniform</span>
+                              <span>Conductor: {m.conductorFt.toFixed(0)} ft</span>
+                              {cur && (
+                                <span className={m.conductorFt <= cur.metrics.conductorFt ? 'text-emerald-400' : 'text-amber-400'}>
+                                  {m.conductorFt <= cur.metrics.conductorFt ? '−' : '+'}
+                                  {Math.abs(m.conductorFt - cur.metrics.conductorFt).toFixed(0)} ft vs current
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-500">
+                              Corridor {cand.params.corridorPin === null ? 'automatic' : `pinned at ${Math.round(cand.params.corridorPin)} ft`}
+                              {m.angledFallbacks > 0 && ` · ${m.angledFallbacks} feeder${m.angledFallbacks > 1 ? 's have' : ' has'} no clear diagonal and keeps its 90° route`}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {frResult && frResult.candidates.length === 0 && (
+                        <div className="text-slate-500">
+                          No cleaner routing found — the current feeder bundle is already the best of the orientations tried.
+                        </div>
+                      )}
+                      {frResult && frResult.candidates.length > 0 && (
+                        <div className="text-[10px] text-slate-500">
+                          Applying sets the routing mode, per-feeder overrides and corridor position as one step. Undo with Ctrl+Z.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {electricalReport && (
+                    <div className="rounded p-2 text-xs space-y-1.5 border bg-slate-800 border-slate-700">
+                      <div className="font-semibold text-slate-200">Voltage Drop &amp; Losses</div>
+                      <div className="text-[10px] text-slate-400">
+                        EOL basis: currents include reserved augmentation PCS; capacity = parallel sets × mutual-heating-derated rating — same basis that sized each conductor (matches SLD/DXF).
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-slate-400">
+                        <label className="block" title="Feeders above this % voltage drop are flagged here and in the pre-export checklist. Screening preference only — auto conductor sizing keeps its 3% engineering default.">
+                          Max VD (%)
+                          <input
+                            type="number"
+                            min={0.5}
+                            max={10}
+                            step={0.5}
+                            value={maxVdPct}
+                            onChange={e => setMaxVdPct(Number(e.target.value))}
+                            className="w-full mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100"
+                          />
+                        </label>
+                        <label className="block" title="Capacity (load) factor used for the annual I²R loss estimate: loss factor = 0.3·LF + 0.7·LF².">
+                          Capacity factor (%)
+                          <input
+                            type="number"
+                            min={5}
+                            max={100}
+                            step={5}
+                            value={capacityFactorPct}
+                            onChange={e => setCapacityFactorPct(Number(e.target.value))}
+                            className="w-full mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100"
+                          />
+                        </label>
+                      </div>
+                      <table className="w-full text-[11px]">
+                        <thead>
+                          <tr className="text-slate-400 border-b border-slate-700">
+                            <th className="text-left font-medium py-0.5">Fdr</th>
+                            <th className="text-right font-medium">kcmil</th>
+                            <th className="text-right font-medium">LF</th>
+                            <th className="text-right font-medium" title="BOL/EOL current vs total EOL capacity (parallel sets × mutual-heating-derated rating) — the basis that sized the conductor">A BOL/EOL / cap</th>
+                            <th className="text-right font-medium">VD %</th>
+                            <th className="text-right font-medium">MWh/yr</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {electricalReport.rows.map(r => (
+                            <tr key={r.idx} className={r.overLimit ? 'text-red-400' : 'text-slate-200'}>
+                              <td className="py-0.5">#{r.name ?? `F${r.idx}`}</td>
+                              <td className="text-right">{r.size} {r.material}</td>
+                              <td className="text-right">{Math.ceil(r.lengthFt).toLocaleString()}</td>
+                              <td className={`text-right ${r.overAmpacity ? 'text-red-400 font-semibold' : ''}`}>{r.amps.toFixed(0)}/{r.eolAmps.toFixed(0)} / {r.eolCapacityAmps.toFixed(0)}{r.overAmpacity ? ' ⚠' : ''}</td>
+                              <td className={`text-right ${r.overLimit ? 'font-semibold' : ''}`}>{r.vdPct.toFixed(2)}{r.overLimit ? ' ⚠' : ''}</td>
+                              <td className="text-right">{r.annualLossMWh.toFixed(1)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="text-slate-300 border-t border-slate-700 font-semibold">
+                            <td className="py-0.5" colSpan={4}>Total ({electricalReport.totalPeakLossKW.toFixed(1)} kW peak)</td>
+                            <td className="text-right" colSpan={2}>{electricalReport.totalAnnualLossMWh.toFixed(1)} MWh/yr</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                      <div className="text-slate-500">
+                        Screening-grade: NEC Ch.9 Table 8 DC resistance, loss factor {electricalReport.lossFactorUsed.toFixed(3)} from {electricalReport.capacityFactorPct}% capacity factor. Verify in detailed design.
+                      </div>
+                    </div>
+                  )}
+                  <label className="flex items-center gap-2 text-sm cursor-pointer" title="Run a simplified per-bus short-circuit study over the routed collection network: utility Thevenin source through the actual cable impedances, PCS units as fixed current sources (k × rated). Bolted 3-phase duty at the main bus, each FJB, each PCS terminal and the 480V aux bus. When enabled, the study is added to the POI data sheet PDF as its own section.">
+                    <input
+                      type="checkbox"
+                      checked={scEnabled}
+                      onChange={e => setScEnabled(e.target.checked)}
+                    />
+                    <span>Short-circuit study (per-bus)</span>
+                  </label>
+                  {scEnabled && (
+                    <div className="bg-slate-800 rounded p-2.5 text-[11px] leading-relaxed">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
+                        Short-Circuit Study Inputs
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
+                        <StudyNumField label="Utility fault (MVA)" unit="MVA" title="Available 3-phase fault MVA at the 34.5 kV POI, from the utility's system study."
+                          step={100} min={SC_NUM_LIMITS.utilityFaultMVA.min} max={SC_NUM_LIMITS.utilityFaultMVA.max}
+                          value={scInputs.utilityFaultMVA}
+                          onCommit={v => { if (v !== null) setScInputs({ utilityFaultMVA: v }); }} />
+                        <StudyNumField label="Utility X/R" title="System X/R ratio at the POI — sets the source R/X split and the asymmetrical peak factor."
+                          step={1} min={SC_NUM_LIMITS.utilityXOverR.min} max={SC_NUM_LIMITS.utilityXOverR.max}
+                          value={scInputs.utilityXOverR}
+                          onCommit={v => { if (v !== null) setScInputs({ utilityXOverR: v }); }} />
+                        <StudyNumField label="PCS k (pu)" unit="pu" title="PCS fault contribution in per-unit of rated current (IEEE 2800-typical current-limited behavior). 1.2 is the common screening value."
+                          step={0.1} min={SC_NUM_LIMITS.inverterK.min} max={SC_NUM_LIMITS.inverterK.max}
+                          value={scInputs.inverterK}
+                          onCommit={v => { if (v !== null) setScInputs({ inverterK: v }); }} />
+                        <StudyNumField label="Gear rating (kA)" unit="kA" title="Optional MV switchgear interrupting rating (kA sym). When set, every MV bus shows its margin against this rating. Leave blank to skip."
+                          step={1} min={SC_RATING_LIMITS.min} max={SC_RATING_LIMITS.max}
+                          value={scInputs.equipmentRatingKA} nullable placeholder="—"
+                          onCommit={v => setScInputs({ equipmentRatingKA: v })} />
+                        <StudyNumField label="Aux xfmr (kVA)" unit="kVA" title="Aux transformer base kVA (2000 kVA matches the 2000 A / 480 V aux switchboard)."
+                          step={250} min={SC_NUM_LIMITS.auxKVA.min} max={SC_NUM_LIMITS.auxKVA.max}
+                          value={scInputs.auxKVA}
+                          onCommit={v => { if (v !== null) setScInputs({ auxKVA: v }); }} />
+                        <StudyNumField label="Aux %Z" unit="%" title="Aux transformer nameplate impedance (%Z on its own base). 5.75% is typical for pad-mounts."
+                          step={0.25} min={SC_NUM_LIMITS.auxPctZ.min} max={SC_NUM_LIMITS.auxPctZ.max}
+                          value={scInputs.auxPctZ}
+                          onCommit={v => { if (v !== null) setScInputs({ auxPctZ: v }); }} />
+                        <StudyNumField label="Aux X/R" title="Aux transformer X/R ratio — splits its impedance into R and X for the 480V bus X/R and peak factor. ~5 is typical at this size."
+                          step={0.5} min={SC_NUM_LIMITS.auxXOverR.min} max={SC_NUM_LIMITS.auxXOverR.max}
+                          value={scInputs.auxXOverR}
+                          onCommit={v => { if (v !== null) setScInputs({ auxXOverR: v }); }} />
+                      </div>
+                    </div>
+                  )}
+                  {scEnabled && scStudy && (
+                    <div className="rounded p-2 text-xs space-y-1.5 border bg-slate-800 border-slate-700" title="Bolted 3-phase symmetrical fault duty per bus: utility contribution through the routed cable impedance + all PCS current sources. Peak = IEC κ·√2·Isym from the utility-path X/R. Added to the POI data sheet PDF while enabled.">
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold text-slate-200">Short-Circuit Duty (per bus)</div>
+                        {scStudy.inputs.equipmentRatingKA !== null && (
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${scStudy.overRatedCount === 0 ? 'bg-emerald-700 text-emerald-100' : 'bg-red-800 text-red-100'}`}>
+                            {scStudy.overRatedCount === 0 ? 'WITHIN RATING' : `${scStudy.overRatedCount} OVER`}
+                          </span>
+                        )}
+                      </div>
+                      <table className="w-full text-[11px]">
+                        <thead>
+                          <tr className="text-slate-400 border-b border-slate-700">
+                            <th className="text-left font-medium py-0.5">Bus</th>
+                            <th className="text-right font-medium">kA sym</th>
+                            <th className="text-right font-medium">kA peak</th>
+                            <th className="text-right font-medium">X/R</th>
+                            {scStudy.inputs.equipmentRatingKA !== null && <th className="text-right font-medium">Margin</th>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {scStudy.buses.map(b => (
+                            <tr key={b.id} className={b.marginPct !== null && b.marginPct < 0 ? 'text-red-400' : 'text-slate-200'}>
+                              <td className="py-0.5">{b.label}</td>
+                              <td className="text-right font-mono">{b.symKA.toFixed(1)}</td>
+                              <td className="text-right font-mono">{b.peakKA.toFixed(1)}</td>
+                              <td className="text-right font-mono">{Number.isFinite(b.xOverR) ? b.xOverR.toFixed(1) : '—'}</td>
+                              {scStudy.inputs.equipmentRatingKA !== null && (
+                                <td className={`text-right font-mono ${b.marginPct !== null && b.marginPct < 0 ? 'font-semibold' : ''}`}>
+                                  {b.marginPct === null ? '—' : `${b.marginPct >= 0 ? '+' : ''}${b.marginPct.toFixed(0)}%`}
+                                </td>
+                              )}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div className="text-slate-500">
+                        Simplified: PCS as fixed current sources (k × rated), no machine decay. Included in the POI data sheet PDF while enabled.
+                      </div>
+                    </div>
+                  )}
+                  <label className={`flex items-center gap-2 text-sm ${scEnabled ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}`} title="Protection screening built on the short-circuit study: interrupting-duty check against standard breaker rating ladders, feeder/main relay coordination (IEEE very-inverse curves), and arc-flash incident energy (IEEE 1584-2002 at the 480V aux bus, conservative Lee method at the MV buses). Requires the short-circuit study. Added to the POI data sheet PDF while enabled.">
+                    <input
+                      type="checkbox"
+                      checked={protectionEnabled}
+                      disabled={!scEnabled}
+                      onChange={e => setProtectionEnabled(e.target.checked)}
+                    />
+                    <span>Protection & arc-flash study</span>
+                  </label>
+                  {scEnabled && protectionEnabled && (
+                    <div className="bg-slate-800 rounded p-2.5 text-[11px] leading-relaxed">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
+                        Protection Study Inputs
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
+                        <StudyNumField label="Duty margin (%)" unit="%" title="Required headroom above the calculated fault duty when picking a device from the standard rating ladder. 20% is common practice."
+                          step={5} min={PROTECTION_NUM_LIMITS.dutyMarginPct.min} max={PROTECTION_NUM_LIMITS.dutyMarginPct.max}
+                          value={protectionInputs.dutyMarginPct}
+                          onCommit={v => { if (v !== null) setProtectionInputs({ dutyMarginPct: v }); }} />
+                        <StudyNumField label="Required CTI (s)" unit="s" title="Required coordination time interval between the feeder and main relay operating times at the feeder-bus maximum fault. 0.3 s is the classic relay-to-relay CTI."
+                          step={0.05} min={PROTECTION_NUM_LIMITS.ctiRequiredS.min} max={PROTECTION_NUM_LIMITS.ctiRequiredS.max}
+                          value={protectionInputs.ctiRequiredS}
+                          onCommit={v => { if (v !== null) setProtectionInputs({ ctiRequiredS: v }); }} />
+                        <StudyNumField label="Feeder pickup (pu)" unit="pu" title="Feeder relay pickup as a multiple of the feeder full-load amps. 1.25 pu is a common margin above load."
+                          step={0.05} min={PROTECTION_NUM_LIMITS.feederPickupPu.min} max={PROTECTION_NUM_LIMITS.feederPickupPu.max}
+                          value={protectionInputs.feederPickupPu}
+                          onCommit={v => { if (v !== null) setProtectionInputs({ feederPickupPu: v }); }} />
+                        <StudyNumField label="Main pickup (pu)" unit="pu" title="Main relay pickup as a multiple of the aggregate full-load amps."
+                          step={0.05} min={PROTECTION_NUM_LIMITS.mainPickupPu.min} max={PROTECTION_NUM_LIMITS.mainPickupPu.max}
+                          value={protectionInputs.mainPickupPu}
+                          onCommit={v => { if (v !== null) setProtectionInputs({ mainPickupPu: v }); }} />
+                        <StudyNumField label="Feeder time dial" title="Feeder relay time dial on the IEEE C37.112 very-inverse curve."
+                          step={0.5} min={PROTECTION_NUM_LIMITS.feederTimeDial.min} max={PROTECTION_NUM_LIMITS.feederTimeDial.max}
+                          value={protectionInputs.feederTimeDial}
+                          onCommit={v => { if (v !== null) setProtectionInputs({ feederTimeDial: v }); }} />
+                        <StudyNumField label="Main time dial" title="Main relay time dial on the IEEE C37.112 very-inverse curve — set above the feeder dial to coordinate."
+                          step={0.5} min={PROTECTION_NUM_LIMITS.mainTimeDial.min} max={PROTECTION_NUM_LIMITS.mainTimeDial.max}
+                          value={protectionInputs.mainTimeDial}
+                          onCommit={v => { if (v !== null) setProtectionInputs({ mainTimeDial: v }); }} />
+                        <StudyNumField label="MV work dist (in)" unit="in" title="Arc-flash working distance at the MV switchgear (36 in is the standard 15–36 kV class distance)."
+                          step={6} min={PROTECTION_NUM_LIMITS.mvWorkingDistIn.min} max={PROTECTION_NUM_LIMITS.mvWorkingDistIn.max}
+                          value={protectionInputs.mvWorkingDistIn}
+                          onCommit={v => { if (v !== null) setProtectionInputs({ mvWorkingDistIn: v }); }} />
+                        <StudyNumField label="LV work dist (in)" unit="in" title="Arc-flash working distance at the 480V aux switchgear (18 in is the standard LV distance)."
+                          step={6} min={PROTECTION_NUM_LIMITS.lvWorkingDistIn.min} max={PROTECTION_NUM_LIMITS.lvWorkingDistIn.max}
+                          value={protectionInputs.lvWorkingDistIn}
+                          onCommit={v => { if (v !== null) setProtectionInputs({ lvWorkingDistIn: v }); }} />
+                      </div>
+                    </div>
+                  )}
+                  {scEnabled && protectionEnabled && protectionStudy && (
+                    <div className="rounded p-2 text-xs space-y-1.5 border bg-slate-800 border-slate-700" title="Interrupting-duty recommendations, feeder/main coordination screening and arc-flash incident energy — all derived from the per-bus short-circuit study. Added to the POI data sheet PDF while enabled.">
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold text-slate-200">Protection & Arc Flash</div>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${protectionStudy.inadequateDutyCount === 0 && protectionStudy.uncoordinatedCount === 0 ? 'bg-emerald-700 text-emerald-100' : 'bg-amber-700 text-amber-100'}`}>
+                          {protectionStudy.inadequateDutyCount === 0 && protectionStudy.uncoordinatedCount === 0
+                            ? 'SCREEN PASS'
+                            : `${protectionStudy.inadequateDutyCount + protectionStudy.uncoordinatedCount} REVIEW`}
+                        </span>
+                      </div>
+                      <table className="w-full text-[11px]">
+                        <thead>
+                          <tr className="text-slate-400 border-b border-slate-700">
+                            <th className="text-left font-medium py-0.5">Bus</th>
+                            <th className="text-right font-medium">Duty kA</th>
+                            <th className="text-right font-medium">Device kA</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {protectionStudy.duty.filter(r => r.kind !== 'pcs').map(r => (
+                            <tr key={r.busId} className={r.adequate ? 'text-slate-200' : 'text-red-400'}>
+                              <td className="py-0.5">{r.busLabel}</td>
+                              <td className="text-right font-mono">{r.symKA.toFixed(1)}</td>
+                              <td className="text-right font-mono">{r.recommendedKA !== null ? r.recommendedKA : 'NONE'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <table className="w-full text-[11px]">
+                        <thead>
+                          <tr className="text-slate-400 border-b border-slate-700">
+                            <th className="text-left font-medium py-0.5">Pair</th>
+                            <th className="text-right font-medium">CTI s</th>
+                            <th className="text-right font-medium">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {protectionStudy.coordination.map(c => (
+                            <tr key={c.feederIdx} className={c.coordinated ? 'text-slate-200' : 'text-amber-400'}>
+                              <td className="py-0.5">{c.feederName ? `#${c.feederName}` : `F${c.feederIdx}`} / main</td>
+                              <td className="text-right font-mono">{Number.isFinite(c.ctiS) ? c.ctiS.toFixed(2) : '—'}</td>
+                              <td className="text-right font-mono">{c.coordinated ? 'OK' : 'REVIEW'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <table className="w-full text-[11px]">
+                        <thead>
+                          <tr className="text-slate-400 border-b border-slate-700">
+                            <th className="text-left font-medium py-0.5">Arc Flash</th>
+                            <th className="text-right font-medium">cal/cm²</th>
+                            <th className="text-right font-medium">PPE</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {protectionStudy.arcFlash.map(r => (
+                            <tr key={r.busId} className={r.ppeCategory >= 5 ? 'text-red-400' : 'text-slate-200'}>
+                              <td className="py-0.5">{r.busLabel}</td>
+                              <td className="text-right font-mono">{r.incidentCalCm2.toFixed(1)}</td>
+                              <td className="text-right font-mono">{r.ppeCategory >= 5 ? 'DANGER' : `CAT ${r.ppeCategory}`}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div className="text-slate-500">
+                        Screening: generic IEEE very-inverse curves, IEEE 1584-2002 (LV) / Lee (MV) arc flash. Included in the POI data sheet PDF while enabled.
+                      </div>
+                    </div>
+                  )}
+                  <label className="flex items-center gap-2 text-sm cursor-pointer" title="Simulate plant energy performance over the project life: IEC 62933-2-1 round-trip efficiency at the AC point of connection (including auxiliaries and the routed feeders' cable losses), NREL semi-empirical calendar + cycle degradation, and augmentation planning against the reserved augmentation zones. Inputs are saved in the project file. Screening grade; exports a standalone PDF report only.">
+                    <input
+                      type="checkbox"
+                      checked={energySimEnabled}
+                      onChange={e => setEnergySimEnabled(e.target.checked)}
+                    />
+                    <span>Energy & dispatch simulation</span>
+                  </label>
+                  {energySimEnabled && (
+                    <div className="bg-slate-800 rounded p-2.5 text-[11px] leading-relaxed">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
+                        Energy Simulation Inputs
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
+                        <StudyNumField label="Cycles per day" title="Standard full cycles per day (IEC 62933-2-1 dispatch framing). 1.0 = one full charge/discharge per day."
+                          step={0.1} min={ENERGY_SIM_NUM_LIMITS.cyclesPerDay.min} max={ENERGY_SIM_NUM_LIMITS.cyclesPerDay.max}
+                          value={energySimInputs.cyclesPerDay}
+                          onCommit={v => { if (v !== null) setEnergySimInputs({ cyclesPerDay: v }); }} />
+                        <StudyNumField label="DOD (%)" unit="%" title="Depth of discharge per cycle (% of usable energy). Deeper cycling accelerates cycle fade via a √DOD stress factor."
+                          step={5} min={ENERGY_SIM_NUM_LIMITS.dodPct.min} max={ENERGY_SIM_NUM_LIMITS.dodPct.max}
+                          value={energySimInputs.dodPct}
+                          onCommit={v => { if (v !== null) setEnergySimInputs({ dodPct: v }); }} />
+                        <StudyNumField label="Avg ambient (°C)" unit="°C" title="Site annual-average ambient temperature. Cell temperature is assumed 5 °C above ambient; calendar fade roughly doubles per +12 °C (Arrhenius)."
+                          step={1} min={ENERGY_SIM_NUM_LIMITS.avgAmbientC.min} max={ENERGY_SIM_NUM_LIMITS.avgAmbientC.max}
+                          value={energySimInputs.avgAmbientC}
+                          onCommit={v => { if (v !== null) setEnergySimInputs({ avgAmbientC: v }); }} />
+                        <StudyNumField label="Project life (yr)" unit="yr" title="Simulation horizon in operating years (whole years — decimals round to the nearest year)."
+                          integer step={1} min={ENERGY_SIM_NUM_LIMITS.projectLifeYears.min} max={ENERGY_SIM_NUM_LIMITS.projectLifeYears.max}
+                          value={energySimInputs.projectLifeYears}
+                          onCommit={v => { if (v !== null) setEnergySimInputs({ projectLifeYears: v }); }} />
+                        <StudyNumField label="Contract MWh" unit="MWh" title="Contracted usable energy the plant must maintain. When usable capacity would fall below this, whole containers are added at the start of that year (augmentation). 0 disables augmentation planning."
+                          step={10} min={ENERGY_SIM_NUM_LIMITS.contractMWh.min} max={ENERGY_SIM_NUM_LIMITS.contractMWh.max}
+                          value={energySimInputs.contractMWh}
+                          onCommit={v => { if (v !== null) setEnergySimInputs({ contractMWh: v }); }} />
+                        <StudyNumField label="Aux kW/container" unit="kW" title="Average auxiliary (HVAC + controls) load per container. 3.5 kW is a warranty-class annual average for LFP containers in a moderate climate."
+                          step={0.5} min={ENERGY_SIM_NUM_LIMITS.auxKwPerContainer.min} max={ENERGY_SIM_NUM_LIMITS.auxKwPerContainer.max}
+                          value={energySimInputs.auxKwPerContainer}
+                          onCommit={v => { if (v !== null) setEnergySimInputs({ auxKwPerContainer: v }); }} />
+                        <StudyNumField label="Battery DC RTE (%)" unit="%" title="RTE override: battery DC-DC round-trip efficiency (%). 94% is a typical warranty-class LFP value; override from the OEM datasheet."
+                          step={0.5} min={roundToDecimals(ENERGY_SIM_NUM_LIMITS.batteryRteDc.min * 100, 1)} max={roundToDecimals(ENERGY_SIM_NUM_LIMITS.batteryRteDc.max * 100, 1)}
+                          displayDecimals={1}
+                          value={Math.round(energySimInputs.batteryRteDc * 1000) / 10}
+                          onCommit={v => { if (v !== null) setEnergySimInputs({ batteryRteDc: v / 100 }); }} />
+                        <StudyNumField label="PCS one-way eff (%)" unit="%" title="RTE override: PCS one-way (per-direction) efficiency (%). 98.5% is a typical CEC-weighted value for utility-scale inverters."
+                          step={0.1} min={roundToDecimals(ENERGY_SIM_NUM_LIMITS.pcsEff.min * 100, 1)} max={roundToDecimals(ENERGY_SIM_NUM_LIMITS.pcsEff.max * 100, 1)}
+                          displayDecimals={1}
+                          value={Math.round(energySimInputs.pcsEff * 1000) / 10}
+                          onCommit={v => { if (v !== null) setEnergySimInputs({ pcsEff: v / 100 }); }} />
+                      </div>
+                    </div>
+                  )}
+                  {energySimEnabled && energySim && (
+                    <div className="rounded p-2 text-xs space-y-1.5 border bg-slate-800 border-slate-700" title="IEC 62933-2-1 AC point-of-connection round-trip efficiency (including auxiliaries), NREL semi-empirical degradation and container-granular augmentation planning against the reserved augmentation zones. Screening grade.">
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold text-slate-200">Energy Simulation</div>
+                        {energySim.totalAddedContainers > 0 && (
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${energySim.zonesSufficient ? 'bg-emerald-700 text-emerald-100' : 'bg-red-800 text-red-100'}`}>
+                            {energySim.zonesSufficient ? 'AUG ZONES OK' : 'AUG ZONES SHORT'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-slate-300">
+                        <span>System RTE @ AC PoC (incl. aux)</span>
+                        <span className="text-right font-mono">{energySim.rte.acRtePct.toFixed(1)}%</span>
+                        <span>AC RTE excl. aux</span>
+                        <span className="text-right font-mono">{energySim.rte.acRteExAuxPct.toFixed(1)}%</span>
+                        <span>Aux consumption</span>
+                        <span className="text-right font-mono">{energySim.rte.dailyAuxMWh.toFixed(2)} MWh/day</span>
+                        <span>Year-1 discharge</span>
+                        <span className="text-right font-mono">{Math.round(energySim.annualThroughputBolMWh).toLocaleString()} MWh</span>
+                        <span>End-of-life usable (yr {energySimInputs.projectLifeYears})</span>
+                        <span className="text-right font-mono">{Math.round(energySim.endOfLifeUsableMWh).toLocaleString()} MWh</span>
+                        {energySimInputs.contractMWh > 0 && (
+                          <>
+                            <span>Augmentation needed</span>
+                            <span className="text-right font-mono">
+                              {energySim.totalAddedContainers > 0
+                                ? `${energySim.totalAddedContainers} cont. / ${energySim.totalAddedMWh.toFixed(0)} MWh`
+                                : 'none'}
+                            </span>
+                            {energySim.totalAddedContainers > 0 && (
+                              <>
+                                <span>First augmentation year</span>
+                                <span className="text-right font-mono">{energySim.augmentation[0].year}</span>
+                                <span>Reserved zone capacity</span>
+                                <span className={`text-right font-mono ${energySim.zonesSufficient ? '' : 'text-red-400'}`}>
+                                  {energySim.zoneCapacityContainers} containers {energySim.zonesSufficient ? '✓' : '✗'}
+                                </span>
+                              </>
+                            )}
+                          </>
+                        )}
+                      </div>
+                      {!energySim.zonesSufficient && (
+                        <div className="text-[10px] text-amber-400">
+                          Reserved augmentation zones cannot hold the planned containers — increase the future augmentation % above and regenerate.
+                        </div>
+                      )}
+                      <CapacityCurvePreview result={energySim} />
+                      <button
+                        disabled={energyBusy}
+                        onClick={async () => {
+                          setEnergyBusy(true);
+                          try {
+                            await new Promise(res => setTimeout(res, 30));
+                            const cfg = getEffectiveConfiguration(configId, containersPerPcs);
+                            const doc = buildEnergySimPdf(energySim, energySimInputs, {
+                              titleBlock,
+                              configLabel: cfg.label,
+                              achievedMW: design?.achievedMW ?? 0,
+                              achievedMWh: design?.achievedMWh ?? 0,
+                              containers: (design?.blocksPlaced ?? 0) * cfg.containersPerBlock,
+                            });
+                            const exportName = (titleBlock.projectName || 'BESSForge').replace(/[^A-Za-z0-9_-]+/g, '_');
+                            const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Energy_Simulation_${new Date().toISOString().slice(0, 10)}.pdf`);
+                            if (saved) toast.success('Energy simulation report PDF exported');
+                          } catch (err) {
+                            toastCaught('Energy report failed — try again', err);
+                          } finally {
+                            setEnergyBusy(false);
+                          }
+                        }}
+                        className="w-full mt-1 py-1.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-60 text-xs font-semibold text-slate-100"
+                        title="Export a one-page PDF report: RTE loss chain, year-by-year degradation and augmentation table, zone-capacity check and model citations. Standalone file — never part of the default DXF/PDF exports."
+                      >
+                        {energyBusy ? 'Exporting…' : 'Export energy report (PDF)'}
+                      </button>
+                      <div className="text-slate-500">
+                        Screening grade — IEC 62933-2-1 RTE framing, NREL semi-empirical degradation. Verify against OEM warranty and offtake agreement.
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           </div>
           <div className="mt-auto pt-4 pb-4">
             <ReferenceAutoFill />
           </div>
         </PanelSection>
 
-        {/* Step 2: Configuration */}
-        <PanelSection id="equipment" title="Equipment Configuration" discipline="Layout">
+        {/* Settings (equipment config + former Target Rating) */}
+        <PanelSection id="target" title="Settings" discipline="Layout · Civil">
           <select
             value={configId}
             onChange={e => setConfigId(e.target.value)}
@@ -4124,11 +4915,7 @@ export default function DesignControlPanel() {
               </div>
             </div>
           )}
-        </PanelSection>
-
-        {/* Step 3: Target */}
-        <PanelSection id="target" title="Target Rating" discipline="Layout · Civil">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 mt-3">
             <label className="text-xs text-slate-400">
               Power (MW)
               <input
@@ -5575,753 +6362,7 @@ export default function DesignControlPanel() {
           {/* Laydown / future aug / per-island controls / reserve summary — hidden from Target Rating UI (engine defaults unchanged). */}
         </PanelSection>
 
-        {/* Step 4: Title block info */}
-        <PanelSection id="titleblock" title="Title Block" discipline="Exports">
-          <div className="space-y-2">
-            <label className="text-xs text-slate-400 block">
-              Project Name
-              <input
-                type="text"
-                value={titleBlock.projectName}
-                onChange={e => setTitleBlock({ projectName: e.target.value })}
-                placeholder={boundary ? boundary.name : 'e.g. Hondo BESS'}
-                className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
-              />
-            </label>
-            <label className="text-xs text-slate-400 block">
-              Location (County, State)
-              <input
-                type="text"
-                value={titleBlock.location}
-                onChange={e => setTitleBlock({ location: e.target.value })}
-                placeholder="e.g. Medina County, TX"
-                className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
-              />
-              {(isCoordinateLocation(titleBlock.location) || (!titleBlock.location.trim() && !!boundary)) && (
-                <span className="block mt-0.5 text-[10px] text-slate-500">
-                  Coordinates or blank — county/state auto-fills from the site location (type a place name to override)
-                </span>
-              )}
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              <label className="text-xs text-slate-400 block">
-                Drawn By
-                <input
-                  type="text"
-                  value={titleBlock.drafter}
-                  onChange={e => setTitleBlock({ drafter: e.target.value })}
-                  placeholder="Initials"
-                  className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
-                />
-              </label>
-              <label className="text-xs text-slate-400 block">
-                Rev
-                <input
-                  type="text"
-                  value={titleBlock.revision}
-                  onChange={e => setTitleBlock({ revision: e.target.value })}
-                  placeholder="0A"
-                  className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
-                />
-              </label>
-              <label className="text-xs text-slate-400 block">
-                Date
-                <input
-                  type="text"
-                  value={titleBlock.date}
-                  onChange={e => setTitleBlock({ date: e.target.value })}
-                  placeholder={new Date().toLocaleDateString()}
-                  className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
-                />
-              </label>
-            </div>
-            <label className="text-xs text-slate-400 block">
-              NEER Dwg. Name (10% banner)
-              <input
-                type="text"
-                value={titleBlock.neerDwgName}
-                onChange={e => setTitleBlock({ neerDwgName: e.target.value })}
-                placeholder="e.g. CK1-E-200 (blank = empty cell)"
-                className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
-              />
-            </label>
-            <label className="flex items-center gap-2 mt-2 text-sm" title="Draw the legend equipment symbols in the ECI reference legend style (traced from the issued legend sheets). Only the legend swatch glyphs change — rows, labels and the drawing itself are untouched. Saved with the project.">
-              <input
-                type="checkbox"
-                checked={eciLegend}
-                onChange={e => setEciLegend(e.target.checked)}
-              />
-              <span>ECI legend symbols</span>
-            </label>
-          </div>
-        </PanelSection>
-
-        {/* Step 5: Substation + MV feeders */}
-        <PanelSection id="electrical" title="Substation & MV Feeders" discipline="Electrical">
-          {!design ? (
-            <div className="text-xs text-slate-500">Generate a layout first.</div>
-          ) : (
-            <div className="space-y-2">
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setPlacingSubstation(!placingSubstation)}
-                  className={`flex-1 text-xs px-2 py-2 rounded font-semibold transition-colors ${
-                    placingSubstation
-                      ? 'bg-pink-700 hover:bg-pink-600 text-white'
-                      : 'bg-slate-700 hover:bg-slate-600'
-                  }`}
-                >
-                  {placingSubstation ? 'Click map to place… (cancel)' : substation ? 'Move substation' : 'Place substation'}
-                </button>
-                {substation && (
-                  <button
-                    onClick={() => {
-                      const notice = removeSubstation();
-                      if (notice) toast.warning(notice);
-                    }}
-                    className="text-xs px-2 py-2 rounded bg-slate-700 hover:bg-red-800"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-              {substation && (
-                <>
-                  <label className="text-xs text-slate-400 block">
-                    Conductor material
-                    <select
-                      value={feederMaterial}
-                      onChange={e => handleMaterialChange(e.target.value as ConductorMaterial)}
-                      className="w-full mt-1 bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-100"
-                    >
-                      <option value="Al">Aluminum</option>
-                      <option value="Cu">Copper</option>
-                    </select>
-                  </label>
-                  <div className="text-xs text-slate-400">
-                    Feeder standard
-                    <div className="w-full mt-1 bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-300">
-                      7 built + 2 future PCS (9 total) — fixed
-                    </div>
-                  </div>
-                  {feeders.map(f => (
-                    <div key={f.idx} className={`rounded p-2 text-xs space-y-1 border ${f.overLimit || f.overAmpacity ? 'bg-red-950/60 border-red-700' : 'bg-slate-800 border-slate-700'}`}>
-                      <div className="flex justify-between font-semibold">
-                        <span>Feeder #{feederDisplayName(f)}</span>
-                        <span>{f.inverterIds.length} PCS units</span>
-                      </div>
-                      <div className="flex justify-between text-slate-400">
-                        <span>Load</span>
-                        <span className="text-slate-200">{f.loadMW.toFixed(2)} MW / {f.amps.toFixed(0)} A</span>
-                      </div>
-                      <div className="flex justify-between text-slate-400">
-                        <span>Length</span>
-                        <span className="text-slate-200">{Math.ceil(f.totalLengthFt).toLocaleString()} LF</span>
-                      </div>
-                      <div className="flex justify-between items-center text-slate-400">
-                        <span>Conductor</span>
-                        <select
-                          value={f.size}
-                          onChange={e => setFeederSize(f.idx, e.target.value as FeederConductorSize)}
-                          className="bg-slate-900 border border-slate-600 rounded px-1 py-0.5 text-xs text-slate-100"
-                        >
-                          {FEEDER_CONDUCTOR_SIZES.map(s => (
-                            <option key={s} value={s}>{s} kcmil</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="flex justify-between text-slate-400">
-                        <span>Ampacity (EOL basis)</span>
-                        <span className={f.overAmpacity ? 'text-red-400 font-semibold' : 'text-emerald-400'}>
-                          BOL {f.amps.toFixed(0)} / EOL {(f.eolAmps || f.amps).toFixed(0)} A of {(Math.max(1, f.parallelSets || 1) * (f.effectiveAmpacity || f.ampacity)).toFixed(0)} A derated
-                        </span>
-                      </div>
-                      {f.overAmpacity && (
-                        <div className="text-red-400">
-                          ⚠ Current exceeds conductor ampacity.{' '}
-                          {f.ampacityRecommendedSize
-                            ? `Recommend ${f.ampacityRecommendedSize} kcmil.`
-                            : `Use ${f.parallelRunsNeeded} parallel conductors per phase, or split the feeder.`}
-                        </div>
-                      )}
-                      <div className="flex justify-between text-slate-400">
-                        <span>Voltage drop</span>
-                        <span className={f.overLimit ? 'text-red-400 font-semibold' : 'text-emerald-400'}>
-                          {f.vdPct.toFixed(2)}% ({f.vdVolts.toFixed(0)} V)
-                        </span>
-                      </div>
-                      {f.overLimit && (
-                        <div className="text-red-400">
-                          ⚠ Exceeds {VD_LIMIT_PCT}% limit.{' '}
-                          {f.recommendedSize
-                            ? `Recommend ${f.recommendedSize} kcmil.`
-                            : 'No larger size meets the limit — split the feeder or move the substation closer.'}
-                        </div>
-                      )}
-                      {feeders.length > 1 && (
-                        <div className="flex justify-between items-center text-slate-400 pt-1 border-t border-slate-700/60">
-                          <span>Move PCS unit…</span>
-                          <select
-                            value=""
-                            onChange={e => {
-                              const [invId, tgt] = e.target.value.split('→');
-                              if (!invId) return;
-                              const ok = assignInverterToFeeder(invId, Number(tgt));
-                              if (!ok) toast.error(`Feeder ${tgt} is full (max 7 PCS units)`);
-                            }}
-                            className="bg-slate-900 border border-slate-600 rounded px-1 py-0.5 text-xs text-slate-100 max-w-[150px]"
-                          >
-                            <option value="">select</option>
-                            {f.inverterIds.map(id =>
-                              feeders
-                                .filter(o => o.idx !== f.idx)
-                                .map(o => (
-                                  <option key={`${id}→${o.idx}`} value={`${id}→${o.idx}`}>
-                                    {id} → Feeder #{feederDisplayName(o)}
-                                  </option>
-                                ))
-                            )}
-                          </select>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {Object.keys(feederAssignments).length > 0 && (
-                    <button
-                      onClick={resetFeederOverrides}
-                      className="w-full text-xs px-2 py-1.5 rounded bg-slate-700 hover:bg-slate-600"
-                    >
-                      Reset feeder grouping to auto
-                    </button>
-                  )}
-                  {Object.keys(layoutEdits.feederRoutes ?? {}).length > 0 && (
-                    <div className="rounded p-2 text-xs space-y-1 border bg-slate-800 border-slate-700">
-                      <div className="font-semibold text-slate-200">Custom feeder routes</div>
-                      {Object.keys(layoutEdits.feederRoutes ?? {}).map(key => {
-                        const live = feeders.find(f => feederRouteKey(f.inverterIds) === key);
-                        const forced = (layoutEdits.forcedEdits ?? []).includes(`feeder-route-${key}`);
-                        return (
-                          <div key={key} className="flex items-center justify-between gap-2">
-                            <span className="text-slate-400">
-                              {live ? `Feeder #${feederDisplayName(live)}` : `${key} (inactive)`}
-                              {forced ? ' — engineer override' : ''}
-                              {!live ? ' — no feeder currently anchors on this PCS' : ''}
-                            </span>
-                            <button
-                              onClick={() => removeFeederRoute(key)}
-                              className="text-xs px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 shrink-0"
-                            >
-                              Reset
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {/* Feeder-routing optimizer: re-orients how the MV bundle
-                      leaves the substation. Never auto-applied — the drafter
-                      reviews ranked cards and picks one. */}
-                  {substation && feeders.length > 0 && (
-                    <div className="rounded p-2 text-xs space-y-1.5 border bg-slate-800 border-slate-700">
-                      <div className="font-semibold text-slate-200">Feeder routing optimizer</div>
-                      {!frRunning ? (
-                        <button
-                          onClick={handleRunFeederOptimizer}
-                          className="w-full py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-xs font-semibold text-slate-100"
-                        >
-                          Optimize feeder routing
-                        </button>
-                      ) : (
-                        <div className="space-y-1.5">
-                          <div className="flex items-center justify-between text-slate-400">
-                            <span>Searching routings… {frProgress ? `${frProgress.done}/${frProgress.total}` : ''}</span>
-                            <button
-                              onClick={() => cancelChannel('feederRouting')}
-                              className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-xs font-semibold text-slate-100"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                          <div className="h-1.5 rounded bg-slate-700 overflow-hidden">
-                            <div
-                              className="h-full bg-emerald-500 transition-all"
-                              style={{ width: `${frProgress && frProgress.total > 0 ? Math.round((frProgress.done / frProgress.total) * 100) : 0}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
-                      <div className="text-[10px] text-slate-500">
-                        Tries 90°, angled and combined home-run orientations plus corridor positions for this yard, and ranks them by fewest crossings, then most uniform lane spacing, then least conductor. Block placement, the substation position and feeder grouping are never changed.
-                      </div>
-                      {frResult && frResult.current && (
-                        <div className="text-[10px] text-slate-500">
-                          Current: {frResult.current.metrics.crossings} crossing{frResult.current.metrics.crossings === 1 ? '' : 's'} ·{' '}
-                          {frResult.current.metrics.uniformityPct.toFixed(0)}% uniform ·{' '}
-                          {frResult.current.metrics.conductorFt.toFixed(0)} ft
-                        </div>
-                      )}
-                      {frResult && frResult.candidates.map((cand, i) => {
-                        const m = cand.metrics;
-                        const cur = frResult.current;
-                        const label = m.angledCount - m.angledFallbacks === 0 ? '90° corridor'
-                          : cand.orientation === 'angled' ? 'Angled corridor'
-                          : `Combined (${m.angledCount - m.angledFallbacks} of ${m.feederCount} angled)`;
-                        return (
-                          <div key={cand.id} className="rounded border border-slate-700 bg-slate-900/60 p-2 space-y-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-semibold text-slate-200">
-                                #{i + 1} — {label}
-                                {i === 0 && <span className="text-emerald-400 font-normal"> — best</span>}
-                              </span>
-                              <button
-                                onClick={() => handleApplyFeederRouting(cand)}
-                                className="shrink-0 px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-xs font-semibold text-slate-100"
-                              >
-                                Apply
-                              </button>
-                            </div>
-                            <div className="grid grid-cols-2 gap-x-3 text-slate-400">
-                              <span>Crossings: {m.crossings}{m.auxCrossings > 0 ? ` (+${m.auxCrossings} aux)` : ''}</span>
-                              <span>Spacing: {m.uniformityPct.toFixed(0)}% uniform</span>
-                              <span>Conductor: {m.conductorFt.toFixed(0)} ft</span>
-                              {cur && (
-                                <span className={m.conductorFt <= cur.metrics.conductorFt ? 'text-emerald-400' : 'text-amber-400'}>
-                                  {m.conductorFt <= cur.metrics.conductorFt ? '−' : '+'}
-                                  {Math.abs(m.conductorFt - cur.metrics.conductorFt).toFixed(0)} ft vs current
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[10px] text-slate-500">
-                              Corridor {cand.params.corridorPin === null ? 'automatic' : `pinned at ${Math.round(cand.params.corridorPin)} ft`}
-                              {m.angledFallbacks > 0 && ` · ${m.angledFallbacks} feeder${m.angledFallbacks > 1 ? 's have' : ' has'} no clear diagonal and keeps its 90° route`}
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {frResult && frResult.candidates.length === 0 && (
-                        <div className="text-slate-500">
-                          No cleaner routing found — the current feeder bundle is already the best of the orientations tried.
-                        </div>
-                      )}
-                      {frResult && frResult.candidates.length > 0 && (
-                        <div className="text-[10px] text-slate-500">
-                          Applying sets the routing mode, per-feeder overrides and corridor position as one step. Undo with Ctrl+Z.
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {electricalReport && (
-                    <div className="rounded p-2 text-xs space-y-1.5 border bg-slate-800 border-slate-700">
-                      <div className="font-semibold text-slate-200">Voltage Drop &amp; Losses</div>
-                      <div className="text-[10px] text-slate-400">
-                        EOL basis: currents include reserved augmentation PCS; capacity = parallel sets × mutual-heating-derated rating — same basis that sized each conductor (matches SLD/DXF).
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-slate-400">
-                        <label className="block" title="Feeders above this % voltage drop are flagged here and in the pre-export checklist. Screening preference only — auto conductor sizing keeps its 3% engineering default.">
-                          Max VD (%)
-                          <input
-                            type="number"
-                            min={0.5}
-                            max={10}
-                            step={0.5}
-                            value={maxVdPct}
-                            onChange={e => setMaxVdPct(Number(e.target.value))}
-                            className="w-full mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100"
-                          />
-                        </label>
-                        <label className="block" title="Capacity (load) factor used for the annual I²R loss estimate: loss factor = 0.3·LF + 0.7·LF².">
-                          Capacity factor (%)
-                          <input
-                            type="number"
-                            min={5}
-                            max={100}
-                            step={5}
-                            value={capacityFactorPct}
-                            onChange={e => setCapacityFactorPct(Number(e.target.value))}
-                            className="w-full mt-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-100"
-                          />
-                        </label>
-                      </div>
-                      <table className="w-full text-[11px]">
-                        <thead>
-                          <tr className="text-slate-400 border-b border-slate-700">
-                            <th className="text-left font-medium py-0.5">Fdr</th>
-                            <th className="text-right font-medium">kcmil</th>
-                            <th className="text-right font-medium">LF</th>
-                            <th className="text-right font-medium" title="BOL/EOL current vs total EOL capacity (parallel sets × mutual-heating-derated rating) — the basis that sized the conductor">A BOL/EOL / cap</th>
-                            <th className="text-right font-medium">VD %</th>
-                            <th className="text-right font-medium">MWh/yr</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {electricalReport.rows.map(r => (
-                            <tr key={r.idx} className={r.overLimit ? 'text-red-400' : 'text-slate-200'}>
-                              <td className="py-0.5">#{r.name ?? `F${r.idx}`}</td>
-                              <td className="text-right">{r.size} {r.material}</td>
-                              <td className="text-right">{Math.ceil(r.lengthFt).toLocaleString()}</td>
-                              <td className={`text-right ${r.overAmpacity ? 'text-red-400 font-semibold' : ''}`}>{r.amps.toFixed(0)}/{r.eolAmps.toFixed(0)} / {r.eolCapacityAmps.toFixed(0)}{r.overAmpacity ? ' ⚠' : ''}</td>
-                              <td className={`text-right ${r.overLimit ? 'font-semibold' : ''}`}>{r.vdPct.toFixed(2)}{r.overLimit ? ' ⚠' : ''}</td>
-                              <td className="text-right">{r.annualLossMWh.toFixed(1)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                        <tfoot>
-                          <tr className="text-slate-300 border-t border-slate-700 font-semibold">
-                            <td className="py-0.5" colSpan={4}>Total ({electricalReport.totalPeakLossKW.toFixed(1)} kW peak)</td>
-                            <td className="text-right" colSpan={2}>{electricalReport.totalAnnualLossMWh.toFixed(1)} MWh/yr</td>
-                          </tr>
-                        </tfoot>
-                      </table>
-                      <div className="text-slate-500">
-                        Screening-grade: NEC Ch.9 Table 8 DC resistance, loss factor {electricalReport.lossFactorUsed.toFixed(3)} from {electricalReport.capacityFactorPct}% capacity factor. Verify in detailed design.
-                      </div>
-                    </div>
-                  )}
-                  <label className="flex items-center gap-2 text-sm cursor-pointer" title="Run a simplified per-bus short-circuit study over the routed collection network: utility Thevenin source through the actual cable impedances, PCS units as fixed current sources (k × rated). Bolted 3-phase duty at the main bus, each FJB, each PCS terminal and the 480V aux bus. When enabled, the study is added to the POI data sheet PDF as its own section.">
-                    <input
-                      type="checkbox"
-                      checked={scEnabled}
-                      onChange={e => setScEnabled(e.target.checked)}
-                    />
-                    <span>Short-circuit study (per-bus)</span>
-                  </label>
-                  {scEnabled && (
-                    <div className="bg-slate-800 rounded p-2.5 text-[11px] leading-relaxed">
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
-                        Short-Circuit Study Inputs
-                      </div>
-                      <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
-                        <StudyNumField label="Utility fault (MVA)" unit="MVA" title="Available 3-phase fault MVA at the 34.5 kV POI, from the utility's system study."
-                          step={100} min={SC_NUM_LIMITS.utilityFaultMVA.min} max={SC_NUM_LIMITS.utilityFaultMVA.max}
-                          value={scInputs.utilityFaultMVA}
-                          onCommit={v => { if (v !== null) setScInputs({ utilityFaultMVA: v }); }} />
-                        <StudyNumField label="Utility X/R" title="System X/R ratio at the POI — sets the source R/X split and the asymmetrical peak factor."
-                          step={1} min={SC_NUM_LIMITS.utilityXOverR.min} max={SC_NUM_LIMITS.utilityXOverR.max}
-                          value={scInputs.utilityXOverR}
-                          onCommit={v => { if (v !== null) setScInputs({ utilityXOverR: v }); }} />
-                        <StudyNumField label="PCS k (pu)" unit="pu" title="PCS fault contribution in per-unit of rated current (IEEE 2800-typical current-limited behavior). 1.2 is the common screening value."
-                          step={0.1} min={SC_NUM_LIMITS.inverterK.min} max={SC_NUM_LIMITS.inverterK.max}
-                          value={scInputs.inverterK}
-                          onCommit={v => { if (v !== null) setScInputs({ inverterK: v }); }} />
-                        <StudyNumField label="Gear rating (kA)" unit="kA" title="Optional MV switchgear interrupting rating (kA sym). When set, every MV bus shows its margin against this rating. Leave blank to skip."
-                          step={1} min={SC_RATING_LIMITS.min} max={SC_RATING_LIMITS.max}
-                          value={scInputs.equipmentRatingKA} nullable placeholder="—"
-                          onCommit={v => setScInputs({ equipmentRatingKA: v })} />
-                        <StudyNumField label="Aux xfmr (kVA)" unit="kVA" title="Aux transformer base kVA (2000 kVA matches the 2000 A / 480 V aux switchboard)."
-                          step={250} min={SC_NUM_LIMITS.auxKVA.min} max={SC_NUM_LIMITS.auxKVA.max}
-                          value={scInputs.auxKVA}
-                          onCommit={v => { if (v !== null) setScInputs({ auxKVA: v }); }} />
-                        <StudyNumField label="Aux %Z" unit="%" title="Aux transformer nameplate impedance (%Z on its own base). 5.75% is typical for pad-mounts."
-                          step={0.25} min={SC_NUM_LIMITS.auxPctZ.min} max={SC_NUM_LIMITS.auxPctZ.max}
-                          value={scInputs.auxPctZ}
-                          onCommit={v => { if (v !== null) setScInputs({ auxPctZ: v }); }} />
-                        <StudyNumField label="Aux X/R" title="Aux transformer X/R ratio — splits its impedance into R and X for the 480V bus X/R and peak factor. ~5 is typical at this size."
-                          step={0.5} min={SC_NUM_LIMITS.auxXOverR.min} max={SC_NUM_LIMITS.auxXOverR.max}
-                          value={scInputs.auxXOverR}
-                          onCommit={v => { if (v !== null) setScInputs({ auxXOverR: v }); }} />
-                      </div>
-                    </div>
-                  )}
-                  {scEnabled && scStudy && (
-                    <div className="rounded p-2 text-xs space-y-1.5 border bg-slate-800 border-slate-700" title="Bolted 3-phase symmetrical fault duty per bus: utility contribution through the routed cable impedance + all PCS current sources. Peak = IEC κ·√2·Isym from the utility-path X/R. Added to the POI data sheet PDF while enabled.">
-                      <div className="flex items-center justify-between">
-                        <div className="font-semibold text-slate-200">Short-Circuit Duty (per bus)</div>
-                        {scStudy.inputs.equipmentRatingKA !== null && (
-                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${scStudy.overRatedCount === 0 ? 'bg-emerald-700 text-emerald-100' : 'bg-red-800 text-red-100'}`}>
-                            {scStudy.overRatedCount === 0 ? 'WITHIN RATING' : `${scStudy.overRatedCount} OVER`}
-                          </span>
-                        )}
-                      </div>
-                      <table className="w-full text-[11px]">
-                        <thead>
-                          <tr className="text-slate-400 border-b border-slate-700">
-                            <th className="text-left font-medium py-0.5">Bus</th>
-                            <th className="text-right font-medium">kA sym</th>
-                            <th className="text-right font-medium">kA peak</th>
-                            <th className="text-right font-medium">X/R</th>
-                            {scStudy.inputs.equipmentRatingKA !== null && <th className="text-right font-medium">Margin</th>}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {scStudy.buses.map(b => (
-                            <tr key={b.id} className={b.marginPct !== null && b.marginPct < 0 ? 'text-red-400' : 'text-slate-200'}>
-                              <td className="py-0.5">{b.label}</td>
-                              <td className="text-right font-mono">{b.symKA.toFixed(1)}</td>
-                              <td className="text-right font-mono">{b.peakKA.toFixed(1)}</td>
-                              <td className="text-right font-mono">{Number.isFinite(b.xOverR) ? b.xOverR.toFixed(1) : '—'}</td>
-                              {scStudy.inputs.equipmentRatingKA !== null && (
-                                <td className={`text-right font-mono ${b.marginPct !== null && b.marginPct < 0 ? 'font-semibold' : ''}`}>
-                                  {b.marginPct === null ? '—' : `${b.marginPct >= 0 ? '+' : ''}${b.marginPct.toFixed(0)}%`}
-                                </td>
-                              )}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <div className="text-slate-500">
-                        Simplified: PCS as fixed current sources (k × rated), no machine decay. Included in the POI data sheet PDF while enabled.
-                      </div>
-                    </div>
-                  )}
-                  <label className={`flex items-center gap-2 text-sm ${scEnabled ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}`} title="Protection screening built on the short-circuit study: interrupting-duty check against standard breaker rating ladders, feeder/main relay coordination (IEEE very-inverse curves), and arc-flash incident energy (IEEE 1584-2002 at the 480V aux bus, conservative Lee method at the MV buses). Requires the short-circuit study. Added to the POI data sheet PDF while enabled.">
-                    <input
-                      type="checkbox"
-                      checked={protectionEnabled}
-                      disabled={!scEnabled}
-                      onChange={e => setProtectionEnabled(e.target.checked)}
-                    />
-                    <span>Protection & arc-flash study</span>
-                  </label>
-                  {scEnabled && protectionEnabled && (
-                    <div className="bg-slate-800 rounded p-2.5 text-[11px] leading-relaxed">
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
-                        Protection Study Inputs
-                      </div>
-                      <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
-                        <StudyNumField label="Duty margin (%)" unit="%" title="Required headroom above the calculated fault duty when picking a device from the standard rating ladder. 20% is common practice."
-                          step={5} min={PROTECTION_NUM_LIMITS.dutyMarginPct.min} max={PROTECTION_NUM_LIMITS.dutyMarginPct.max}
-                          value={protectionInputs.dutyMarginPct}
-                          onCommit={v => { if (v !== null) setProtectionInputs({ dutyMarginPct: v }); }} />
-                        <StudyNumField label="Required CTI (s)" unit="s" title="Required coordination time interval between the feeder and main relay operating times at the feeder-bus maximum fault. 0.3 s is the classic relay-to-relay CTI."
-                          step={0.05} min={PROTECTION_NUM_LIMITS.ctiRequiredS.min} max={PROTECTION_NUM_LIMITS.ctiRequiredS.max}
-                          value={protectionInputs.ctiRequiredS}
-                          onCommit={v => { if (v !== null) setProtectionInputs({ ctiRequiredS: v }); }} />
-                        <StudyNumField label="Feeder pickup (pu)" unit="pu" title="Feeder relay pickup as a multiple of the feeder full-load amps. 1.25 pu is a common margin above load."
-                          step={0.05} min={PROTECTION_NUM_LIMITS.feederPickupPu.min} max={PROTECTION_NUM_LIMITS.feederPickupPu.max}
-                          value={protectionInputs.feederPickupPu}
-                          onCommit={v => { if (v !== null) setProtectionInputs({ feederPickupPu: v }); }} />
-                        <StudyNumField label="Main pickup (pu)" unit="pu" title="Main relay pickup as a multiple of the aggregate full-load amps."
-                          step={0.05} min={PROTECTION_NUM_LIMITS.mainPickupPu.min} max={PROTECTION_NUM_LIMITS.mainPickupPu.max}
-                          value={protectionInputs.mainPickupPu}
-                          onCommit={v => { if (v !== null) setProtectionInputs({ mainPickupPu: v }); }} />
-                        <StudyNumField label="Feeder time dial" title="Feeder relay time dial on the IEEE C37.112 very-inverse curve."
-                          step={0.5} min={PROTECTION_NUM_LIMITS.feederTimeDial.min} max={PROTECTION_NUM_LIMITS.feederTimeDial.max}
-                          value={protectionInputs.feederTimeDial}
-                          onCommit={v => { if (v !== null) setProtectionInputs({ feederTimeDial: v }); }} />
-                        <StudyNumField label="Main time dial" title="Main relay time dial on the IEEE C37.112 very-inverse curve — set above the feeder dial to coordinate."
-                          step={0.5} min={PROTECTION_NUM_LIMITS.mainTimeDial.min} max={PROTECTION_NUM_LIMITS.mainTimeDial.max}
-                          value={protectionInputs.mainTimeDial}
-                          onCommit={v => { if (v !== null) setProtectionInputs({ mainTimeDial: v }); }} />
-                        <StudyNumField label="MV work dist (in)" unit="in" title="Arc-flash working distance at the MV switchgear (36 in is the standard 15–36 kV class distance)."
-                          step={6} min={PROTECTION_NUM_LIMITS.mvWorkingDistIn.min} max={PROTECTION_NUM_LIMITS.mvWorkingDistIn.max}
-                          value={protectionInputs.mvWorkingDistIn}
-                          onCommit={v => { if (v !== null) setProtectionInputs({ mvWorkingDistIn: v }); }} />
-                        <StudyNumField label="LV work dist (in)" unit="in" title="Arc-flash working distance at the 480V aux switchgear (18 in is the standard LV distance)."
-                          step={6} min={PROTECTION_NUM_LIMITS.lvWorkingDistIn.min} max={PROTECTION_NUM_LIMITS.lvWorkingDistIn.max}
-                          value={protectionInputs.lvWorkingDistIn}
-                          onCommit={v => { if (v !== null) setProtectionInputs({ lvWorkingDistIn: v }); }} />
-                      </div>
-                    </div>
-                  )}
-                  {scEnabled && protectionEnabled && protectionStudy && (
-                    <div className="rounded p-2 text-xs space-y-1.5 border bg-slate-800 border-slate-700" title="Interrupting-duty recommendations, feeder/main coordination screening and arc-flash incident energy — all derived from the per-bus short-circuit study. Added to the POI data sheet PDF while enabled.">
-                      <div className="flex items-center justify-between">
-                        <div className="font-semibold text-slate-200">Protection & Arc Flash</div>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${protectionStudy.inadequateDutyCount === 0 && protectionStudy.uncoordinatedCount === 0 ? 'bg-emerald-700 text-emerald-100' : 'bg-amber-700 text-amber-100'}`}>
-                          {protectionStudy.inadequateDutyCount === 0 && protectionStudy.uncoordinatedCount === 0
-                            ? 'SCREEN PASS'
-                            : `${protectionStudy.inadequateDutyCount + protectionStudy.uncoordinatedCount} REVIEW`}
-                        </span>
-                      </div>
-                      <table className="w-full text-[11px]">
-                        <thead>
-                          <tr className="text-slate-400 border-b border-slate-700">
-                            <th className="text-left font-medium py-0.5">Bus</th>
-                            <th className="text-right font-medium">Duty kA</th>
-                            <th className="text-right font-medium">Device kA</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {protectionStudy.duty.filter(r => r.kind !== 'pcs').map(r => (
-                            <tr key={r.busId} className={r.adequate ? 'text-slate-200' : 'text-red-400'}>
-                              <td className="py-0.5">{r.busLabel}</td>
-                              <td className="text-right font-mono">{r.symKA.toFixed(1)}</td>
-                              <td className="text-right font-mono">{r.recommendedKA !== null ? r.recommendedKA : 'NONE'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <table className="w-full text-[11px]">
-                        <thead>
-                          <tr className="text-slate-400 border-b border-slate-700">
-                            <th className="text-left font-medium py-0.5">Pair</th>
-                            <th className="text-right font-medium">CTI s</th>
-                            <th className="text-right font-medium">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {protectionStudy.coordination.map(c => (
-                            <tr key={c.feederIdx} className={c.coordinated ? 'text-slate-200' : 'text-amber-400'}>
-                              <td className="py-0.5">{c.feederName ? `#${c.feederName}` : `F${c.feederIdx}`} / main</td>
-                              <td className="text-right font-mono">{Number.isFinite(c.ctiS) ? c.ctiS.toFixed(2) : '—'}</td>
-                              <td className="text-right font-mono">{c.coordinated ? 'OK' : 'REVIEW'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <table className="w-full text-[11px]">
-                        <thead>
-                          <tr className="text-slate-400 border-b border-slate-700">
-                            <th className="text-left font-medium py-0.5">Arc Flash</th>
-                            <th className="text-right font-medium">cal/cm²</th>
-                            <th className="text-right font-medium">PPE</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {protectionStudy.arcFlash.map(r => (
-                            <tr key={r.busId} className={r.ppeCategory >= 5 ? 'text-red-400' : 'text-slate-200'}>
-                              <td className="py-0.5">{r.busLabel}</td>
-                              <td className="text-right font-mono">{r.incidentCalCm2.toFixed(1)}</td>
-                              <td className="text-right font-mono">{r.ppeCategory >= 5 ? 'DANGER' : `CAT ${r.ppeCategory}`}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <div className="text-slate-500">
-                        Screening: generic IEEE very-inverse curves, IEEE 1584-2002 (LV) / Lee (MV) arc flash. Included in the POI data sheet PDF while enabled.
-                      </div>
-                    </div>
-                  )}
-                  <label className="flex items-center gap-2 text-sm cursor-pointer" title="Simulate plant energy performance over the project life: IEC 62933-2-1 round-trip efficiency at the AC point of connection (including auxiliaries and the routed feeders' cable losses), NREL semi-empirical calendar + cycle degradation, and augmentation planning against the reserved augmentation zones. Inputs are saved in the project file. Screening grade; exports a standalone PDF report only.">
-                    <input
-                      type="checkbox"
-                      checked={energySimEnabled}
-                      onChange={e => setEnergySimEnabled(e.target.checked)}
-                    />
-                    <span>Energy & dispatch simulation</span>
-                  </label>
-                  {energySimEnabled && (
-                    <div className="bg-slate-800 rounded p-2.5 text-[11px] leading-relaxed">
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
-                        Energy Simulation Inputs
-                      </div>
-                      <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
-                        <StudyNumField label="Cycles per day" title="Standard full cycles per day (IEC 62933-2-1 dispatch framing). 1.0 = one full charge/discharge per day."
-                          step={0.1} min={ENERGY_SIM_NUM_LIMITS.cyclesPerDay.min} max={ENERGY_SIM_NUM_LIMITS.cyclesPerDay.max}
-                          value={energySimInputs.cyclesPerDay}
-                          onCommit={v => { if (v !== null) setEnergySimInputs({ cyclesPerDay: v }); }} />
-                        <StudyNumField label="DOD (%)" unit="%" title="Depth of discharge per cycle (% of usable energy). Deeper cycling accelerates cycle fade via a √DOD stress factor."
-                          step={5} min={ENERGY_SIM_NUM_LIMITS.dodPct.min} max={ENERGY_SIM_NUM_LIMITS.dodPct.max}
-                          value={energySimInputs.dodPct}
-                          onCommit={v => { if (v !== null) setEnergySimInputs({ dodPct: v }); }} />
-                        <StudyNumField label="Avg ambient (°C)" unit="°C" title="Site annual-average ambient temperature. Cell temperature is assumed 5 °C above ambient; calendar fade roughly doubles per +12 °C (Arrhenius)."
-                          step={1} min={ENERGY_SIM_NUM_LIMITS.avgAmbientC.min} max={ENERGY_SIM_NUM_LIMITS.avgAmbientC.max}
-                          value={energySimInputs.avgAmbientC}
-                          onCommit={v => { if (v !== null) setEnergySimInputs({ avgAmbientC: v }); }} />
-                        <StudyNumField label="Project life (yr)" unit="yr" title="Simulation horizon in operating years (whole years — decimals round to the nearest year)."
-                          integer step={1} min={ENERGY_SIM_NUM_LIMITS.projectLifeYears.min} max={ENERGY_SIM_NUM_LIMITS.projectLifeYears.max}
-                          value={energySimInputs.projectLifeYears}
-                          onCommit={v => { if (v !== null) setEnergySimInputs({ projectLifeYears: v }); }} />
-                        <StudyNumField label="Contract MWh" unit="MWh" title="Contracted usable energy the plant must maintain. When usable capacity would fall below this, whole containers are added at the start of that year (augmentation). 0 disables augmentation planning."
-                          step={10} min={ENERGY_SIM_NUM_LIMITS.contractMWh.min} max={ENERGY_SIM_NUM_LIMITS.contractMWh.max}
-                          value={energySimInputs.contractMWh}
-                          onCommit={v => { if (v !== null) setEnergySimInputs({ contractMWh: v }); }} />
-                        <StudyNumField label="Aux kW/container" unit="kW" title="Average auxiliary (HVAC + controls) load per container. 3.5 kW is a warranty-class annual average for LFP containers in a moderate climate."
-                          step={0.5} min={ENERGY_SIM_NUM_LIMITS.auxKwPerContainer.min} max={ENERGY_SIM_NUM_LIMITS.auxKwPerContainer.max}
-                          value={energySimInputs.auxKwPerContainer}
-                          onCommit={v => { if (v !== null) setEnergySimInputs({ auxKwPerContainer: v }); }} />
-                        <StudyNumField label="Battery DC RTE (%)" unit="%" title="RTE override: battery DC-DC round-trip efficiency (%). 94% is a typical warranty-class LFP value; override from the OEM datasheet."
-                          step={0.5} min={roundToDecimals(ENERGY_SIM_NUM_LIMITS.batteryRteDc.min * 100, 1)} max={roundToDecimals(ENERGY_SIM_NUM_LIMITS.batteryRteDc.max * 100, 1)}
-                          displayDecimals={1}
-                          value={Math.round(energySimInputs.batteryRteDc * 1000) / 10}
-                          onCommit={v => { if (v !== null) setEnergySimInputs({ batteryRteDc: v / 100 }); }} />
-                        <StudyNumField label="PCS one-way eff (%)" unit="%" title="RTE override: PCS one-way (per-direction) efficiency (%). 98.5% is a typical CEC-weighted value for utility-scale inverters."
-                          step={0.1} min={roundToDecimals(ENERGY_SIM_NUM_LIMITS.pcsEff.min * 100, 1)} max={roundToDecimals(ENERGY_SIM_NUM_LIMITS.pcsEff.max * 100, 1)}
-                          displayDecimals={1}
-                          value={Math.round(energySimInputs.pcsEff * 1000) / 10}
-                          onCommit={v => { if (v !== null) setEnergySimInputs({ pcsEff: v / 100 }); }} />
-                      </div>
-                    </div>
-                  )}
-                  {energySimEnabled && energySim && (
-                    <div className="rounded p-2 text-xs space-y-1.5 border bg-slate-800 border-slate-700" title="IEC 62933-2-1 AC point-of-connection round-trip efficiency (including auxiliaries), NREL semi-empirical degradation and container-granular augmentation planning against the reserved augmentation zones. Screening grade.">
-                      <div className="flex items-center justify-between">
-                        <div className="font-semibold text-slate-200">Energy Simulation</div>
-                        {energySim.totalAddedContainers > 0 && (
-                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${energySim.zonesSufficient ? 'bg-emerald-700 text-emerald-100' : 'bg-red-800 text-red-100'}`}>
-                            {energySim.zonesSufficient ? 'AUG ZONES OK' : 'AUG ZONES SHORT'}
-                          </span>
-                        )}
-                      </div>
-                      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-slate-300">
-                        <span>System RTE @ AC PoC (incl. aux)</span>
-                        <span className="text-right font-mono">{energySim.rte.acRtePct.toFixed(1)}%</span>
-                        <span>AC RTE excl. aux</span>
-                        <span className="text-right font-mono">{energySim.rte.acRteExAuxPct.toFixed(1)}%</span>
-                        <span>Aux consumption</span>
-                        <span className="text-right font-mono">{energySim.rte.dailyAuxMWh.toFixed(2)} MWh/day</span>
-                        <span>Year-1 discharge</span>
-                        <span className="text-right font-mono">{Math.round(energySim.annualThroughputBolMWh).toLocaleString()} MWh</span>
-                        <span>End-of-life usable (yr {energySimInputs.projectLifeYears})</span>
-                        <span className="text-right font-mono">{Math.round(energySim.endOfLifeUsableMWh).toLocaleString()} MWh</span>
-                        {energySimInputs.contractMWh > 0 && (
-                          <>
-                            <span>Augmentation needed</span>
-                            <span className="text-right font-mono">
-                              {energySim.totalAddedContainers > 0
-                                ? `${energySim.totalAddedContainers} cont. / ${energySim.totalAddedMWh.toFixed(0)} MWh`
-                                : 'none'}
-                            </span>
-                            {energySim.totalAddedContainers > 0 && (
-                              <>
-                                <span>First augmentation year</span>
-                                <span className="text-right font-mono">{energySim.augmentation[0].year}</span>
-                                <span>Reserved zone capacity</span>
-                                <span className={`text-right font-mono ${energySim.zonesSufficient ? '' : 'text-red-400'}`}>
-                                  {energySim.zoneCapacityContainers} containers {energySim.zonesSufficient ? '✓' : '✗'}
-                                </span>
-                              </>
-                            )}
-                          </>
-                        )}
-                      </div>
-                      {!energySim.zonesSufficient && (
-                        <div className="text-[10px] text-amber-400">
-                          Reserved augmentation zones cannot hold the planned containers — increase the future augmentation % above and regenerate.
-                        </div>
-                      )}
-                      <CapacityCurvePreview result={energySim} />
-                      <button
-                        disabled={energyBusy}
-                        onClick={async () => {
-                          setEnergyBusy(true);
-                          try {
-                            await new Promise(res => setTimeout(res, 30));
-                            const cfg = getEffectiveConfiguration(configId, containersPerPcs);
-                            const doc = buildEnergySimPdf(energySim, energySimInputs, {
-                              titleBlock,
-                              configLabel: cfg.label,
-                              achievedMW: design?.achievedMW ?? 0,
-                              achievedMWh: design?.achievedMWh ?? 0,
-                              containers: (design?.blocksPlaced ?? 0) * cfg.containersPerBlock,
-                            });
-                            const exportName = (titleBlock.projectName || 'BESSForge').replace(/[^A-Za-z0-9_-]+/g, '_');
-                            const saved = await saveBlob(finalizePdfBlob(doc), `${exportName}_Energy_Simulation_${new Date().toISOString().slice(0, 10)}.pdf`);
-                            if (saved) toast.success('Energy simulation report PDF exported');
-                          } catch (err) {
-                            toastCaught('Energy report failed — try again', err);
-                          } finally {
-                            setEnergyBusy(false);
-                          }
-                        }}
-                        className="w-full mt-1 py-1.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-60 text-xs font-semibold text-slate-100"
-                        title="Export a one-page PDF report: RTE loss chain, year-by-year degradation and augmentation table, zone-capacity check and model citations. Standalone file — never part of the default DXF/PDF exports."
-                      >
-                        {energyBusy ? 'Exporting…' : 'Export energy report (PDF)'}
-                      </button>
-                      <div className="text-slate-500">
-                        Screening grade — IEC 62933-2-1 RTE framing, NREL semi-empirical degradation. Verify against OEM warranty and offtake agreement.
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-        </PanelSection>
-
-        {/* Step 6: Edit layout */}
-        {design && (
+        {SHOW_LEGACY_LAYOUT_TABS && design && (
           <PanelSection id="edit" title="Edit Layout" discipline="Layout">
             <div className="space-y-2 text-xs text-slate-400">
               {/* Row/block move controls need auto rows; an empty area (manual
@@ -6840,8 +6881,7 @@ export default function DesignControlPanel() {
           </PanelSection>
         )}
 
-        {/* Step 7: Reset & alternative arrangements */}
-        {design && (
+        {SHOW_LEGACY_LAYOUT_TABS && design && (
           <PanelSection id="arrangements" title="Reset & Arrangements" discipline="Layout">
             <div className="space-y-2 text-xs text-slate-400">
               <div className="grid grid-cols-2 gap-2">
