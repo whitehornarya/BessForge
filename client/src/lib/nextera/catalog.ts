@@ -429,7 +429,7 @@ const GE_BLOCK_MW = CONTAINER_MWH * GE_CONTAINERS_PER_BLOCK * LG_JF2_CONTINUOUS_
 export const CONFIGURATIONS: BessConfiguration[] = [
   {
     id: 'pe-aux-200',
-    label: 'PE PCS w/ Dedicated Aux Feeder (50MW x 4hr - 200MWh)',
+    label: 'PE PCS w/ Dedicated Aux Feeder',
     inverterModel: 'PE FP4200M',
     inverterDims: PE_FP4200M,
     hasAuxEquipment: true,
@@ -438,7 +438,7 @@ export const CONFIGURATIONS: BessConfiguration[] = [
   },
   {
     id: 'ge-auxfeeder-400',
-    label: 'GE PCS w/ Dedicated Aux Feeder (100MW x 4hr - 400MWh)',
+    label: 'GE PCS w/ Dedicated Aux Feeder',
     inverterModel: 'GE FLEX 1571',
     inverterDims: GE_FLEX_1571,
     hasAuxEquipment: true,
@@ -447,7 +447,7 @@ export const CONFIGURATIONS: BessConfiguration[] = [
   },
   {
     id: 'ge-noaux-300',
-    label: 'GE PCS w/o Aux Equipment (75MW x 4hr - 300MWh)',
+    label: 'GE PCS w/o Aux Equipment',
     inverterModel: 'GE FLEX 1571',
     inverterDims: GE_FLEX_1571,
     hasAuxEquipment: false,
@@ -456,7 +456,7 @@ export const CONFIGURATIONS: BessConfiguration[] = [
   },
   {
     id: 'ge-noaux-400',
-    label: 'GE PCS w/o Aux Equipment (100MW x 4hr - 400MWh)',
+    label: 'GE PCS w/o Aux Equipment',
     inverterModel: 'GE FLEX 1571',
     inverterDims: GE_FLEX_1571,
     hasAuxEquipment: false,
@@ -465,7 +465,7 @@ export const CONFIGURATIONS: BessConfiguration[] = [
   },
   {
     id: 'ge-aux-400',
-    label: 'GE PCS w/ Aux Equipment (100MW x 4hr - 400MWh)',
+    label: 'GE PCS w/ Aux Equipment',
     inverterModel: 'GE FLEX 1571',
     inverterDims: GE_FLEX_1571,
     hasAuxEquipment: true,
@@ -480,7 +480,7 @@ export const CONFIGURATIONS: BessConfiguration[] = [
   // rating/BOM/compliance rule applies unchanged.
   {
     id: 'ge-aux-500',
-    label: 'GE PCS w/ Aux Equipment (125MW x 4hr - 500MWh)',
+    label: 'GE PCS w/ Aux Equipment (multi-area phase)',
     inverterModel: 'GE FLEX 1571',
     inverterDims: GE_FLEX_1571,
     hasAuxEquipment: true,

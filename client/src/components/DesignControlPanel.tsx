@@ -867,8 +867,8 @@ function PanelSectionNav({
     <nav
       className={[
         'group/nav absolute inset-y-0 left-0 z-20',
-        'flex flex-col gap-1.5 py-3 px-1',
-        'w-8 hover:w-44 focus-within:w-44',
+        'flex flex-col gap-2 py-3 px-1',
+        'w-9 hover:w-52 focus-within:w-52',
         'overflow-hidden transition-[width] duration-150 ease-out',
         'bg-slate-950 border-r border-slate-700 shadow-lg',
       ].join(' ')}
@@ -896,9 +896,9 @@ function PanelSectionNav({
               aria-current={active ? 'page' : undefined}
               onClick={() => nav.setActiveId(s.id)}
               className={[
-                'h-8 w-full shrink-0 rounded text-left text-[10px] font-semibold',
+                'min-h-11 w-full shrink-0 rounded text-left text-[13px] leading-snug font-semibold',
                 'flex items-center overflow-hidden',
-                'px-0 group-hover/nav:px-2 group-focus-within/nav:px-2',
+                'px-0 py-2.5 group-hover/nav:px-2.5 group-focus-within/nav:px-2.5',
                 'justify-center group-hover/nav:justify-start group-focus-within/nav:justify-start',
                 'disabled:opacity-35 disabled:cursor-not-allowed',
                 'transition-[padding] duration-150',
@@ -907,12 +907,12 @@ function PanelSectionNav({
                   : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100',
               ].join(' ')}
             >
-              <span className="truncate hidden group-hover/nav:inline group-focus-within/nav:inline">
+              <span className="hidden group-hover/nav:inline group-focus-within/nav:inline whitespace-normal">
                 {s.title}
               </span>
               <span
                 className={[
-                  'block w-1.5 h-1.5 rounded-full shrink-0',
+                  'block w-2 h-2 rounded-full shrink-0',
                   'group-hover/nav:hidden group-focus-within/nav:hidden',
                   active ? 'bg-white' : 'bg-slate-500',
                 ].join(' ')}
@@ -3280,7 +3280,7 @@ export default function DesignControlPanel() {
 
       <div className="relative flex-1 min-h-0">
       <PanelSectionNav boundaryReady={!!boundary} />
-      <div className="pl-8 h-full overflow-y-auto flex flex-col">
+      <div className="pl-9 h-full overflow-y-auto flex flex-col">
       <div className="p-4 space-y-5 flex-1 flex flex-col min-h-full">
         {/* Saved-session restore banner */}
         {savedSession && !boundary && (
@@ -4864,9 +4864,17 @@ export default function DesignControlPanel() {
             onChange={e => setConfigId(e.target.value)}
             className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-2 text-sm"
           >
-            {CONFIGURATIONS.map(c => (
-              <option key={c.id} value={c.id}>{c.label}</option>
-            ))}
+            {CONFIGURATIONS
+              .filter(c => {
+                // Same equipment family as ge-noaux-400 — only show the legacy
+                // id when it is already selected so the control stays valid.
+                if (c.id === 'ge-noaux-300') return configId === 'ge-noaux-300';
+                if (c.id === 'ge-noaux-400') return configId !== 'ge-noaux-300';
+                return true;
+              })
+              .map(c => (
+                <option key={c.id} value={c.id}>{c.label}</option>
+              ))}
           </select>
           <div className="text-[11px] text-slate-400 mt-2 space-y-0.5">
             <div>BESS: LG JF2 DCLINK 5.1 (23'-6" × 8'-5")</div>
