@@ -374,6 +374,8 @@ export const sanitizeLayoutEdits = (v: unknown): LayoutConstraints => {
   const e = v as Record<string, unknown>;
   const out: LayoutConstraints = {};
   if (e.yardAuthoring === 'manual') out.yardAuthoring = 'manual';
+  if (e.autoPlaceGravel === true) out.autoPlaceGravel = true;
+  if (e.autoPlacePads === true) out.autoPlacePads = true;
   if (e.placedGate && typeof e.placedGate === 'object' && !Array.isArray(e.placedGate)) {
     const g = e.placedGate as { x?: unknown; y?: unknown; width?: unknown; rotationDeg?: unknown };
     if (typeof g.x === 'number' && Number.isFinite(g.x) && typeof g.y === 'number' && Number.isFinite(g.y)) {
@@ -3932,6 +3934,10 @@ interface DesignState {
   setIslandAugEnd: (key: string, end: 'east' | 'west' | null) => string | null;
   adjustIslandBlocks: (islandN: number, step: 1 | -1) => string | null;
   setSurfacingMode: (mode: SurfacingMode) => void;
+  setAutoPlaceGravel: (on: boolean) => void;
+  setAutoPlacePads: (on: boolean) => void;
+  /** Clear manual authoring and run the full packer (old KMZ auto-layout). */
+  runAutoYardLayout: () => void;
   setDcRouting: (mode: DcRoutingMode) => void;
   // Per-block DC routing override (layout edit). mode null = clear the
   // override so the block follows the design-wide default again.
@@ -5737,6 +5743,52 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       : 'Set rock surfacing to between roads only'));
     set({ surfacingMode: mode });
     get().regenerate();
+  },
+
+  setAutoPlaceGravel: (on: boolean) => {
+    if (typeof on !== 'boolean') return;
+    const cur = get().layoutEdits.autoPlaceGravel === true;
+    const pads = get().layoutEdits.autoPlacePads === true;
+    // Pads need gravel holes — turning gravel off also clears pads.
+    if (on === cur && !(on === false && pads)) return;
+    get().pushHistory(snapOf(get(), on ? 'Enable auto place gravel' : 'Disable auto place gravel'));
+    const next = { ...get().layoutEdits };
+    if (on) next.autoPlaceGravel = true;
+    else {
+      delete next.autoPlaceGravel;
+      delete next.autoPlacePads;
+    }
+    set({ layoutEdits: next });
+    get().regenerate();
+  },
+
+  setAutoPlacePads: (on: boolean) => {
+    if (typeof on !== 'boolean') return;
+    const cur = get().layoutEdits.autoPlacePads === true;
+    if (on === cur) return;
+    get().pushHistory(snapOf(get(), on ? 'Enable auto place pads' : 'Disable auto place pads'));
+    const next = { ...get().layoutEdits };
+    if (on) {
+      next.autoPlacePads = true;
+      // Pads cut holes in gravel — turn gravel on with pads.
+      next.autoPlaceGravel = true;
+    } else {
+      delete next.autoPlacePads;
+    }
+    set({ layoutEdits: next });
+    get().regenerate();
+  },
+
+  runAutoYardLayout: () => {
+    const s = get();
+    if (!s.boundary) return;
+    get().pushHistory(snapOf(get(), 'Auto place yard (full layout)'));
+    const next = { ...s.layoutEdits };
+    delete next.yardAuthoring;
+    // Keep hand-placed roads/gate/equipment as constraints where the packer
+    // can consume them; clearing only the manual-authoring fence-only mode.
+    set({ layoutEdits: next, computing: true });
+    get().regenerate({ sync: true });
   },
 
   setDeadSpaceTrim: (on: boolean) => {

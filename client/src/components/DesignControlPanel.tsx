@@ -237,13 +237,16 @@ const TRACE_TAG_OPTIONS = ['bess', 'inverter', 'generator', 'conex', 'manhole', 
 
 function ReferenceAutoFill() {
   const drawing = useDesignStore(s => s.drawing);
+  const boundary = useDesignStore(s => s.boundary);
   const tracePlan = useDesignStore(s => s.tracePlan);
   const analyzeReferenceTrace = useDesignStore(s => s.analyzeReferenceTrace);
   const setTraceUnknownTag = useDesignStore(s => s.setTraceUnknownTag);
   const applyReferenceTraceWithProgress = useDesignStore(s => s.applyReferenceTraceWithProgress);
+  const runAutoYardLayout = useDesignStore(s => s.runAutoYardLayout);
   const setBusyOverlay = useDesignStore(s => s.setBusyOverlay);
   const cancelReferenceTrace = useDesignStore(s => s.cancelReferenceTrace);
   const [applyProgress, setApplyProgress] = useState<{ frac: number; label: string } | null>(null);
+  const [autoYardBusy, setAutoYardBusy] = useState(false);
   const lastRejection = useDesignStore(s => s.lastRejection);
   // Group selection lives in the store so the 3D ghost preview shows exactly
   // what Apply will commit (unchecking a group hides its ghosts too).
@@ -251,7 +254,46 @@ function ReferenceAutoFill() {
   const setTraceInclude = useDesignStore(s => s.setTraceInclude);
   const inclEquip = traceInclude.equipment;
   const inclRoads = traceInclude.roads;
-  if (!drawing || !drawing.layers.length) return null;
+
+  const runAutoYard = () => {
+    if (!boundary) {
+      toast.error('Load a site boundary first.');
+      return;
+    }
+    setAutoYardBusy(true);
+    setBusyOverlay({ label: 'Auto placing yard…', frac: 0.15 });
+    // Let the overlay paint before the synchronous packer runs.
+    requestAnimationFrame(() => {
+      try {
+        runAutoYardLayout();
+        toast.success('Yard laid out automatically — roads, blocks, and gravel.');
+      } finally {
+        setAutoYardBusy(false);
+        setBusyOverlay(null);
+      }
+    });
+  };
+
+  if (!drawing || !drawing.layers.length) {
+    return (
+      <div className="bg-slate-800 rounded p-2.5 space-y-2">
+        <div className="text-xs text-slate-400 leading-relaxed">
+          Auto place yard packs the site with the full layout engine. Scan drawing needs KMZ reference linework to turn drawn roads and equipment into a live design.
+        </div>
+        <button
+          type="button"
+          disabled={!boundary || autoYardBusy}
+          onClick={runAutoYard}
+          className="w-full text-[11px] py-1.5 rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white font-medium"
+        >
+          {autoYardBusy ? 'Placing…' : 'Auto place yard'}
+        </button>
+        <div className="text-[10px] text-slate-500">
+          Scan drawing is unavailable until the KMZ includes reference drawing layers.
+        </div>
+      </div>
+    );
+  }
 
   const equipCount = tracePlan
     ? tracePlan.items.length + tracePlan.unknowns.filter(u => u.tag !== 'road' && u.tag !== 'ignore').length
@@ -261,23 +303,40 @@ function ReferenceAutoFill() {
     : 0;
 
   return (
-    <div className="mt-2 bg-slate-800 rounded p-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium text-slate-200">Auto-fill from drawing</span>
+    <div className="mt-2 bg-slate-800 rounded p-2.5 space-y-2">
+      <div className="flex flex-col gap-1.5">
+        <button
+          type="button"
+          disabled={!boundary || autoYardBusy || !!applyProgress}
+          onClick={runAutoYard}
+          className="w-full text-[11px] py-1.5 rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white font-medium"
+        >
+          {autoYardBusy ? 'Placing…' : 'Auto place yard'}
+        </button>
+        <div className="text-[10px] text-slate-500">
+          Full automatic layout — blocks, roads, gravel, and cables (clears bare manual authoring).
+        </div>
+      </div>
+      <div className="border-t border-slate-700 pt-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium text-slate-200">Auto-fill from drawing</span>
+          {!tracePlan && (
+            <button
+              type="button"
+              disabled={autoYardBusy}
+              onClick={() => { if (!analyzeReferenceTrace()) toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Nothing to auto-fill.')); }}
+              className="text-[10px] px-2 py-1 rounded bg-cyan-700 hover:bg-cyan-600 text-white"
+            >
+              Scan drawing
+            </button>
+          )}
+        </div>
         {!tracePlan && (
-          <button
-            onClick={() => { if (!analyzeReferenceTrace()) toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Nothing to auto-fill.')); }}
-            className="text-[10px] px-2 py-1 rounded bg-cyan-700 hover:bg-cyan-600 text-white"
-          >
-            Scan drawing
-          </button>
+          <div className="text-[10px] text-slate-500 mt-1">
+            Turn the drawn roads and equipment outlines into a live design — everything lands exactly where the customer drew it.
+          </div>
         )}
       </div>
-      {!tracePlan && (
-        <div className="text-[10px] text-slate-500 mt-1">
-          Turn the drawn roads and equipment outlines into a live design — everything lands exactly where the customer drew it.
-        </div>
-      )}
       {tracePlan && (
         <div className="mt-2 flex flex-col gap-2">
           <label className="flex items-center gap-1.5 text-[11px] text-slate-300">
@@ -782,6 +841,7 @@ const PANEL_SECTIONS = [
   { id: 'site', title: 'Site Boundary (KMZ)' },
   { id: 'titleblock', title: 'Project Info' },
   { id: 'place', title: 'Manual Placement' },
+  { id: 'autoscan', title: 'Auto Scan' },
   { id: 'target', title: 'Settings' },
   { id: 'exports', title: 'Exports' },
 ] as const;
@@ -833,8 +893,7 @@ function PanelSection({ id, title, discipline, children }: {
 }) {
   const nav = useContext(PanelNavContext);
   const active = nav?.activeId === id;
-  // Manual Placement fills the pane so Auto-fill sits on the bottom edge
-  // when the notes above it are short.
+  // Manual Placement fills the pane when it needs a pinned footer.
   const pinBottom = id === 'place';
   return (
     <section
@@ -3226,6 +3285,10 @@ export default function DesignControlPanel() {
   const cancelManualRotate = useDesignStore(s => s.cancelManualRotate);
   const manualRoadWidth = useDesignStore(s => s.manualRoadWidth);
   const setManualRoadWidth = useDesignStore(s => s.setManualRoadWidth);
+  const autoPlaceGravel = useDesignStore(s => s.layoutEdits.autoPlaceGravel === true);
+  const autoPlacePads = useDesignStore(s => s.layoutEdits.autoPlacePads === true);
+  const setAutoPlaceGravel = useDesignStore(s => s.setAutoPlaceGravel);
+  const setAutoPlacePads = useDesignStore(s => s.setAutoPlacePads);
   const manualSnapFt = useDesignStore(s => s.manualSnapFt);
   const setManualSnapFt = useDesignStore(s => s.setManualSnapFt);
   const manualPcsBatteryCount = useDesignStore(s => s.manualPcsBatteryCount);
@@ -3363,7 +3426,6 @@ export default function DesignControlPanel() {
           )}
           {error && <div className="text-xs text-red-400 mt-2">{error}</div>}
           <ImportedDrawingLayerList />
-          <ReferenceAutoFill />
           {boundaryPicker && (
             <div className="mt-3 bg-slate-800 border border-cyan-700 rounded p-3">
               <div className="text-xs font-medium text-cyan-200 mb-2">
@@ -4012,12 +4074,88 @@ export default function DesignControlPanel() {
                 </div>
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
+                    Ground Level
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPlacingSubstation(false);
+                        setManualPlaceItem(manualPlaceItem === 'road' ? null : 'road');
+                      }}
+                      aria-pressed={manualPlaceItem === 'road'}
+                      className={`flex items-center gap-2 text-left text-xs px-2.5 py-2 rounded border font-medium transition-colors ${
+                        manualPlaceItem === 'road'
+                          ? 'bg-cyan-700/80 border-cyan-500 text-cyan-50'
+                          : 'bg-slate-900/60 border-slate-600 text-slate-200 hover:border-slate-500 hover:bg-slate-700/60'
+                      }`}
+                    >
+                      {PLACEMENT_BUTTON_ICONS.road && (
+                        <svg
+                          viewBox={`0 0 ${PLACEMENT_BUTTON_ICON_SIZE} ${PLACEMENT_BUTTON_ICON_SIZE}`}
+                          className="w-8 h-8 shrink-0"
+                          aria-hidden
+                        >
+                          <path
+                            d={PLACEMENT_BUTTON_ICONS.road}
+                            fill="currentColor"
+                            fillRule="evenodd"
+                            stroke="currentColor"
+                            strokeWidth={1.25}
+                          />
+                        </svg>
+                      )}
+                      Road
+                    </button>
+                    {manualPlaceItem === 'road' && (
+                      <div className="flex items-center gap-1 pl-1">
+                        <span className="text-[10px] text-slate-400 mr-1">Width</span>
+                        {([24, 30, 36] as const).map(w => (
+                          <button
+                            key={w}
+                            type="button"
+                            onClick={() => setManualRoadWidth(w)}
+                            className={`px-2 py-0.5 text-[10px] font-semibold border border-slate-600 ${
+                              manualRoadWidth === w
+                                ? 'bg-amber-600 text-white'
+                                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                            }`}
+                          >
+                            {w}&apos;
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <label className="flex items-center gap-2 text-xs text-slate-300 px-1 py-1">
+                      <input
+                        type="checkbox"
+                        checked={autoPlaceGravel || autoPlacePads}
+                        onChange={e => setAutoPlaceGravel(e.target.checked)}
+                        className="accent-cyan-500"
+                      />
+                      Auto place gravel
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-slate-300 px-1 py-1">
+                      <input
+                        type="checkbox"
+                        checked={autoPlacePads}
+                        onChange={e => setAutoPlacePads(e.target.checked)}
+                        className="accent-cyan-500"
+                      />
+                      Auto place pads
+                    </label>
+                    <div className="text-[10px] text-slate-500 px-1">
+                      Gravel uses Settings rock coverage and depth. Pads cut equipment footprints out of gravel and show concrete under aux gear.
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
                     Place
                   </div>
                   <div className="grid grid-cols-1 gap-2">
                     {(
                       [
-                        { id: 'road', label: 'Road' },
                         { id: 'gate', label: 'Gate' },
                         { id: 'auxTransformer', label: 'Aux transformer' },
                         { id: 'pcs', label: 'PCS' },
@@ -4036,7 +4174,7 @@ export default function DesignControlPanel() {
                         : opt.id === 'commsCabinet' ? (pe ? 'commsCabinetPe' : 'commsCabinetGe')
                         : opt.id;
                       const icon = PLACEMENT_BUTTON_ICONS[iconKey];
-                      const placeholder = opt.id === 'auxSwitchPanel' || opt.id === 'road' || opt.id === 'gate';
+                      const placeholder = opt.id === 'auxSwitchPanel' || opt.id === 'gate';
                       return (
                         <div key={opt.id} className="flex flex-col gap-1.5">
                           <button
@@ -4149,25 +4287,6 @@ export default function DesignControlPanel() {
                       </button>
                     )}
                   </div>
-                  {manualPlaceItem === 'road' && (
-                    <div className="flex items-center gap-1 mt-2">
-                      <span className="text-[10px] text-slate-400 mr-1">Width</span>
-                      {([24, 30, 36] as const).map(w => (
-                        <button
-                          key={w}
-                          type="button"
-                          onClick={() => setManualRoadWidth(w)}
-                          className={`px-2 py-0.5 text-[10px] font-semibold border border-slate-600 ${
-                            manualRoadWidth === w
-                              ? 'bg-amber-600 text-white'
-                              : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                          }`}
-                        >
-                          {w}&apos;
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </>
             ) : (
@@ -4852,9 +4971,10 @@ export default function DesignControlPanel() {
             </div>
           )}
           </div>
-          <div className="mt-auto pt-4 pb-4">
-            <ReferenceAutoFill />
-          </div>
+        </PanelSection>
+
+        <PanelSection id="autoscan" title="Auto Scan" discipline="Layout">
+          <ReferenceAutoFill />
         </PanelSection>
 
         {/* Settings (equipment config + former Target Rating) */}

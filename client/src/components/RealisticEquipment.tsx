@@ -442,6 +442,13 @@ function ConcretePads({ items }: { items: PlacedEquipment[] }) {
   );
 }
 
+/** Aux concrete pads under PAD_KINDS equipment (display-only). */
+export function AuxConcretePads({ equipment }: { equipment: PlacedEquipment[] }) {
+  const items = equipment.filter(eq => PAD_KINDS.has(eq.kind));
+  if (items.length === 0) return null;
+  return <ConcretePads items={items} />;
+}
+
 export default function RealisticEquipment({ equipment, ghost }: { equipment: PlacedEquipment[]; ghost?: boolean }) {
   const feeders = useDesignStore(s => s.feeders);
   const showFeederColors = useDesignStore(s => s.showFeederColors);
@@ -496,9 +503,7 @@ export default function RealisticEquipment({ equipment, ghost }: { equipment: Pl
           bodyColor={kind === 'inverter' && pcsUrl === GE_PCS_MODEL_URL ? gePcsColor : null}
         />
       ))}
-      {!ghost && (
-        <ConcretePads items={equipment.filter(eq => PAD_KINDS.has(eq.kind))} />
-      )}
+      {!ghost && <AuxConcretePads equipment={equipment} />}
     </group>
   );
 }

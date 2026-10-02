@@ -271,6 +271,11 @@ export interface LayoutConstraints {
   // later step fills the yard. Absent on saved projects, which keep the
   // automatic layout.
   yardAuthoring?: 'manual';
+  // Manual Ground Level: run computeSurfacing on the manual yard (gravel).
+  autoPlaceGravel?: boolean;
+  // Manual Ground Level: cut equipment pads out of gravel + show aux concrete
+  // slabs in 3D. Implies gravel when enabled.
+  autoPlacePads?: boolean;
   // One entrance gate dropped on a manual yard. Absent means no gate.
   placedGate?: { x: number; y: number; width?: number; rotationDeg?: number };
   rowMoves?: Record<number, { dx: number; dy: number }>;
@@ -1649,7 +1654,8 @@ export function isManualAuthoringYard(constraints?: LayoutConstraints | null): b
 /**
  * Manual-authoring site: hand-placed equipment, custom road centerlines
  * (filleted into roadNetwork via the compact builder), and a placed gate.
- * No packer, cables, or surfacing, and drops do not change achieved MW.
+ * No packer or cables. Optional Ground Level gravel/pads via computeSurfacing.
+ * Drops do not change achieved MW.
  */
 export function manualAuthoringDesign(
   boundary: SiteBoundary,
@@ -1657,6 +1663,7 @@ export function manualAuthoringDesign(
   targetMWh: number,
   fencePlacement?: FencePlacementMode,
   constraints?: LayoutConstraints | null,
+  options?: Pick<LayoutOptions, 'surfacingMode' | 'surfacingDepthIn' | 'deadSpaceTrim'> | null,
 ): SiteDesign {
   const fence = fencePolygonFor(boundary.polygon, fencePlacement);
   const equipment: PlacedEquipment[] = [];
@@ -1749,6 +1756,22 @@ export function manualAuthoringDesign(
   const gate = g && Number.isFinite(g.x) && Number.isFinite(g.y)
     ? { x: g.x, y: g.y, width: g.width && g.width > 0 ? g.width : 24, rotation: ((g.rotationDeg ?? 0) * Math.PI) / 180 }
     : null;
+  // Ground Level gravel (and pads checkbox, which needs gravel cutouts).
+  const wantGravel = constraints?.autoPlaceGravel === true || constraints?.autoPlacePads === true;
+  const surfacing = wantGravel
+    ? computeSurfacing(
+        fence,
+        roadNetwork,
+        roads,
+        equipment,
+        [],
+        options?.surfacingMode ?? 'between-roads',
+        options?.surfacingDepthIn ?? SURFACING_DEPTH_IN_DEFAULT,
+        [],
+        options?.deadSpaceTrim === true,
+        false,
+      )
+    : null;
   return {
     boundary,
     fence,
@@ -1762,7 +1785,7 @@ export function manualAuthoringDesign(
     gate,
     cables: [],
     trench: null,
-    surfacing: null,
+    surfacing,
     blockRows: [],
     rowEditGeom: null,
     blocksPlaced: 0,
@@ -1783,7 +1806,7 @@ export function generateSiteDesign(
   options: LayoutOptions = { hotClimate: true }
 ): SiteDesign {
   if (isManualAuthoringYard(options.constraints)) {
-    return manualAuthoringDesign(boundary, targetMW, targetMWh, options.fencePlacement, options.constraints);
+    return manualAuthoringDesign(boundary, targetMW, targetMWh, options.fencePlacement, options.constraints, options);
   }
   // The island-augmentation rescue (below) may shift a row so an island's
   // aug units fit at its end. That shift becomes part of the AUTO baseline:

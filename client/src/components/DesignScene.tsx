@@ -10,7 +10,7 @@ import { useDesignStore } from '../lib/stores/useDesignStore';
 import { SiteDesign, PlacedEquipment, RoadEdgeSeg, BlockRowInfo, Pt, SubstationTakeoff, takeoffVector, CableRun } from '../lib/nextera/types';
 import { effectiveTakeoffs } from '../lib/nextera/substationTakeoffs';
 import SheetAnnotations2D from './SheetAnnotations2D';
-import RealisticEquipment, { REALISTIC_KINDS } from './RealisticEquipment';
+import RealisticEquipment, { REALISTIC_KINDS, AuxConcretePads } from './RealisticEquipment';
 import { computeBlockSpacingDims, expandDim, DIM_TEXT_H } from '../lib/nextera/dimensions';
 import { pointInPolygon, rectInsidePolygon, type DrawingLayer } from '../lib/nextera/kmz';
 import { generateCableRouting } from '../lib/nextera/cableRouting';
@@ -5340,6 +5340,7 @@ function DesignContent({ design, editMode, realistic, is3D, cad, onDraggingChang
     setRealisticDetailApplied(!(realistic && realisticFarEff));
   }, [realistic, realisticFarEff, setRealisticDetailApplied]);
   const highlightIds = useDesignStore(s => s.highlightIds);
+  const autoPlacePads = useDesignStore(s => s.layoutEdits.autoPlacePads === true);
   const placingSubstation = useDesignStore(s => s.placingSubstation);
   const placeSubstation = useDesignStore(s => s.placeSubstation);
   // Multi-area take-off placement shares the ground plane as its click target.
@@ -5861,6 +5862,17 @@ function DesignContent({ design, editMode, realistic, is3D, cad, onDraggingChang
       {/* Realistic models render in CAD view too (the Realistic button
           promises "3D and CAD"): GLBs sit on top of the drawing linework.
           Simple boxes never render in CAD — plain CAD stays pure linework. */}
+      {/* Ground Level pads without Realistic models — same aux slabs as
+          RealisticEquipment renders when models are on. */}
+      {!cad && !groundingXrayActive && autoPlacePads && !realistic && (
+        <AuxConcretePads
+          equipment={
+            highlightIds.length
+              ? builtEquipment.filter(eq => !highlightIds.includes(eq.id))
+              : builtEquipment
+          }
+        />
+      )}
       {realistic && !groundingXrayActive && (
         <Suspense fallback={null}>
           <RealisticLodSensor design={design} far={realisticFar} onChange={setRealisticFar} />
