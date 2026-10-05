@@ -66,7 +66,7 @@ import { showcaseFrameCount, showcaseFrameMs } from '../lib/tourShowcaseTimeline
 // Signed area of a plan polygon (positive = CCW)
 import { partitionSceneEquipment } from '../lib/nextera/sceneEquipment';
 import { PROPERTY_LINE_HEX, PROPERTY_LINE_DIM_HEX, drawingLayerColor, showSeparateFence } from '../lib/nextera/propertyLineColor';
-import { snapToGrid, snapToAugLattice, composeRowMove, validateRowShift, validateAisleShift, validateEquipmentShift, laydownFitReason, futureAugFitReason, filletPolylineStrip, drawnRoadLegalRegion, evaluateDrawnRoad, roadNetworkIslandPolys, DRAWN_ROAD_MIN_NEW_SQFT, roadRegionFromNetwork, roadSpanCutPoly, roadPieceAt, pointOnRoad, pointOnRoadFast, ringSpanCutAt, roadPathBetween, roadCorridorCutPoly, roadRunAt, type RoadPick, tracedRoadRendersUnpaved, tracedRoadFingerprint, tracedRoadFingerprintMatch, placedIslandPlanDims, placedIslandFootprints, composePlacedIsland, previewPlacedIslandDrop, placedEquipmentFootprints, composePlacedEquipment, previewPlacedEquipmentDrop, isManualEquipmentId, isManualEquipmentSpec, MANUAL_EQUIPMENT_TYPES, MANUAL_EQUIPMENT_CATALOG, type ManualEquipmentType, type PlacedIslandSpec, snapPlacementCenter, PLACEMENT_SNAP_STEPS_FT, PLACEMENT_SNAP_DEFAULT_FT, PLACEMENT_NUDGE_FT, ISLAND_PCS_PER_SIDE, MIN_LAYDOWN_EDGE_FT, GATE_PIN_SNAP_FT, equipmentForRouting, composeManualPcsBatteries } from '../lib/nextera/layoutEngine';
+import { snapToGrid, snapToAugLattice, composeRowMove, validateRowShift, validateAisleShift, validateEquipmentShift, laydownFitReason, futureAugFitReason, filletPolylineStrip, drawnRoadLegalRegion, evaluateDrawnRoad, roadNetworkIslandPolys, DRAWN_ROAD_MIN_NEW_SQFT, roadRegionFromNetwork, roadSpanCutPoly, roadPieceAt, pointOnRoad, pointOnRoadFast, ringSpanCutAt, roadPathBetween, roadCorridorCutPoly, roadRunAt, type RoadPick, tracedRoadRendersUnpaved, tracedRoadFingerprint, tracedRoadFingerprintMatch, placedIslandPlanDims, placedIslandFootprints, composePlacedIsland, previewPlacedIslandDrop, placedEquipmentFootprints, composePlacedEquipment, previewPlacedEquipmentDrop, isManualEquipmentId, isManualEquipmentSpec, MANUAL_EQUIPMENT_TYPES, MANUAL_EQUIPMENT_CATALOG, type ManualEquipmentType, type PlacedIslandSpec, snapPlacementCenter, PLACEMENT_SNAP_STEPS_FT, PLACEMENT_SNAP_DEFAULT_FT, PLACEMENT_NUDGE_FT, ISLAND_PCS_PER_SIDE, MIN_LAYDOWN_EDGE_FT, GATE_PIN_SNAP_FT, equipmentForRouting, composeManualPcsBatteries, isManualPlacementActive } from '../lib/nextera/layoutEngine';
 function polySignedArea(ps: { x: number; y: number }[]): number {
   return ps.reduce((s, p, i) => {
     const q = ps[(i + 1) % ps.length];
@@ -397,24 +397,24 @@ function RoadCalloutLabels({ road }: { road: NonNullable<SiteDesign['roadNetwork
 // the band reads as “what will generate,” not the thing being drawn.
 function RoadDraftBand({ pts, width = 24, ghost = false }: { pts: Pt[]; width?: number; ghost?: boolean }) {
   const design = useDesignStore(s => s.design);
-  const manualYard = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const placementActive = useDesignStore(s => isManualPlacementActive(s.layoutEdits));
   // Legal-region cache: fence + equipment only change on regenerate, so the
   // (relatively expensive) inset + pad-difference booleans run once per
   // mouse move.
   const legalRegion = useMemo(() => {
     if (!design) return [];
-    // Manual Placement: legal outer = property line + flush (bandInset 0),
-    // matching manualAuthoringDesign → buildRoads. Compact non-manual:
-    // bare pads (clearance 0). Otherwise default fence + frontToFence inset.
+    // Manual Placement / traced edit: legal outer = property line + flush
+    // (bandInset 0), matching manualAuthoringDesign → buildRoads. Compact
+    // non-manual: bare pads (clearance 0). Otherwise default fence inset.
     try {
-      if (manualYard) {
+      if (placementActive) {
         const lot = design.boundary?.polygon?.length ? design.boundary.polygon : design.fence;
         return drawnRoadLegalRegion(lot, design.equipment, 0, 0);
       }
       return drawnRoadLegalRegion(
         design.fence, design.equipment, undefined, design.compact ? 0 : undefined);
     } catch { return []; }
-  }, [design, manualYard]);
+  }, [design, placementActive]);
   // Non-road yard polygons (sampled from the rendered network) — lets the
   // preview run the commit's nothing-to-add overlap too.
   const islandPolys = useMemo(() => {
@@ -6835,9 +6835,9 @@ function TraceOverlay() {
 
 /** Black site grid for Manual Placement. Lines sit on the same spacing the drop snaps to. */
 function ManualSiteGrid() {
-  const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const manual = useDesignStore(s => isManualPlacementActive(s.layoutEdits));
   const snapFt = useDesignStore(s => s.manualSnapFt);
-  const fence = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.fence : undefined));
+  const fence = useDesignStore(s => (isManualPlacementActive(s.layoutEdits) ? s.design?.fence : undefined));
   const geometry = useMemo(() => {
     if (!manual || snapFt <= 0 || !fence || fence.length < 3) return null;
     const xs = fence.map(p => p.x);
@@ -6912,7 +6912,7 @@ function paletteArm(id: string | null): PaletteArm | null {
  * catalog block or the site gate. Road uses ManualRoadDraw (polyline).
  */
 function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChange: (d: boolean) => void; onGroundDown: () => void; realistic: boolean }) {
-  const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const manual = useDesignStore(s => isManualPlacementActive(s.layoutEdits));
   const manualPlaceItem = useDesignStore(s => s.manualPlaceItem);
   const arm = useMemo(
     () => {
@@ -7111,7 +7111,7 @@ function PcsDrop({ onDraggingChange, onGroundDown, realistic }: { onDraggingChan
  * + vertex dots; RoadDraftBand is a light ghost of the strip that will generate.
  */
 function ManualRoadDraw({ onDraggingChange }: { onDraggingChange: (d: boolean) => void }) {
-  const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const manual = useDesignStore(s => isManualPlacementActive(s.layoutEdits));
   const armed = useDesignStore(s => s.manualPlaceItem === 'road');
   const selectArmed = useDesignStore(s => s.manualSelectTool);
   const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
@@ -7244,14 +7244,14 @@ const NO_SELECTION_IDS: string[] = [];
 
 /** Screenshot-style marquee: box only (no element clicks); auto-creates a named group. */
 function ManualSelectLayer({ onDraggingChange }: { onDraggingChange: (d: boolean) => void }) {
-  const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const manual = useDesignStore(s => isManualPlacementActive(s.layoutEdits));
   const armed = useDesignStore(s => s.manualSelectTool);
   const setManualSelectTool = useDesignStore(s => s.setManualSelectTool);
   const createManualGroup = useDesignStore(s => s.createManualGroup);
   const clearManualSelection = useDesignStore(s => s.clearManualSelection);
   const design = useDesignStore(s => s.design);
   const equipment = useDesignStore(s =>
-    s.layoutEdits.yardAuthoring === 'manual' ? (s.design?.equipment ?? NO_EQUIP) : NO_EQUIP);
+    isManualPlacementActive(s.layoutEdits) ? (s.design?.equipment ?? NO_EQUIP) : NO_EQUIP);
   const [box, setBox] = useState<{ start: Pt; cur: Pt } | null>(null);
   const { gl } = useThree();
 
@@ -7526,7 +7526,7 @@ function ManualRotateLayer({ onDraggingChange }: { onDraggingChange: (d: boolean
  * Roads are frozen unless the Road palette is armed. Select area and Road may be
  * armed together: equipment hits stay off for the marquee, road handles stay on. */
 function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d: boolean) => void; onMenu: (m: ItemMenu | null) => void }) {
-  const manual = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const manual = useDesignStore(s => isManualPlacementActive(s.layoutEdits));
   const selectArmed = useDesignStore(s => s.manualSelectTool);
   const roadArmed = useDesignStore(s => s.manualPlaceItem === 'road');
   const activeManualGroupId = useDesignStore(s => s.activeManualGroupId);
@@ -7534,15 +7534,15 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
   // Stable empty fallbacks — a fresh [] each snapshot causes infinite re-renders
   // (useSyncExternalStore getSnapshot must be referentially stable).
   const equipment = useDesignStore(s =>
-    s.layoutEdits.yardAuthoring === 'manual' ? (s.design?.equipment ?? NO_EQUIP) : NO_EQUIP);
+    isManualPlacementActive(s.layoutEdits) ? (s.design?.equipment ?? NO_EQUIP) : NO_EQUIP);
   // Hit targets come from stored customRoads (design.roads is empty when the
   // filleted roadNetwork is the render surface).
   const customRoads = useDesignStore(s =>
-    s.layoutEdits.yardAuthoring === 'manual'
+    isManualPlacementActive(s.layoutEdits)
       ? (s.layoutEdits.customRoads ?? NO_CUSTOM_ROADS)
       : NO_CUSTOM_ROADS);
   const selectionIds = useDesignStore(s =>
-    s.layoutEdits.yardAuthoring === 'manual' ? s.manualSelectionIds : NO_SELECTION_IDS);
+    isManualPlacementActive(s.layoutEdits) ? s.manualSelectionIds : NO_SELECTION_IDS);
   const roads = useMemo(() => customRoads.flatMap(r => {
     if (!r.pts || r.pts.length < 2) return [];
     const a = r.pts[0], b = r.pts[r.pts.length - 1];
@@ -7558,7 +7558,7 @@ function PlacedItemHandles({ onDraggingChange, onMenu }: { onDraggingChange: (d:
       rotation: Math.atan2(dy, dx),
     }];
   }), [customRoads]);
-  const gate = useDesignStore(s => (s.layoutEdits.yardAuthoring === 'manual' ? s.design?.gate ?? null : null));
+  const gate = useDesignStore(s => (isManualPlacementActive(s.layoutEdits) ? s.design?.gate ?? null : null));
   const moveManualPlacement = useDesignStore(s => s.moveManualPlacement);
   const moveManualSelection = useDesignStore(s => s.moveManualSelection);
   const removeManualSelection = useDesignStore(s => s.removeManualSelection);
@@ -8057,7 +8057,7 @@ export default function DesignScene() {
   const marketingStillsRequest = useDesignStore(s => s.marketingStillsRequest);
   const setRealisticModelsStore = setRealisticModels;
   const containerRef = useRef<HTMLDivElement>(null);
-  const manualYard = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
+  const manualYard = useDesignStore(s => isManualPlacementActive(s.layoutEdits));
   // The item menu mounts on pointerdown, before the browser fires contextmenu.
   // That menu covers the canvas, so the browser menu has to be cancelled here.
   useEffect(() => {

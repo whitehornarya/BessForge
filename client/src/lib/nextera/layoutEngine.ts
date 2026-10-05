@@ -276,6 +276,12 @@ export interface LayoutConstraints {
   // Manual Ground Level: cut equipment pads out of gravel + show aux concrete
   // slabs in 3D. Implies gravel when enabled.
   autoPlacePads?: boolean;
+  // Stepped Auto Scan / manual finish: PCS cable routing (DC/LVAC/fiber) runs
+  // only after Place PCS cables. Absent/false → no cables on regenerate.
+  autoCablesPlaced?: boolean;
+  // Stepped Auto Scan / manual finish: MV feeder routing runs only after
+  // Place feeders. Absent/false → feeders stay empty on regenerate.
+  autoFeedersPlaced?: boolean;
   // One entrance gate dropped on a manual yard. Absent means no gate.
   placedGate?: { x: number; y: number; width?: number; rotationDeg?: number };
   rowMoves?: Record<number, { dx: number; dy: number }>;
@@ -1663,7 +1669,7 @@ export function manualAuthoringDesign(
   targetMWh: number,
   fencePlacement?: FencePlacementMode,
   constraints?: LayoutConstraints | null,
-  options?: Pick<LayoutOptions, 'surfacingMode' | 'surfacingDepthIn' | 'deadSpaceTrim'> | null,
+  options?: Pick<LayoutOptions, 'surfacingMode' | 'surfacingDepthIn' | 'deadSpaceTrim' | 'dcRouting'> | null,
 ): SiteDesign {
   const fence = fencePolygonFor(boundary.polygon, fencePlacement);
   const equipment: PlacedEquipment[] = [];
@@ -1772,6 +1778,23 @@ export function manualAuthoringDesign(
         false,
       )
     : null;
+  // Stepped Place PCS cables: only route when the drafter has opted in
+  // (classic packer yards still route automatically via wantAutoCables).
+  const wantCables = wantAutoCables(constraints) && equipment.some(e => e.kind === 'inverter');
+  const routing = wantCables
+    ? generateCableRouting(
+        equipmentForRouting(equipment),
+        [],
+        fence,
+        constraints?.trenchX ?? null,
+        [],
+        null,
+        options?.dcRouting ?? 'direct',
+        constraints?.dcRoutingOverrides ?? null,
+        null,
+      )
+    : null;
+  if (routing) warnings.push(...routing.warnings);
   return {
     boundary,
     fence,
@@ -1783,8 +1806,9 @@ export function manualAuthoringDesign(
     aisles: [],
     roadNetwork,
     gate,
-    cables: [],
-    trench: null,
+    cables: routing?.cables ?? [],
+    trench: routing?.trench ?? null,
+    ...(routing?.corridorTrenches ? { corridorTrenches: routing.corridorTrenches } : {}),
     surfacing,
     blockRows: [],
     rowEditGeom: null,
@@ -2143,7 +2167,10 @@ function generateSiteDesignCore(
   // shortfall or trigger the NFPA-relaxed / compact fallbacks. Rejected or
   // dormant removals keep the auto layout, apply nothing, and therefore do
   // not lower the floor (buildLayout reports what it actually applied).
-  const floorOf = (d: SiteDesign) => Math.max(1,
+  // Traced yards need floor 0: with blocksRequired=0, Math.max(1,…) made
+  // auto mode keep generated access roads under reference-wins equipment.
+  const floorOf = (d: SiteDesign) => Math.max(
+    hasTracedYard ? 0 : 1,
     blocksRequired - (d.islandBlockRemovalApplied ?? 0) - (d.blockRemovalApplied ?? 0));
 
   // NFPA 855 (sheet 10 key note 6): BESS containers must be >= 100 ft from the
@@ -4526,13 +4553,17 @@ function buildLayout(
   );
   warnings.push(...roadWarnings);
 
-  // Cable routing per Sheets 3-4 (DC / MV / LVAC / fiber + trench band)
-  const routing = generateCableRouting(
-    equipmentForRouting(equipment), augmentationZones, fence, options.constraints?.trenchX ?? null,
-    reservedZones, islands, options.dcRouting ?? 'direct',
-    options.constraints?.dcRoutingOverrides ?? null,
-    options.exclusionZones ?? null
-  );
+  // Cable routing per Sheets 3-4 (DC / MV / LVAC / fiber + trench band).
+  // Stepped Auto Scan / manual yards: deferred until Place PCS cables.
+  const wantCables = wantAutoCables(options.constraints);
+  const routing = wantCables
+    ? generateCableRouting(
+        equipmentForRouting(equipment), augmentationZones, fence, options.constraints?.trenchX ?? null,
+        reservedZones, islands, options.dcRouting ?? 'direct',
+        options.constraints?.dcRoutingOverrides ?? null,
+        options.exclusionZones ?? null
+      )
+    : { cables: [], trench: null as SiteDesign['trench'], corridorTrenches: undefined as SiteDesign['corridorTrenches'], warnings: [] as string[] };
   warnings.push(...routing.warnings);
 
   // Crushed-rock yard surfacing regions + quantities (boolean difference from
@@ -9496,6 +9527,38 @@ export function isTracedBessYard(constraints?: LayoutConstraints | null): boolea
   return (constraints?.placedEquipment ?? []).some(
     s => !isManualEquipmentSpec(s) && s.source === 'trace' &&
       (s.kind === 'inverter' || s.kind === 'bess'));
+}
+
+/**
+ * Manual Placement chrome + scene tools: bare manual yards, KMZ-traced PCS/BESS
+ * yards, roads-only traced fills, and any hand-placed equipment. Keeps Place
+ * tools after incomplete Scan Apply without forcing yardAuthoring.
+ */
+export function isManualPlacementActive(constraints?: LayoutConstraints | null): boolean {
+  if (isManualAuthoringYard(constraints) || isTracedBessYard(constraints)) return true;
+  if ((constraints?.placedEquipment ?? []).length > 0) return true;
+  if ((constraints?.customRoads ?? []).some(r => r.traced === true)) return true;
+  return false;
+}
+
+/** Yards that defer cables/feeders until Place PCS cables / Place feeders. */
+export function isSteppedCableYard(constraints?: LayoutConstraints | null): boolean {
+  if (!constraints) return false;
+  if (isManualAuthoringYard(constraints) || isTracedBessYard(constraints)) return true;
+  if ((constraints.customRoads ?? []).some(r => r.traced === true)) return true;
+  if ((constraints.placedEquipment ?? []).some(
+    p => !isManualEquipmentSpec(p) && (p as { source?: string }).source === 'trace')) return true;
+  return false;
+}
+
+export function wantAutoCables(constraints?: LayoutConstraints | null): boolean {
+  if (!isSteppedCableYard(constraints)) return true;
+  return constraints?.autoCablesPlaced === true;
+}
+
+export function wantAutoFeeders(constraints?: LayoutConstraints | null): boolean {
+  if (!isSteppedCableYard(constraints)) return true;
+  return constraints?.autoFeedersPlaced === true;
 }
 /**
  * One manual spec composed into a real PlacedEquipment. `commsSeq` numbers the

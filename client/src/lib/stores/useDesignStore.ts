@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { Pt, SiteBoundary, SiteDesign, SiteArea, SiteAreaEdits, SubstationTakeoff, TakeoffDirection, TAKEOFF_DIRECTIONS, RoadCut } from '../nextera/types';
-import { CLEARANCES, CONFIGURATIONS, DEFAULT_CONFIGURATION_ID, DEFAULT_CONTAINERS_PER_PCS, LEGACY_CONTAINERS_PER_PCS, LG_JF2, getConfiguration, specForKind } from '../nextera/catalog';
+import { CLEARANCES, CONFIGURATIONS, DEFAULT_CONFIGURATION_ID, DEFAULT_CONTAINERS_PER_PCS, LEGACY_CONTAINERS_PER_PCS, LG_JF2, getConfiguration, getEffectiveConfiguration, specForKind } from '../nextera/catalog';
 import { analyzeReferenceDrawing, classifyTraceName, traceKindHeight, fitRectPose, roadStripsFromOutline, roadStripsFromOpenLines, isClosedPolylineRun, tracedApronKeepsPavement, type TracePlan, type TraceUnknown, type TraceEquipKind } from '../nextera/referenceTrace';
 
 // Tag choices for the scene bulk-tag tool: any traceable equipment kind, a
@@ -18,7 +18,7 @@ export type ManualRotateSession = {
   /** Live delta from start poses (degrees, CCW). */
   deltaDeg: number;
 };
-import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PAIR_INNER_GAP_FT, A3_GAP_FT, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, composeManualPcsBatteries, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
+import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, wantAutoFeeders, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, composeManualPcsBatteries, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
 
 // Re-export the traced-road fingerprint helpers at their historical home:
 // the tombstone flow was built here, and external callers (tests) import
@@ -376,6 +376,8 @@ export const sanitizeLayoutEdits = (v: unknown): LayoutConstraints => {
   if (e.yardAuthoring === 'manual') out.yardAuthoring = 'manual';
   if (e.autoPlaceGravel === true) out.autoPlaceGravel = true;
   if (e.autoPlacePads === true) out.autoPlacePads = true;
+  if (e.autoCablesPlaced === true) out.autoCablesPlaced = true;
+  if (e.autoFeedersPlaced === true) out.autoFeedersPlaced = true;
   if (e.placedGate && typeof e.placedGate === 'object' && !Array.isArray(e.placedGate)) {
     const g = e.placedGate as { x?: unknown; y?: unknown; width?: unknown; rotationDeg?: unknown };
     if (typeof g.x === 'number' && Number.isFinite(g.x) && typeof g.y === 'number' && Number.isFinite(g.y)) {
@@ -1852,16 +1854,18 @@ const bucketTracedRoadAdds = (
   return bucketRoads;
 };
 
-// A KMZ rectangle is evidence that an equipment item exists, not permission
-// to invent a second physical standard.  Keep every traced id/count and the
-// customer's PCS anchor, but compose each PCS + up-to-three BESS group with
-// the same QTY3 footprint, dimensions, clearances and orientation rules used
-// by placeMirroredPair.  This happens once, after per-area bucketing and before
-// the records are committed, so 3D/2D/CAD/export all receive one geometry.
+// Scan / KMZ auto-fill: drawing-pose authoritative for PCS and BESS centers.
+// Keep every traced id/count at immutable traceSourcePose, apply catalog
+// footprints + quarter-turn yaw, then canonicalize PCS 0↔180 (90↔270) from
+// which world side its containers sit — rectangle fit is mod-180 ambiguous
+// and wrong yaw flips which physical end is local body-left (DC). Slot
+// composition that relocated batteries is intentionally not applied. Door
+// facing (width axis) is derived later in the layout engine. Runs once after
+// per-area bucketing (and again on regenerate via normalizeTracedPlacedEquipment).
 export const normalizeTracedEquipmentAdds = (
   adds: TraceEquipAdd[],
   config: ReturnType<typeof getConfiguration>,
-  hotClimate: boolean,
+  _hotClimate: boolean,
 ): TraceEquipAdd[] => {
   const out = adds.map(a => {
     const traceSourcePose = a.traceSourcePose ?? {
@@ -1871,9 +1875,8 @@ export const normalizeTracedEquipmentAdds = (
       lengthFt: a.pose.lengthFt,
       widthFt: a.pose.widthFt,
     };
-    // Every climate projection starts from the immutable customer-drawing
-    // pose, never from the previously normalized 14 ft / 10 ft result. This
-    // makes 14 → 10 → 14 deterministic and prevents cumulative drift.
+    // Always restart from the customer-drawing pose so regenerate stays
+    // deterministic and never accumulates prior normalize drift.
     return {
       ...a,
       pose: {
@@ -1890,10 +1893,6 @@ export const normalizeTracedEquipmentAdds = (
     const q = Math.round((Number.isFinite(deg) ? deg : 0) / 90) * 90;
     return ((q % 360) + 360) % 360;
   };
-  // Catalog footprints and quarter-turn alignment apply in every equipment
-  // configuration. QTY3 additionally receives the mirrored-pair slot geometry
-  // below; other configurations retain their source grouping until their
-  // corresponding standard composer is available.
   for (const a of out) {
     if (a.kind === 'inverter') {
       a.pose.lengthFt = config.inverterDims.length;
@@ -1905,12 +1904,14 @@ export const normalizeTracedEquipmentAdds = (
       a.pose.rotationDeg = snap90(a.pose.rotationDeg);
     }
   }
-  const normalizeCohort = (
+
+  // Pair BESS → nearest PCS within built / aug / future cohorts, then fix
+  // PCS yaw only (do not move battery centers).
+  const canonicalizePcsYaw = (
     pcs: TraceEquipAdd[],
     bess: TraceEquipAdd[],
   ) => {
     if (!pcs.length || !bess.length) return;
-    const pcsClearance = hotClimate ? CLEARANCES.pcsHotClimate : CLEARANCES.pcsStandard;
     const byOwner = new Map<TraceEquipAdd, TraceEquipAdd[]>();
     const ownerCap = Math.max(1, Math.ceil(bess.length / pcs.length));
     const ownerLoad = new Map<TraceEquipAdd, number>(pcs.map(p => [p, 0]));
@@ -1938,143 +1939,21 @@ export const normalizeTracedEquipmentAdds = (
       (byOwner.get(pair.pcs) ??
         byOwner.set(pair.pcs, []).get(pair.pcs)!).push(pair.bess);
     }
-
-    // Legacy QTY4 follows the same two-row composer as placeBlock, anchored at
-    // the customer's PCS center and rotated into its quarter-turn local frame.
-    // Missing source containers stay missing; normalization never invents units.
-    if (config.containersPerBlock !== 3) {
-      const across = Math.ceil(config.containersPerBlock / 2);
-      const rowWidth =
-        across * LG_JF2.width + (across - 1) * CLEARANCES.sideToSide;
-      const containerDepth = 2 * LG_JF2.length + CLEARANCES.rearToRear;
-      for (const inverter of pcs) {
-        const owned = (byOwner.get(inverter) ?? [])
-          .slice(0, config.containersPerBlock);
-        const thetaDeg = snap90(inverter.pose.rotationDeg);
-        const theta = thetaDeg * Math.PI / 180;
-        inverter.pose.rotationDeg = thetaDeg;
-        const bottomY =
-          -(containerDepth + pcsClearance + config.inverterDims.width / 2);
-        const slots: { x: number; y: number }[] = [];
-        for (let row = 0;
-          row < 2 && slots.length < config.containersPerBlock;
-          row++) {
-          const y = bottomY + LG_JF2.length / 2 +
-            row * (LG_JF2.length + CLEARANCES.rearToRear);
-          for (let col = 0;
-            col < across && slots.length < config.containersPerBlock;
-            col++) {
-            slots.push({
-              x: -rowWidth / 2 + LG_JF2.width / 2 +
-                col * (LG_JF2.width + CLEARANCES.sideToSide),
-              y,
-            });
-          }
-        }
-        const local = (b: TraceEquipAdd) => {
-          const dx = b.traceSourcePose!.x - inverter.traceSourcePose!.x;
-          const dy = b.traceSourcePose!.y - inverter.traceSourcePose!.y;
-          return {
-            along: dx * Math.cos(theta) + dy * Math.sin(theta),
-            normal: -dx * Math.sin(theta) + dy * Math.cos(theta),
-          };
-        };
-        owned.sort((a, b) => {
-          const aa = local(a), bb = local(b);
-          return aa.normal - bb.normal || aa.along - bb.along ||
-            a.pose.cx - b.pose.cx || a.pose.cy - b.pose.cy;
-        });
-        for (let i = 0; i < owned.length; i++) {
-          const b = owned[i], slot = slots[i];
-          b.pose.cx = inverter.pose.cx +
-            slot.x * Math.cos(theta) - slot.y * Math.sin(theta);
-          b.pose.cy = inverter.pose.cy +
-            slot.x * Math.sin(theta) + slot.y * Math.cos(theta);
-          b.pose.rotationDeg = snap90(thetaDeg + 90);
-        }
-      }
-      return;
-    }
-
-    const dxPair = (PAIR_INNER_GAP_FT + LG_JF2.width) / 2;
-    const pairBias =
-      (LG_JF2.length - (2 * LG_JF2.width + PAIR_INNER_GAP_FT)) / 2;
     for (const inverter of pcs) {
       const owned = byOwner.get(inverter) ?? [];
       if (!owned.length) continue;
-      // Rectangle fit is mod-180° ambiguous. Keep the drawing long axis
-      // (0 vs 90) and pick 0 vs 180 (or 90 vs 270) from which WORLD side the
-      // containers sit — same rule as placeMirroredPair (north/west row
-      // unflipped, south/east row a true 180°). Overlay labels hide the
-      // wrong yaw; DC routing and the GLB do not.
+      // Keep the drawing long axis (0 vs 90); pick 0 vs 180 (or 90 vs 270)
+      // from which WORLD side the containers sit — same as placeMirroredPair.
       const axisDeg = snap90(inverter.pose.rotationDeg) % 180;
       const meanDx = owned.reduce((s, a) => s + (a.pose.cx - inverter.pose.cx), 0) / owned.length;
       const meanDy = owned.reduce((s, a) => s + (a.pose.cy - inverter.pose.cy), 0) / owned.length;
       const axisRad = axisDeg * Math.PI / 180;
       const axisLocalY = -meanDx * Math.sin(axisRad) + meanDy * Math.cos(axisRad);
-      const thetaDeg = ((axisLocalY >= 0 ? axisDeg + 180 : axisDeg) % 360 + 360) % 360;
-      inverter.pose.rotationDeg = thetaDeg;
-      const theta = thetaDeg * Math.PI / 180;
-      const c = Math.cos(theta), s = Math.sin(theta);
-      const local = (a: TraceEquipAdd) => {
-        const dx = a.pose.cx - inverter.pose.cx;
-        const dy = a.pose.cy - inverter.pose.cy;
-        return { x: dx * c + dy * s, y: -dx * s + dy * c };
-      };
-      const meanY =
-        owned.reduce((sum, a) => sum + local(a).y, 0) / owned.length;
-      // inward points from the PCS toward its containers in the PCS local frame.
-      const inward: 1 | -1 = meanY >= 0 ? 1 : -1;
-      const pairY = inward * (
-        config.inverterDims.width / 2 + pcsClearance + LG_JF2.length / 2);
-      const a3Y = inward * (
-        config.inverterDims.width / 2 + pcsClearance + LG_JF2.length +
-        A3_GAP_FT + LG_JF2.width / 2);
-      const slots = [
-        {
-          x: -inward * pairBias - inward * dxPair,
-          y: pairY,
-          rot: thetaDeg + 90,
-        },
-        {
-          x: -inward * pairBias + inward * dxPair,
-          y: pairY,
-          rot: thetaDeg + 90,
-        },
-        { x: 0, y: a3Y, rot: thetaDeg },
-      ];
-
-      // Preserve which traced rectangle represented A-3 when the customer
-      // drawing makes that clear (its long axis matches the PCS); the other two
-      // keep deterministic local-x order. Missing third containers simply leave
-      // A-3 absent — Task 903 never changes inventory counts.
-      const axisDiff = (a: TraceEquipAdd) => {
-        const d = Math.abs(snap90(a.pose.rotationDeg) - thetaDeg) % 180;
-        return Math.min(d, 180 - d);
-      };
-      let a3: TraceEquipAdd | undefined;
-      if (owned.length >= 3) {
-        a3 = owned.slice().sort((a, b) => axisDiff(a) - axisDiff(b))[0];
-      }
-      const pair = owned
-        .filter(a => a !== a3)
-        .sort((a, b) => local(a).x - local(b).x);
-      const ordered = [...pair.slice(0, 2), ...(a3 ? [a3] : [])];
-      ordered.slice(0, 3).forEach((a, i) => {
-        const slot = slots[i];
-        a.pose.cx = inverter.pose.cx + c * slot.x - s * slot.y;
-        a.pose.cy = inverter.pose.cy + s * slot.x + c * slot.y;
-        a.pose.rotationDeg = ((slot.rot % 360) + 360) % 360;
-        a.pose.lengthFt = LG_JF2.length;
-        a.pose.widthFt = LG_JF2.width;
-      });
+      inverter.pose.rotationDeg =
+        ((axisLocalY >= 0 ? axisDeg + 180 : axisDeg) % 360 + 360) % 360;
     }
   };
 
-  // Built, augmentation, and future groups each retain their own source
-  // association. Normalizing cohorts separately prevents a planned container
-  // from being attached to a built PCS while still applying the selected
-  // climate clearance to every visible traced group.
   const cohorts = new Map<string, { pcs: TraceEquipAdd[]; bess: TraceEquipAdd[] }>();
   for (const a of out) {
     if (a.kind !== 'inverter' && a.kind !== 'bess') continue;
@@ -2083,15 +1962,15 @@ export const normalizeTracedEquipmentAdds = (
       cohorts.set(key, { pcs: [], bess: [] }).get(key)!;
     (a.kind === 'inverter' ? cohort.pcs : cohort.bess).push(a);
   }
-  cohorts.forEach(cohort => normalizeCohort(cohort.pcs, cohort.bess));
+  cohorts.forEach(cohort => canonicalizePcsYaw(cohort.pcs, cohort.bess));
   return out;
 };
 
-// Re-project persisted KMZ equipment for the selected climate without
-// rewriting the saved trace records. IDs, labels, flags, manual equipment and
-// source associations stay byte-for-byte stable; only the generation-time
-// visible pose/footprint changes. Cable routing consumes that same normalized
-// visible pose; traceSourcePose remains normalization input only.
+// Re-apply catalog footprints / quarter-turns for persisted KMZ equipment
+// without rewriting saved trace records. IDs, labels, flags, manual gear and
+// centers stay drawing-authoritative; only generation-time size/yaw update.
+// Cable routing uses that same visible pose; traceSourcePose stays the
+// immutable normalize input.
 export const normalizeTracedPlacedEquipment = (
   specs: readonly PlacedEquipmentSpec[] | undefined,
   config: ReturnType<typeof getConfiguration>,
@@ -2154,7 +2033,8 @@ const buildTraceCommitPhases = (
   get: () => DesignState,
   equipAdds: TraceEquipAdd[],
   roadAdds: TraceRoadAdd[],
-  historyLabel: string
+  historyLabel: string,
+  opts?: { replaceCategory?: boolean }
 ): { frac: number; label: string; run: () => void }[] | false => {
   if (!equipAdds.length && !roadAdds.length) return false;
 
@@ -2168,9 +2048,11 @@ const buildTraceCommitPhases = (
   // erase the traced equipment (and vice versa) — the Equipment/Roads
   // inclusion toggles are independent, so stripping the excluded category
   // would silently delete a traced yard the drafter chose to keep.
+  // Stepped Place roads / Place equipment always replace that category
+  // (even for small drawings) so a second click does not duplicate.
   const isFullScanApply = equipAdds.length + roadAdds.length >= 20;
-  const stripEquip = isFullScanApply && equipAdds.length > 0;
-  const stripRoads = isFullScanApply && roadAdds.length > 0;
+  const stripEquip = (isFullScanApply || opts?.replaceCategory === true) && equipAdds.length > 0;
+  const stripRoads = (isFullScanApply || opts?.replaceCategory === true) && roadAdds.length > 0;
   const stripTraced = (prev: LayoutConstraints): LayoutConstraints => {
     if (!stripEquip && !stripRoads) return prev;
     const tracedIds = new Set(
@@ -2286,7 +2168,9 @@ const buildTraceCommitPhases = (
   }
   // Normalize independently inside every owning area. Equipment from adjacent
   // BESS footprints must never be associated into one physical block.
-  const traceConfig = getConfiguration(s0.configId);
+  // Use Settings containers-per-PCS so QTY3 mirrored-pair snap matches the
+  // packer path (catalog alone can still be QTY4 for some configs).
+  const traceConfig = getEffectiveConfiguration(s0.configId, s0.containersPerPcs);
   bucketEquip.forEach((list, key) => {
     bucketEquip.set(
       key,
@@ -2440,13 +2324,15 @@ const buildTraceCommitPhases = (
           bucketEquip.get(activeKey) ?? [],
           bucketRoads.get(activeKey) ?? []
         );
-        // Leaving manual authoring: Apply fills a normal traced yard (equipment
-        // / roads / feeders), not the fence-only bare site. Slice 2: leave the
-        // Manual Placement chrome and render the scan the way it works today.
-        delete nextEdits.yardAuthoring;
+        // Roads-only (or empty) Apply stays on the manual authoring path so the
+        // packer does not fill an incomplete yard. PCS/BESS leave manual mode
+        // for the full traced layout engine (cables deferred until Place cables).
+        const tracedBess = equipAdds.some(a => a.kind === 'inverter' || a.kind === 'bess');
+        if (tracedBess) delete nextEdits.yardAuthoring;
+        else nextEdits.yardAuthoring = 'manual';
         set({
           layoutEdits: nextEdits,
-          ...(roadAdds.length ? { roadMode: 'compact' as RoadMode } : {}),
+          ...((roadAdds.length || tracedBess) ? { roadMode: 'compact' as RoadMode } : {}),
           lastRejection: null,
         });
         // Other areas: fold each bucket onto that area's own edit record.
@@ -2463,8 +2349,9 @@ const buildTraceCommitPhases = (
             touchedOthers = true;
             const prev = cleaned;
             const extended = extendEdits(prev, adds, rds);
-            // Areas that receive traced content leave manual authoring too.
-            if (adds.length || rds.length) delete extended.yardAuthoring;
+            const areaBess = adds.some(x => x.kind === 'inverter' || x.kind === 'bess');
+            if (areaBess) delete extended.yardAuthoring;
+            else if (adds.length || rds.length) extended.yardAuthoring = 'manual';
             return { ...a, edits: { ...(a.edits ?? {}), layoutEdits: extended } };
           });
           if (touchedOthers) set({ siteAreas: nextAreas });
@@ -4224,11 +4111,19 @@ interface DesignState {
   cancelReferenceTrace: () => void;
   // Commit the plan (equipment and/or roads — per-group accept). Traced
   // geometry is reference-wins: clearance conflicts warn, never move or drop.
-  applyReferenceTrace: (opts?: { equipment?: boolean; roads?: boolean }) => boolean;
+  applyReferenceTrace: (opts?: { equipment?: boolean; roads?: boolean; keepTracePlan?: boolean; replaceCategory?: boolean }) => boolean;
   applyReferenceTraceWithProgress: (
     onProgress: (frac: number, label: string) => void,
-    opts?: { equipment?: boolean; roads?: boolean }
+    opts?: { equipment?: boolean; roads?: boolean; keepTracePlan?: boolean; replaceCategory?: boolean }
   ) => Promise<boolean>;
+  /** Stepped Auto Scan: commit traced roads only; keep plan for equipment. */
+  placeTraceRoads: () => Promise<boolean>;
+  /** Stepped Auto Scan: commit traced equipment only; keep plan for roads. */
+  placeTraceEquipment: () => Promise<boolean>;
+  /** Site-wide: route DC/LVAC/fiber (sets autoCablesPlaced). */
+  placePcsCables: () => string | null;
+  /** Site-wide: route MV feeders (sets autoFeedersPlaced). Needs substation/takeoff. */
+  placeFeeders: () => string | null;
   // Which plan groups the drafter has kept checked. Lives in the store so the
   // scene ghost preview and the apply commit read the SAME selection — an
   // unchecked group disappears from the preview exactly as it will from the
@@ -5429,13 +5324,14 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       try {
         const tracedFenceStandard = isTracedBessYard(ed.layoutEdits);
         const areaConfig = getConfiguration(configId);
+        const normalizeConfig = getEffectiveConfiguration(configId, s.containersPerPcs);
         const normalizedLayoutEdits: LayoutConstraints = {
           ...ed.layoutEdits,
           ...(ed.layoutEdits.placedEquipment
             ? {
                 placedEquipment: normalizeTracedPlacedEquipment(
                   ed.layoutEdits.placedEquipment,
-                  areaConfig,
+                  normalizeConfig,
                   s.hotClimate,
                 ),
               }
@@ -6783,13 +6679,14 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     // the default path is byte-identical to the pre-feature behavior.
     const boundary = boundaryForYardRotation(rawBoundary, yardRotationDeg);
     const config = getConfiguration(configId);
+    const normalizeConfig = getEffectiveConfiguration(configId, containersPerPcs);
     const normalizedLayoutEdits: LayoutConstraints = {
       ...layoutEdits,
       ...(layoutEdits.placedEquipment
         ? {
             placedEquipment: normalizeTracedPlacedEquipment(
               layoutEdits.placedEquipment,
-              config,
+              normalizeConfig,
               hotClimate,
             ),
           }
@@ -6828,7 +6725,20 @@ export const useDesignStore = create<DesignState>((set, get) => ({
                 'This change altered the inverter set, so your manual feeder groupings were reset — inverters were regrouped automatically. Undo (Ctrl+Z) restores them.',
             }
           : {}),
+        // Inverter/BESS set changed → cables/feeders are stale until the
+        // drafter clicks Place PCS cables / Place feeders again.
+        ...(!sameInverters && prev !== null
+          ? {
+              layoutEdits: (() => {
+                const next = { ...get().layoutEdits };
+                delete next.autoCablesPlaced;
+                delete next.autoFeedersPlaced;
+                return next;
+              })(),
+            }
+          : {}),
       });
+      // recomputeFeeders no-ops (clears) unless autoFeedersPlaced.
       get().recomputeFeeders();
       // Geometric re-validation of grading zones against the fence of the
       // design that was just applied. Zones were accepted against the fence
@@ -7628,6 +7538,26 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       set({ lastRejection: 'The reference drawing has no closed equipment- or road-sized shapes to auto-fill from.' });
       return false;
     }
+    const s = get();
+    const edits = s.layoutEdits;
+    // After Auto place yard the packer design is still live. Ghosts are raw
+    // KMZ poses — clear back to a bare fence so Scan preview is not judged
+    // against packer blocks/roads. Skip when already manual or already a
+    // traced fill (re-scan should keep the prior traced yard until Apply).
+    const bareForScanPreview =
+      !!s.boundary &&
+      edits.yardAuthoring !== 'manual' &&
+      !isTracedBessYard(edits);
+    if (bareForScanPreview) {
+      set({
+        tracePlan: plan,
+        traceInclude: { equipment: true, roads: true },
+        lastRejection: null,
+        layoutEdits: { ...edits, yardAuthoring: 'manual' },
+      });
+      get().regenerate({ sync: true });
+      return true;
+    }
     set({ tracePlan: plan, traceInclude: { equipment: true, roads: true }, lastRejection: null });
     return true;
   },
@@ -7641,26 +7571,33 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   traceInclude: { equipment: true, roads: true },
   setTraceInclude: (patch: Partial<{ equipment: boolean; roads: boolean }>): void =>
     set({ traceInclude: { ...get().traceInclude, ...patch } }),
-  applyReferenceTrace: (opts?: { equipment?: boolean; roads?: boolean }): boolean => {
+  applyReferenceTrace: (opts?: { equipment?: boolean; roads?: boolean; keepTracePlan?: boolean; replaceCategory?: boolean }): boolean => {
     const adds = buildTraceAdds(get().tracePlan, get().traceInclude, opts);
     if (adds === null) return false;
     if (!adds.equipAdds.length && !adds.roadAdds.length) {
-      set({ tracePlan: null, lastRejection: 'Nothing selected to auto-fill.' });
+      set({ lastRejection: 'Nothing selected to auto-fill.' });
+      if (!opts?.keepTracePlan) set({ tracePlan: null });
       return false;
     }
-    set({ tracePlan: null });
-    return commitTraceAdds(set, get, adds.equipAdds, adds.roadAdds, 'Auto-filled design from reference drawing');
+    if (!opts?.keepTracePlan) set({ tracePlan: null });
+    const phases = buildTraceCommitPhases(
+      set, get, adds.equipAdds, adds.roadAdds, 'Auto-filled design from reference drawing',
+      { replaceCategory: opts?.replaceCategory === true });
+    if (!phases) return false;
+    for (const p of phases) p.run();
+    return true;
   },
   // Same commit, run phase-by-phase with paint yields between phases so the
   // Apply button can show a determinate progress bar during a big auto-fill.
   applyReferenceTraceWithProgress: async (
     onProgress: (frac: number, label: string) => void,
-    opts?: { equipment?: boolean; roads?: boolean }
+    opts?: { equipment?: boolean; roads?: boolean; keepTracePlan?: boolean; replaceCategory?: boolean }
   ): Promise<boolean> => {
     const adds = buildTraceAdds(get().tracePlan, get().traceInclude, opts);
     if (adds === null) return false;
     if (!adds.equipAdds.length && !adds.roadAdds.length) {
-      set({ tracePlan: null, lastRejection: 'Nothing selected to auto-fill.' });
+      set({ lastRejection: 'Nothing selected to auto-fill.' });
+      if (!opts?.keepTracePlan) set({ tracePlan: null });
       return false;
     }
     // One apply at a time: the phased commit yields to the browser between
@@ -7672,10 +7609,11 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     }
     traceApplyBusy = true;
     try {
-      set({ tracePlan: null });
+      if (!opts?.keepTracePlan) set({ tracePlan: null });
       const capturedActive = get().activeAreaId;
       const phases = buildTraceCommitPhases(
-        set, get, adds.equipAdds, adds.roadAdds, 'Auto-filled design from reference drawing');
+        set, get, adds.equipAdds, adds.roadAdds, 'Auto-filled design from reference drawing',
+        { replaceCategory: opts?.replaceCategory === true });
       if (!phases) return false;
       const raf: (cb: () => void) => void =
         typeof requestAnimationFrame === 'function'
@@ -7701,6 +7639,50 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     } finally {
       traceApplyBusy = false;
     }
+  },
+
+  placeTraceRoads: async (): Promise<boolean> => {
+    const ok = await get().applyReferenceTraceWithProgress(
+      () => {},
+      { equipment: false, roads: true, keepTracePlan: true, replaceCategory: true });
+    return ok;
+  },
+
+  placeTraceEquipment: async (): Promise<boolean> => {
+    const ok = await get().applyReferenceTraceWithProgress(
+      () => {},
+      { equipment: true, roads: false, keepTracePlan: true, replaceCategory: true });
+    return ok;
+  },
+
+  placePcsCables: (): string | null => {
+    const s = get();
+    if (!s.design) return 'Generate or place equipment first.';
+    const hasPcs = s.design.equipment.some(e => e.kind === 'inverter');
+    if (!hasPcs) return 'Place at least one PCS before routing cables.';
+    get().pushHistory(snapOf(get(), 'Place PCS cables'));
+    const next = { ...s.layoutEdits, autoCablesPlaced: true as const };
+    set({ layoutEdits: next });
+    get().recomputeCables();
+    return null;
+  },
+
+  placeFeeders: (): string | null => {
+    const s = get();
+    if (!s.design) return 'Generate or place equipment first.';
+    const hasPcs = s.design.equipment.some(e => e.kind === 'inverter');
+    if (!hasPcs) return 'Place at least one PCS before routing feeders.';
+    const areas = s.siteAreas;
+    const resolved = areas.length >= 2 && s.activeAreaId
+      ? resolveTakeoffs(commitActiveAreaEdits(s)).get(s.activeAreaId)
+      : undefined;
+    const endpoint = resolved?.takeoff ?? s.substation;
+    if (!endpoint) return 'Place a substation (or aimed take-off) before routing feeders.';
+    get().pushHistory(snapOf(get(), 'Place feeders'));
+    const next = { ...s.layoutEdits, autoFeedersPlaced: true as const };
+    set({ layoutEdits: next });
+    get().recomputeFeeders();
+    return null;
   },
 
   // ---- scene bulk tagging (manual auto-fill fallback) ---------------------
@@ -10643,7 +10625,9 @@ export const useDesignStore = create<DesignState>((set, get) => ({
 
   recomputeFeeders: () => {
     const { design, substation, configId, feederAssignments, feederSizes, feederMaterial, maxPcsPerFeeder } = get();
-    if (get().layoutEdits.yardAuthoring === 'manual') {
+    // Stepped Place feeders: stay empty until autoFeedersPlaced on stepped yards.
+    // Classic packer yards (wantAutoFeeders) still route every regenerate.
+    if (!wantAutoFeeders(get().layoutEdits)) {
       const hiddenFeeders = get().hiddenFeeders.size ? new Set<number>() : get().hiddenFeeders;
       if (design) {
         design.auxFeeder = null;

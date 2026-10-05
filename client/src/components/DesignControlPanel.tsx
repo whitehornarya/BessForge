@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { toastCaught, friendlyRejectReason } from '../lib/notify';
 import { withBusyOverlay, paintThen, setBusyFrac } from '../lib/busy';
 import { useDesignStore } from '../lib/stores/useDesignStore';
-import { generateArrangements, ARRANGEMENTS, ArrangementStrategy, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, MANUAL_EQUIPMENT_CATALOG, isManualEquipmentSpec, isTracedBessYard, PLACEMENT_SNAP_DEFAULT_FT } from '../lib/nextera/layoutEngine';
+import { generateArrangements, ARRANGEMENTS, ArrangementStrategy, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, MANUAL_EQUIPMENT_CATALOG, isManualEquipmentSpec, isTracedBessYard, isManualPlacementActive, PLACEMENT_SNAP_DEFAULT_FT } from '../lib/nextera/layoutEngine';
 import { OptimizeResult, OptimizeCandidate } from '../lib/nextera/optimizer';
 import { optimizeInWorker, optimizeGradingInWorker, optimizeFeederRoutingInWorker, buildDxfInWorker, buildDxfPackageInWorker, cancelChannel, SupersededError } from '../lib/nextera/designWorkerClient';
 import { feederRoutingInputSignature } from '../lib/nextera/feederOptimizer';
@@ -222,10 +222,9 @@ function ImportedDrawingLayerList() {
   );
 }
 
-// Auto-fill the design from the imported reference drawing: classify shapes
-// by their KML placemark names, preview the plan as ghosts in the scene, tag
-// the unknowns, then commit everything as ONE undoable edit. Reference wins:
-// clearance conflicts warn but the geometry lands exactly as drawn.
+// Stepped Auto Scan: Scan drawing → Place roads → Place equipment → Place PCS
+// cables → Place feeders. Cables/feeders stay deferred until their buttons run
+// and work for full scan, incomplete KMZ + manual finish, and all-manual yards.
 const TRACE_KIND_LABELS: Record<string, string> = {
   bess: 'BESS container', inverter: 'PCS unit', generator: 'Generator',
   conex: 'CONEX box', manhole: 'Manhole',
@@ -235,66 +234,41 @@ const TRACE_KIND_LABELS: Record<string, string> = {
 };
 const TRACE_TAG_OPTIONS = ['bess', 'inverter', 'generator', 'conex', 'manhole', 'auxTransformer', 'auxSwitchPanel', 'fireControlPanel', 'commsCabinet', 'road', 'ignore'] as const;
 
+function StatusChip({ label, done }: { label: string; done: boolean }) {
+  return (
+    <span
+      className={`text-[9px] px-1.5 py-0.5 rounded border ${
+        done
+          ? 'border-emerald-600/60 bg-emerald-900/40 text-emerald-200'
+          : 'border-slate-600 bg-slate-900/40 text-slate-500'
+      }`}
+    >
+      {label}{done ? ' ✓' : ''}
+    </span>
+  );
+}
+
 function ReferenceAutoFill() {
-  const drawing = useDesignStore(s => s.drawing);
   const boundary = useDesignStore(s => s.boundary);
+  const drawing = useDesignStore(s => s.drawing);
+  const design = useDesignStore(s => s.design);
+  const layoutEdits = useDesignStore(s => s.layoutEdits);
+  const substation = useDesignStore(s => s.substation);
+  const takeoffs = useDesignStore(s => s.takeoffs);
+  const siteAreas = useDesignStore(s => s.siteAreas);
   const tracePlan = useDesignStore(s => s.tracePlan);
   const analyzeReferenceTrace = useDesignStore(s => s.analyzeReferenceTrace);
   const setTraceUnknownTag = useDesignStore(s => s.setTraceUnknownTag);
-  const applyReferenceTraceWithProgress = useDesignStore(s => s.applyReferenceTraceWithProgress);
-  const runAutoYardLayout = useDesignStore(s => s.runAutoYardLayout);
+  const placeTraceRoads = useDesignStore(s => s.placeTraceRoads);
+  const placeTraceEquipment = useDesignStore(s => s.placeTraceEquipment);
+  const placePcsCables = useDesignStore(s => s.placePcsCables);
+  const placeFeeders = useDesignStore(s => s.placeFeeders);
   const setBusyOverlay = useDesignStore(s => s.setBusyOverlay);
   const cancelReferenceTrace = useDesignStore(s => s.cancelReferenceTrace);
-  const [applyProgress, setApplyProgress] = useState<{ frac: number; label: string } | null>(null);
-  const [autoYardBusy, setAutoYardBusy] = useState(false);
+  const [busyStep, setBusyStep] = useState<string | null>(null);
   const lastRejection = useDesignStore(s => s.lastRejection);
-  // Group selection lives in the store so the 3D ghost preview shows exactly
-  // what Apply will commit (unchecking a group hides its ghosts too).
-  const traceInclude = useDesignStore(s => s.traceInclude);
-  const setTraceInclude = useDesignStore(s => s.setTraceInclude);
-  const inclEquip = traceInclude.equipment;
-  const inclRoads = traceInclude.roads;
 
-  const runAutoYard = () => {
-    if (!boundary) {
-      toast.error('Load a site boundary first.');
-      return;
-    }
-    setAutoYardBusy(true);
-    setBusyOverlay({ label: 'Auto placing yard…', frac: 0.15 });
-    // Let the overlay paint before the synchronous packer runs.
-    requestAnimationFrame(() => {
-      try {
-        runAutoYardLayout();
-        toast.success('Yard laid out automatically — roads, blocks, and gravel.');
-      } finally {
-        setAutoYardBusy(false);
-        setBusyOverlay(null);
-      }
-    });
-  };
-
-  if (!drawing || !drawing.layers.length) {
-    return (
-      <div className="bg-slate-800 rounded p-2.5 space-y-2">
-        <div className="text-xs text-slate-400 leading-relaxed">
-          Auto place yard packs the site with the full layout engine. Scan drawing needs KMZ reference linework to turn drawn roads and equipment into a live design.
-        </div>
-        <button
-          type="button"
-          disabled={!boundary || autoYardBusy}
-          onClick={runAutoYard}
-          className="w-full text-[11px] py-1.5 rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white font-medium"
-        >
-          {autoYardBusy ? 'Placing…' : 'Auto place yard'}
-        </button>
-        <div className="text-[10px] text-slate-500">
-          Scan drawing is unavailable until the KMZ includes reference drawing layers.
-        </div>
-      </div>
-    );
-  }
-
+  const hasDrawing = !!(drawing && drawing.layers.length);
   const equipCount = tracePlan
     ? tracePlan.items.length + tracePlan.unknowns.filter(u => u.tag !== 'road' && u.tag !== 'ignore').length
     : 0;
@@ -302,138 +276,206 @@ function ReferenceAutoFill() {
     ? tracePlan.roads.reduce((n, r) => n + r.strips.length, 0) + tracePlan.unknowns.filter(u => u.tag === 'road').length
     : 0;
 
-  return (
-    <div className="mt-2 bg-slate-800 rounded p-2.5 space-y-2">
-      <div className="flex flex-col gap-1.5">
-        <button
-          type="button"
-          disabled={!boundary || autoYardBusy || !!applyProgress}
-          onClick={runAutoYard}
-          className="w-full text-[11px] py-1.5 rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white font-medium"
-        >
-          {autoYardBusy ? 'Placing…' : 'Auto place yard'}
-        </button>
-        <div className="text-[10px] text-slate-500">
-          Full automatic layout — blocks, roads, gravel, and cables (clears bare manual authoring).
-        </div>
+  const roadsDone = (layoutEdits.customRoads ?? []).some(r => r.traced === true);
+  const equipDone = (layoutEdits.placedEquipment ?? []).some(p =>
+    !isManualEquipmentSpec(p) && (p as { source?: string }).source === 'trace');
+  const cablesDone = layoutEdits.autoCablesPlaced === true;
+  const feedersDone = layoutEdits.autoFeedersPlaced === true;
+
+  const pcsCount = design?.equipment.filter(e => e.kind === 'inverter').length ?? 0;
+  const hasPcs = pcsCount > 0;
+  // Match placeFeeders: PCS + (local substation or any take-off on a multi-area site).
+  const canPlaceFeeders = hasPcs && (!!substation || (takeoffs?.length ?? 0) > 0 || siteAreas.length >= 2);
+
+  if (!boundary) {
+    return (
+      <div className="text-xs text-slate-500">
+        Load a site boundary to use Auto Scan and cable / feeder placement.
       </div>
-      <div className="border-t border-slate-700 pt-2">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-slate-200">Auto-fill from drawing</span>
-          {!tracePlan && (
+    );
+  }
+
+  const runStep = async (label: string, fn: () => Promise<boolean> | boolean | string | null) => {
+    setBusyStep(label);
+    setBusyOverlay({ label, frac: 0.15 });
+    try {
+      const result = await fn();
+      if (typeof result === 'string') {
+        toast.error(result);
+        return;
+      }
+      if (result === false) {
+        toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Nothing to place.'));
+        return;
+      }
+      const warn = useDesignStore.getState().lastPlacedWarning;
+      if (warn) toast.warning(warn, { duration: 9000 });
+      else toast.success(label.replace(/…$/, '') + '.');
+    } finally {
+      setBusyStep(null);
+      setBusyOverlay(null);
+    }
+  };
+
+  return (
+    <div className="mt-2 bg-slate-800 rounded p-2.5 flex flex-col gap-2">
+      <div className="flex flex-wrap gap-1">
+        <StatusChip label="Roads" done={roadsDone} />
+        <StatusChip label="Equipment" done={equipDone} />
+        <StatusChip label="Cables" done={cablesDone} />
+        <StatusChip label="Feeders" done={feedersDone} />
+      </div>
+
+      <div className="text-[10px] text-slate-500">
+        Finish missing items in Manual Placement before cables / feeders.
+      </div>
+
+      {/* 1. Scan drawing */}
+      <div className="flex flex-col gap-1">
+        <div className="text-[11px] font-medium text-slate-200">1. Scan drawing</div>
+        {!hasDrawing ? (
+          <div className="text-[10px] text-slate-500">
+            Upload a KMZ with reference drawing linework to scan roads and equipment. Or place everything in Manual Placement, then use steps 4–5.
+          </div>
+        ) : !tracePlan ? (
+          <button
+            type="button"
+            disabled={!!busyStep}
+            onClick={() => {
+              if (!analyzeReferenceTrace()) {
+                toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Nothing to auto-fill.'));
+              }
+            }}
+            className="text-[11px] py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-60 text-white"
+          >
+            Scan drawing
+          </button>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <div className="text-[10px] text-slate-400">
+              Drawing scanned — {equipCount} equipment, {roadCount} road segment{roadCount === 1 ? '' : 's'}.
+            </div>
+            {tracePlan.substations.length > 0 && (
+              <div className="text-[10px] text-amber-300/90">
+                {tracePlan.substations.length} substation outline{tracePlan.substations.length === 1 ? '' : 's'} recognized — place via site areas / Manual Placement.
+              </div>
+            )}
+            {tracePlan.unknowns.length > 0 && (
+              <div>
+                <div className="text-[10px] text-amber-300 mb-1">
+                  {tracePlan.unknowns.length} shape{tracePlan.unknowns.length === 1 ? '' : 's'} could not be identified — tag each:
+                </div>
+                <div className="max-h-32 overflow-y-auto flex flex-col gap-1 pr-1">
+                  {tracePlan.unknowns.map((u, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 text-[10px] text-slate-300">
+                      <span className="truncate" title={u.layerName}>
+                        {u.layerName || '(unnamed)'} · {Math.round(u.pose.lengthFt)}×{Math.round(u.pose.widthFt)} ft
+                      </span>
+                      <select
+                        value={u.tag}
+                        onChange={e => setTraceUnknownTag(i, e.target.value as typeof u.tag)}
+                        className="bg-slate-700 text-slate-200 rounded px-1 py-0.5 text-[10px] shrink-0"
+                      >
+                        {TRACE_TAG_OPTIONS.map(t => (
+                          <option key={t} value={t}>{TRACE_KIND_LABELS[t]}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {tracePlan.missingAux.length > 0 && (
+              <div className="text-[10px] text-slate-400">
+                Not in the drawing: {tracePlan.missingAux.map(k => TRACE_KIND_LABELS[k]).join(', ')}. Place in Manual Placement.
+              </div>
+            )}
             <button
               type="button"
-              disabled={autoYardBusy}
-              onClick={() => { if (!analyzeReferenceTrace()) toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Nothing to auto-fill.')); }}
-              className="text-[10px] px-2 py-1 rounded bg-cyan-700 hover:bg-cyan-600 text-white"
+              disabled={!!busyStep}
+              onClick={cancelReferenceTrace}
+              className="text-[10px] py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-60 text-slate-200"
             >
-              Scan drawing
+              Cancel scan
             </button>
-          )}
-        </div>
-        {!tracePlan && (
-          <div className="text-[10px] text-slate-500 mt-1">
-            Turn the drawn roads and equipment outlines into a live design — everything lands exactly where the customer drew it.
           </div>
         )}
       </div>
-      {tracePlan && (
-        <div className="mt-2 flex flex-col gap-2">
-          <label className="flex items-center gap-1.5 text-[11px] text-slate-300">
-            <input type="checkbox" checked={inclEquip} onChange={e => setTraceInclude({ equipment: e.target.checked })} className="accent-cyan-500" />
-            Equipment — {equipCount} item{equipCount === 1 ? '' : 's'}
-          </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-slate-300">
-            <input type="checkbox" checked={inclRoads} onChange={e => setTraceInclude({ roads: e.target.checked })} className="accent-cyan-500" />
-            Roads — {roadCount} segment{roadCount === 1 ? '' : 's'} (interior roads switch to drawn-roads-only)
-          </label>
-          {tracePlan.substations.length > 0 && (
-            <div className="text-[10px] text-amber-300/90">
-              {tracePlan.substations.length} substation outline{tracePlan.substations.length === 1 ? '' : 's'} recognized — substations are placed through the site areas panel, not auto-filled.
-            </div>
-          )}
-          {tracePlan.unknowns.length > 0 && (
-            <div>
-              <div className="text-[10px] text-amber-300 mb-1">
-                {tracePlan.unknowns.length} shape{tracePlan.unknowns.length === 1 ? '' : 's'} could not be identified by name — tag each one:
-              </div>
-              <div className="max-h-40 overflow-y-auto flex flex-col gap-1 pr-1">
-                {tracePlan.unknowns.map((u, i) => (
-                  <div key={i} className="flex items-center justify-between gap-2 text-[10px] text-slate-300">
-                    <span className="truncate" title={u.layerName}>
-                      {u.layerName || '(unnamed)'} · {Math.round(u.pose.lengthFt)}×{Math.round(u.pose.widthFt)} ft
-                    </span>
-                    <select
-                      value={u.tag}
-                      onChange={e => setTraceUnknownTag(i, e.target.value as typeof u.tag)}
-                      className="bg-slate-700 text-slate-200 rounded px-1 py-0.5 text-[10px] shrink-0"
-                    >
-                      {TRACE_TAG_OPTIONS.map(t => (
-                        <option key={t} value={t}>{TRACE_KIND_LABELS[t]}</option>
-                      ))}
-                    </select>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {tracePlan.missingAux.length > 0 && (
-            <div className="text-[10px] text-slate-400">
-              Not in the drawing: {tracePlan.missingAux.map(k => TRACE_KIND_LABELS[k]).join(', ')}.
-            </div>
-          )}
-          {applyProgress && (
-            <div className="flex flex-col gap-1">
-              <div className="h-1.5 rounded bg-slate-700 overflow-hidden">
-                <div
-                  className="h-full bg-cyan-500 rounded transition-[width] duration-200 ease-out"
-                  style={{ width: `${Math.round(applyProgress.frac * 100)}%` }}
-                />
-              </div>
-              <div className="text-[10px] text-slate-400">{applyProgress.label}…</div>
-            </div>
-          )}
-          <div className="flex gap-1.5">
-            <button
-              disabled={!!applyProgress}
-              onClick={() => {
-                void (async () => {
-                  setApplyProgress({ frac: 0, label: 'Starting' });
-                  setBusyOverlay({ label: 'Applying auto-fill…', frac: 0 });
-                  try {
-                    const ok = await applyReferenceTraceWithProgress(
-                      (frac, label) => {
-                        setApplyProgress({ frac, label });
-                        setBusyOverlay({ label, frac });
-                      },
-                      { equipment: inclEquip, roads: inclRoads });
-                    if (!ok) toast.error(friendlyRejectReason(useDesignStore.getState().lastRejection, 'Nothing to apply.'));
-                    else {
-                      const warn = useDesignStore.getState().lastPlacedWarning;
-                      if (warn) toast.warning(warn, { duration: 9000 });
-                      else toast.success('Design filled in from the reference drawing.');
-                    }
-                  } finally {
-                    setApplyProgress(null);
-                    setBusyOverlay(null);
-                  }
-                })();
-              }}
-              className="flex-1 text-[11px] py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-white font-medium"
-            >
-              {applyProgress ? 'Applying…' : 'Apply'}
-            </button>
-            <button
-              onClick={cancelReferenceTrace}
-              disabled={!!applyProgress}
-              className="flex-1 text-[11px] py-1.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-60 text-slate-200"
-            >
-              Cancel
-            </button>
+
+      {/* 2. Place roads */}
+      <div className="flex flex-col gap-1">
+        <div className="text-[11px] font-medium text-slate-200">2. Place roads</div>
+        <button
+          type="button"
+          disabled={!!busyStep || !tracePlan || roadCount === 0}
+          onClick={() => void runStep('Placing roads…', () => placeTraceRoads())}
+          className="text-[11px] py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 text-white"
+          title={!tracePlan ? 'Scan the drawing first' : roadCount === 0 ? 'No roads in the scan' : 'Place roads from the drawing'}
+        >
+          {busyStep === 'Placing roads…' ? 'Placing…' : roadsDone ? 'Re-place roads from drawing' : 'Place roads from drawing'}
+        </button>
+      </div>
+
+      {/* 3. Place equipment */}
+      <div className="flex flex-col gap-1">
+        <div className="text-[11px] font-medium text-slate-200">3. Place equipment</div>
+        <button
+          type="button"
+          disabled={!!busyStep || !tracePlan || equipCount === 0}
+          onClick={() => void runStep('Placing equipment…', () => placeTraceEquipment())}
+          className="text-[11px] py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 text-white"
+          title={!tracePlan ? 'Scan the drawing first' : equipCount === 0 ? 'No equipment in the scan' : 'Place equipment from the drawing'}
+        >
+          {busyStep === 'Placing equipment…' ? 'Placing…' : equipDone ? 'Re-place equipment from drawing' : 'Place equipment from drawing'}
+        </button>
+      </div>
+
+      {/* 4. Place PCS cables — site-wide */}
+      <div className="flex flex-col gap-1">
+        <div className="text-[11px] font-medium text-slate-200">4. Place PCS cables</div>
+        <button
+          type="button"
+          disabled={!!busyStep || !hasPcs}
+          onClick={() => {
+            const err = placePcsCables();
+            if (err) toast.error(err);
+            else toast.success('PCS cables placed.');
+          }}
+          className="text-[11px] py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 text-white"
+          title={!hasPcs ? 'Place at least one PCS (scan or Manual Placement)' : 'Route DC / LVAC / fiber from PCS'}
+        >
+          {cablesDone ? 'Re-place PCS cables' : 'Place PCS cables'}
+        </button>
+      </div>
+
+      {/* 5. Place feeders — site-wide */}
+      <div className="flex flex-col gap-1">
+        <div className="text-[11px] font-medium text-slate-200">5. Place feeders</div>
+        <button
+          type="button"
+          disabled={!!busyStep || !canPlaceFeeders}
+          onClick={() => {
+            const err = placeFeeders();
+            if (err) toast.error(err);
+            else toast.success('Feeders placed.');
+          }}
+          className="text-[11px] py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 text-white"
+          title={
+            !hasPcs ? 'Place at least one PCS first'
+              : !canPlaceFeeders ? 'Place a substation (or aimed take-off) in Manual Placement'
+                : 'Route MV feeders to the substation / take-off'
+          }
+        >
+          {feedersDone ? 'Re-place feeders' : 'Place feeders'}
+        </button>
+        {hasPcs && !substation && siteAreas.length < 2 && (
+          <div className="text-[10px] text-amber-300/90">
+            Place a substation in Manual Placement before feeders.
           </div>
-          {lastRejection && <div className="text-[10px] text-red-400">{lastRejection}</div>}
-        </div>
-      )}
+        )}
+      </div>
+
+      {lastRejection && <div className="text-[10px] text-red-400">{lastRejection}</div>}
     </div>
   );
 }
@@ -3264,8 +3306,8 @@ export default function DesignControlPanel() {
     persistPanelSection(id);
   }, []);
   const placeMaterialEpoch = useDesignStore(s => s.placeMaterialEpoch);
-  const manualYard = useDesignStore(s => s.layoutEdits.yardAuthoring === 'manual');
-  // Palette selection. Cleared when the yard is no longer a manual site.
+  const showManualPlacement = useDesignStore(s => isManualPlacementActive(s.layoutEdits));
+  // Palette selection. Cleared when placement tools are no longer available.
   const manualPlaceItem = useDesignStore(s => s.manualPlaceItem);
   const setManualPlaceItem = useDesignStore(s => s.setManualPlaceItem);
   const manualSelectTool = useDesignStore(s => s.manualSelectTool);
@@ -3296,11 +3338,11 @@ export default function DesignControlPanel() {
   const manualPcsPlaceMode = useDesignStore(s => s.manualPcsPlaceMode);
   const setManualPcsPlaceMode = useDesignStore(s => s.setManualPcsPlaceMode);
   useEffect(() => {
-    if (!manualYard) {
+    if (!showManualPlacement) {
       setManualPlaceItem(null);
       setManualSelectTool(false);
     }
-  }, [manualYard, setManualPlaceItem, setManualSelectTool]);
+  }, [showManualPlacement, setManualPlaceItem, setManualSelectTool]);
   // A new KMZ import opens Manual Placement. Later tab changes stay put until
   // the next import bumps the epoch.
   useEffect(() => {
@@ -3769,7 +3811,7 @@ export default function DesignControlPanel() {
 
         <PanelSection id="place" title="Manual Placement" discipline="Layout">
           <div className="bg-slate-800 rounded p-3 text-sm space-y-3">
-            {manualYard ? (
+            {showManualPlacement ? (
               <>
                 <p className="text-xs text-slate-300 leading-relaxed">
                   The site shows the property line and fence. Select an item, then
