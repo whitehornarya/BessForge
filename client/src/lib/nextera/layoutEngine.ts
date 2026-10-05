@@ -4879,9 +4879,17 @@ export function composeManualPcsBatteries(
   pcsClearance: number,
 ): { pcs: PlacedEquipment; batteries: PlacedEquipment[] } {
   const kind: PlacedIslandKind = batteryCount === 2 ? 'single2' : 'single';
+  // Always compose against the mirrored-pair (QTY3) footprint. placeMirroredPair
+  // sizes pair/PCS from fp.depth/2 while A-3 is pinned to the aux corridor; a
+  // QTY4 catalog config returns the non-mirrored blockFootprint, which shrinks
+  // halfD and drops A-3 onto the A-1/A-2 pair. Auto Scan / traced normalize
+  // never call this helper — keep their paths untouched.
+  const layoutConfig = isMirroredPairConfig(config)
+    ? config
+    : { ...config, containersPerBlock: 3 };
   const comp = composePlacedIsland(
     { id: 'manual-pcs', x: 0, y: 0, kind, aug: false, auxGear: false },
-    config, pcsClearance, 1, 1,
+    layoutConfig, pcsClearance, 1, 1,
   );
   const localPcs = comp.equipment.find(e => e.kind === 'inverter');
   if (!localPcs) {
