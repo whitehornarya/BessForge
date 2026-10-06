@@ -3328,6 +3328,7 @@ export default function DesignControlPanel() {
   const removeManualSelection = useDesignStore(s => s.removeManualSelection);
   const clearManualSelection = useDesignStore(s => s.clearManualSelection);
   const alignManualSelection = useDesignStore(s => s.alignManualSelection);
+  const autoAlignManualSelection = useDesignStore(s => s.autoAlignManualSelection);
   const manualRotateSession = useDesignStore(s => s.manualRotateSession);
   const beginManualRotate = useDesignStore(s => s.beginManualRotate);
   const cancelManualRotate = useDesignStore(s => s.cancelManualRotate);
@@ -4025,6 +4026,17 @@ export default function DesignControlPanel() {
                             >
                               Align Y
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const why = autoAlignManualSelection();
+                                if (why) toast.error(why);
+                              }}
+                              className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                              title="Recompose PCS+batteries to Auto Scan gaps and snap the PCS outer face 10 ft from the nearest road"
+                            >
+                              Auto Align
+                            </button>
                           </div>
                           <div className="flex gap-2">
                             <button
@@ -4090,29 +4102,44 @@ export default function DesignControlPanel() {
                             Rotate
                           </button>
                         </div>
-                        {manualSelectionIds.filter(id => id !== 'gate' && !id.startsWith('mroad-')).length >= 2 && (
+                        {manualSelectionIds.filter(id => id !== 'gate' && !id.startsWith('mroad-')).length >= 1 && (
                           <div className="flex gap-2">
+                            {manualSelectionIds.filter(id => id !== 'gate' && !id.startsWith('mroad-')).length >= 2 && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const why = alignManualSelection('x');
+                                    if (why) toast.error(why);
+                                  }}
+                                  className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                                  title="Snap all members to the same X (centroid)"
+                                >
+                                  Align X
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const why = alignManualSelection('y');
+                                    if (why) toast.error(why);
+                                  }}
+                                  className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
+                                  title="Snap all members to the same Y (centroid)"
+                                >
+                                  Align Y
+                                </button>
+                              </>
+                            )}
                             <button
                               type="button"
                               onClick={() => {
-                                const why = alignManualSelection('x');
+                                const why = autoAlignManualSelection();
                                 if (why) toast.error(why);
                               }}
                               className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
-                              title="Snap all members to the same X (centroid)"
+                              title="Recompose PCS+batteries to Auto Scan gaps and snap the PCS outer face 10 ft from the nearest road"
                             >
-                              Align X
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const why = alignManualSelection('y');
-                                if (why) toast.error(why);
-                              }}
-                              className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
-                              title="Snap all members to the same Y (centroid)"
-                            >
-                              Align Y
+                              Auto Align
                             </button>
                           </div>
                         )}

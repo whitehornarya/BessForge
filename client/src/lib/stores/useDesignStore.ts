@@ -18,7 +18,7 @@ export type ManualRotateSession = {
   /** Live delta from start poses (degrees, CCW). */
   deltaDeg: number;
 };
-import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, wantAutoFeeders, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, composeManualPcsBatteries, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
+import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, wantAutoFeeders, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, composeManualPcsBatteries, computeManualBlockAutoAlign, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
 
 // Re-export the traced-road fingerprint helpers at their historical home:
 // the tombstone flow was built here, and external callers (tests) import
@@ -1450,7 +1450,7 @@ export const rederiveStaleTracedRoads = (
   }));
   const multi = siteAreas.length > 1;
   const list = multi
-    ? (bucketTracedRoadAdds(copies, siteAreas, null, true, []).get(areaId) ?? [])
+    ? (bucketTracedRoadAdds(copies, siteAreas, null, true).get(areaId) ?? [])
     : copies;
   // Same poly selection as the scan commit: prune against the area's design
   // fence (falling back to its boundary polygon), flag against the fence
@@ -1522,6 +1522,51 @@ const tracedHealLogOnce = (key: string, emit: () => void): void => {
   emit();
 };
 
+// Stepped Place roads → Place equipment re-ran the full heal on every
+// regenerate even when customRoads were unchanged. Cache by area + input
+// fingerprint so the equipment step reuses the prior heal result.
+const tracedHealResultCache = new Map<string, { key: string; result: ReturnType<typeof rederiveStaleTracedRoads> }>();
+
+const tracedRoadsHealInputKey = (
+  roads: Parameters<typeof rederiveStaleTracedRoads>[0],
+  fence: Pt[],
+  drawing: Parameters<typeof rederiveStaleTracedRoads>[4],
+  ctx?: Omit<NonNullable<Parameters<typeof rederiveStaleTracedRoads>[5]>, 'outcome'>,
+): string => {
+  const roadPart = (roads ?? []).map(r => {
+    const pts = r.pts ?? [];
+    const a = pts[0], b = pts[pts.length - 1];
+    return [
+      r.id,
+      r.traced ? 1 : 0,
+      r.tracedV ?? 0,
+      pts.length,
+      a ? `${a.x.toFixed(2)},${a.y.toFixed(2)}` : '',
+      b ? `${b.x.toFixed(2)},${b.y.toFixed(2)}` : '',
+      r.width ?? '',
+      r.surface?.length ?? 0,
+      r.outline?.length ?? 0,
+      r.entrance ? 1 : 0,
+      r.apron ? 1 : 0,
+      r.gate ? `${r.gate.x.toFixed(1)},${r.gate.y.toFixed(1)}` : '',
+    ].join(':');
+  }).join('|');
+  let fMinX = Infinity, fMinY = Infinity, fMaxX = -Infinity, fMaxY = -Infinity;
+  for (const p of fence) {
+    if (p.x < fMinX) fMinX = p.x; if (p.x > fMaxX) fMaxX = p.x;
+    if (p.y < fMinY) fMinY = p.y; if (p.y > fMaxY) fMaxY = p.y;
+  }
+  const fencePart = `${fence.length}:${fMinX.toFixed(1)},${fMinY.toFixed(1)},${fMaxX.toFixed(1)},${fMaxY.toFixed(1)}`;
+  const drawPart = drawing
+    ? `${drawing.layers.length}:${drawing.layers.reduce((n, l) => n + l.polylines.length, 0)}`
+    : '0';
+  const removed = (ctx?.removedTraced ?? []).join(',');
+  const paved = (ctx?.pavedTraced ?? []).join(',');
+  const place = ctx?.fencePlacement ?? '';
+  const dFence = ctx?.designFence?.length ?? 0;
+  return `${roadPart}#${fencePart}#${drawPart}#${removed}#${paved}#${place}#${dFence}`;
+};
+
 export const healTracedRoadConstraints = (
   roads: Parameters<typeof rederiveStaleTracedRoads>[0],
   areaId: string,
@@ -1531,6 +1576,10 @@ export const healTracedRoadConstraints = (
   label: string,
   ctx?: Omit<NonNullable<Parameters<typeof rederiveStaleTracedRoads>[5]>, 'outcome'>,
 ): ReturnType<typeof rederiveStaleTracedRoads> => {
+  const cacheKey = tracedRoadsHealInputKey(roads, fence, drawing, ctx);
+  const cached = tracedHealResultCache.get(areaId);
+  if (cached && cached.key === cacheKey) return cached.result;
+
   const before = roads.filter(r => r.traced === true);
   if (before.length &&
       before.some(r => (r.tracedV ?? 1) < TRACED_ROAD_RULES_V) &&
@@ -1579,6 +1628,7 @@ export const healTracedRoadConstraints = (
       console.info(`[traced-heal] ${label} detail: ${rows} | prune=${ctx?.designFence?.length ?? 'caller'} placement=${ctx?.fencePlacement === undefined ? 'caller' : JSON.stringify(ctx?.fencePlacement)}`);
     });
   }
+  tracedHealResultCache.set(areaId, { key: cacheKey, result: healed });
   return healed;
 };
 
@@ -1782,7 +1832,6 @@ const bucketTracedRoadAdds = (
   siteAreas: readonly { id: string; boundary: { polygon: Pt[] } }[],
   activeId: string | null,
   multiArea: boolean,
-  droppedRoads: number[],
 ): Map<string, TraceRoadAdd[]> => {
   const bucketRoads = new Map<string, TraceRoadAdd[]>();
   const areaOf = (x: number, y: number): string | null => {
@@ -1795,7 +1844,6 @@ const bucketTracedRoadAdds = (
   for (const r of roadAdds) {
     if (multiArea) {
       const votes = new Map<string, number>();
-      const p0 = r.pts[0], p1 = r.pts[r.pts.length - 1];
       // Sample every SEGMENT at a fixed interval (vertices alone under-count
       // long straight legs, so a bent route could be voted into the wrong
       // area even though most of its length runs elsewhere).
@@ -1816,14 +1864,10 @@ const bucketTracedRoadAdds = (
       let best: string | null = null, bestN = 0;
       votes.forEach((v, id) => { if (v > bestN) { best = id; bestN = v; } });
       if (!best) {
-        // Gate ENTRY stubs sit entirely OUTSIDE the fence they serve (the
-        // wide apron from the public road to the gate), so zero samples land
-        // inside any footprint. Attach the strip to the nearest area ONLY
-        // when its pavement actually reaches that area's boundary — a genuine
-        // entry road touches the fence it enters; anything short of that is
-        // between-area or off-site linework and drops with the warning.
+        // Gate ENTRY stubs (and any other strip with zero samples inside a
+        // footprint) attach to the nearest site area — reference-wins keeps
+        // pavement outside the boundary rather than dropping it.
         const ring = r.outline ?? r.surface;
-        const ENTRY_REACH_FT = ring ? r.widthFt / 2 + 70 : r.widthFt / 2 + 10;
         const probes = ring ? [...samples, ...ring] : samples;
         let bd = Infinity;
         for (const a of siteAreas) {
@@ -1840,10 +1884,7 @@ const bucketTracedRoadAdds = (
             }
           }
         }
-        if (!best || bd > ENTRY_REACH_FT) {
-          droppedRoads.push(Math.round(Math.hypot(p1.x - p0.x, p1.y - p0.y)));
-          continue;
-        }
+        if (!best) continue;
       }
       (bucketRoads.get(best) ?? bucketRoads.set(best, []).get(best)!).push(r);
     } else {
@@ -2034,8 +2075,8 @@ const buildTraceCommitPhases = (
   equipAdds: TraceEquipAdd[],
   roadAdds: TraceRoadAdd[],
   historyLabel: string,
-  opts?: { replaceCategory?: boolean }
-): { frac: number; label: string; run: () => void }[] | false => {
+  opts?: { replaceCategory?: boolean; asyncRebuild?: boolean }
+): { frac: number; label: string; run: () => void | Promise<void> }[] | false => {
   if (!equipAdds.length && !roadAdds.length) return false;
 
   // Re-apply REPLACES the previous auto-fill: a second scan of the same
@@ -2177,11 +2218,10 @@ const buildTraceCommitPhases = (
       normalizeTracedEquipmentAdds(list, traceConfig, s0.hotClimate),
     );
   });
-  // Roads are bucketed to the owning site area (majority vote, then ring-probe
-  // reach for wholly-outside gate aprons) — one shared implementation with the
+  // Roads are bucketed to the owning site area (majority vote, then nearest
+  // area for wholly-outside strips) — one shared implementation with the
   // stale-save re-derivation so the two never disagree (see bucketTracedRoadAdds).
-  const droppedRoads: number[] = [];
-  const bucketRoads = bucketTracedRoadAdds(roadAdds, s0.siteAreas, activeId, multiArea, droppedRoads);
+  const bucketRoads = bucketTracedRoadAdds(roadAdds, s0.siteAreas, activeId, multiArea);
 
   // ---- one gate crossing per area (prune + flags) --------------------------
   // Exactly ONE road crosses each area's fence: the gate entrance — the drawn
@@ -2189,10 +2229,10 @@ const buildTraceCommitPhases = (
   // fence-crossing road. Fence-crossing strips are clustered by crossing
   // location; the cluster at the drawing's gate ticks / flare (or carrying
   // the most strips) is the gate, every other crossing strip is trimmed back
-  // to its inside-the-fence run, and only entrance-flagged roads may keep
-  // pavement outside the fence — the layout engine clips the rest to the
-  // fence interior. Manual layouts use the selected fence placement; KMZ
-  // traced BESS areas use the property boundary itself.
+  // to its inside-the-fence run. Traced non-entrance pavement may still keep
+  // surface outside the fence (reference-wins). Manual layouts use the
+  // selected fence placement; KMZ traced BESS areas use the property boundary
+  // itself.
   // Old saved traced designs (no flags) heal during regenerateAreas via
   // migrateLegacyTracedRoads. The prune→flag sequence lives in
   // deriveTracedGateSet, shared verbatim with the stale-save re-derivation,
@@ -2228,8 +2268,7 @@ const buildTraceCommitPhases = (
     // a list that is about to be cleared.
     const areaEdits = editsForKey(key);
     const pavedForKey = stripRoads ? undefined : areaEdits?.pavedTracedRoads;
-    const { kept, droppedLens } = deriveTracedGateSet(rds, s0.drawing, prunePoly, flagFence, pavedForKey);
-    droppedRoads.push(...droppedLens);
+    const { kept } = deriveTracedGateSet(rds, s0.drawing, prunePoly, flagFence, pavedForKey);
     bucketRoads.set(key, kept);
   });
 
@@ -2314,8 +2353,11 @@ const buildTraceCommitPhases = (
   // progress bar — sync callers (bulk tag) just run the phases back to back.
   const before = snapOf(get(), historyLabel);
   let touchedOthers = false;
+  const rebuild = opts?.asyncRebuild
+    ? () => get().regenerateAsync()
+    : () => { get().regenerate({ sync: true }); };
 
-  const phases: { frac: number; label: string; run: () => void }[] = [
+  const phases: { frac: number; label: string; run: () => void | Promise<void> }[] = [
     {
       frac: 0.15, label: 'Placing traced equipment and roads', run: () => {
         const activeKey = activeId ?? '_';
@@ -2358,7 +2400,7 @@ const buildTraceCommitPhases = (
         }
       },
     },
-    { frac: 0.45, label: 'Rebuilding this area', run: () => get().regenerate({ sync: true }) },
+    { frac: 0.45, label: 'Rebuilding this area', run: rebuild },
     {
       frac: 0.75, label: 'Filling the other areas', run: () => {
         if (touchedOthers) get().regenerateAreas();
@@ -2367,12 +2409,7 @@ const buildTraceCommitPhases = (
     {
       frac: 0.95, label: 'Finishing up', run: () => {
         const warns = (get().design?.warnings ?? []).filter(w =>
-          w.startsWith('Placed equipment') || w.startsWith('Traced road'));
-        if (droppedRoads.length) {
-          warns.push(
-            `${droppedRoads.length} traced road segment${droppedRoads.length === 1 ? '' : 's'} ` +
-            'outside every area footprint skipped — roads only land inside an area.');
-        }
+          w.startsWith('Placed equipment') || w.startsWith('Traced road') || w.startsWith('Road overlap:'));
         if (droppedEquip > 0) {
           warns.push(
             `${droppedEquip} reference shape${droppedEquip === 1 ? '' : 's'} far outside every ` +
@@ -3955,9 +3992,13 @@ interface DesignState {
   // `{ sync: true }` forces main-thread computation for callers that must
   // observe the result immediately (edit validation, transactional import,
   // undo/redo bookkeeping) — and is the only path in Node tests.
+  // `{ wait: true }` returns a Promise that resolves after the design applies
+  // (worker or sync). Stepped Auto Scan Place uses wait without sync.
   // suppressAssignmentNotice: undo/redo/import/restore re-apply the correct
   // assignments themselves, so the "groupings reset" notice must not fire.
-  regenerate: (opts?: { sync?: boolean; suppressAssignmentNotice?: boolean }) => void;
+  regenerate: (opts?: { sync?: boolean; suppressAssignmentNotice?: boolean; wait?: boolean }) => void | Promise<void>;
+  /** Awaitable regenerate for trace Place steps (worker when available). */
+  regenerateAsync: (opts?: { suppressAssignmentNotice?: boolean }) => Promise<void>;
   clearFeederResetNotice: () => void;
   clearGradingZonesResetNotice: () => void;
   clearSite: () => void;
@@ -4151,6 +4192,8 @@ interface DesignState {
   moveManualSelection: (dx: number, dy: number) => string | null;
   /** Snap active group / selection centers onto shared X or Y (centroid). */
   alignManualSelection: (axis: 'x' | 'y') => string | null;
+  /** Recompose PCS+BESS to Auto Scan gaps and snap PCS outer face to road clearance. */
+  autoAlignManualSelection: () => string | null;
   removeManualSelection: () => void;
   /** Rotate active group / selection (or session start poses) by deltaDeg about centroid. */
   rotateManualGroup: (deltaDeg: number, session?: ManualRotateSession | null) => string | null;
@@ -6671,9 +6714,9 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     if (get().gradingZonesResetNotice !== null) set({ gradingZonesResetNotice: null });
   },
 
-  regenerate: (opts?: { sync?: boolean; suppressAssignmentNotice?: boolean }) => {
+  regenerate: (opts?: { sync?: boolean; suppressAssignmentNotice?: boolean; wait?: boolean }) => {
     const { boundary: rawBoundary, configId, targetMW, targetMWh, hotClimate, containersPerPcs, roadMode, autoRoadWrap, ringMode, perimeterBand, fencePlacement, laydownPct, augmentPct, surfacingMode, surfacingDepthIn, deadSpaceTrim, dcRouting, arrangement, layoutEdits, yardRotationDeg } = get();
-    if (!rawBoundary) return;
+    if (!rawBoundary) return opts?.wait ? Promise.resolve() : undefined;
     // Grading-optimized rotation: the engine always works in the yard frame
     // (parcel spun by −θ). θ = 0 returns the exact same boundary object, so
     // the default path is byte-identical to the pre-feature behavior.
@@ -6788,8 +6831,9 @@ export const useDesignStore = create<DesignState>((set, get) => ({
         if (token === regenToken) set({ computing: false });
       } catch (e: any) {
         if (token === regenToken) set({ error: e?.message || 'Failed to generate layout', computing: false });
+        if (opts?.wait) return Promise.reject(e);
       }
-      return;
+      return opts?.wait ? Promise.resolve() : undefined;
     }
     // Single-area path: stale traced roads self-heal here exactly like
     // regenerateAreas does per-area (render-time only — the stored edits are
@@ -6829,15 +6873,32 @@ export const useDesignStore = create<DesignState>((set, get) => ({
         if (token === regenToken) set({ computing: false });
       } catch (e: any) {
         if (token === regenToken) set({ error: e?.message || 'Failed to generate layout', computing: false });
+        if (opts?.wait) return Promise.reject(e);
       }
-      return;
+      return opts?.wait ? Promise.resolve() : undefined;
     }
-    generateDesignInWorker(boundary, configId, targetMW, targetMWh, options)
-      .then(apply)
+    const pending = generateDesignInWorker(boundary, configId, targetMW, targetMWh, options)
+      .then(design => {
+        apply(design);
+      })
       .catch((e: any) => {
-        if (e instanceof SupersededError || token !== regenToken) return;
+        if (e instanceof SupersededError || token !== regenToken) {
+          if (opts?.wait) return;
+          return;
+        }
         set({ error: e?.message || 'Failed to generate layout', computing: false });
+        if (opts?.wait) throw e;
       });
+    return opts?.wait ? pending : undefined;
+  },
+
+  regenerateAsync: (opts?: { suppressAssignmentNotice?: boolean }) => {
+    const result = get().regenerate({
+      wait: true,
+      sync: false,
+      suppressAssignmentNotice: opts?.suppressAssignmentNotice,
+    });
+    return result instanceof Promise ? result : Promise.resolve();
   },
 
   moveRow: (rowIndex: number, dx: number, dy: number, force = false): boolean => {
@@ -7622,7 +7683,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       await paint();
       const phases = buildTraceCommitPhases(
         set, get, adds.equipAdds, adds.roadAdds, 'Auto-filled design from reference drawing',
-        { replaceCategory: opts?.replaceCategory === true });
+        { replaceCategory: opts?.replaceCategory === true, asyncRebuild: true });
       if (!phases) return false;
       for (const p of phases) {
         onProgress(p.frac, p.label);
@@ -7634,7 +7695,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
         if (capturedActive && get().activeAreaId !== capturedActive) {
           get().setActiveArea(capturedActive);
         }
-        p.run();
+        await Promise.resolve(p.run());
       }
       onProgress(1, 'Done');
       return true;
@@ -8211,6 +8272,81 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     });
     if (!changed) return null;
     const before = snapOf(get(), `Aligned ${members.length} items on ${axis.toUpperCase()}`);
+    set({ layoutEdits: { ...prev, placedEquipment: next } });
+    get().regenerate({ sync: true });
+    get().pushHistory(before);
+    return null;
+  },
+
+  autoAlignManualSelection: (): string | null => {
+    const activeId = get().activeManualGroupId;
+    const active = activeId
+      ? (get().layoutEdits.manualGroups ?? []).find(g => g.id === activeId)
+      : null;
+    const ids = (active?.memberIds ?? get().manualSelectionIds)
+      .filter(id => id !== 'gate' && !id.startsWith('mroad-'));
+    if (!ids.length) return 'Nothing selected.';
+    const prev = get().layoutEdits;
+    const idSet = new Set(ids);
+    const members = (prev.placedEquipment ?? []).filter(s => idSet.has(s.id));
+    if (!members.length) return 'Nothing selected.';
+    const pcsList = members.filter((s): s is TracedEquipmentSpec =>
+      !isManualEquipmentSpec(s) && s.kind === 'inverter');
+    const battList = members.filter((s): s is TracedEquipmentSpec =>
+      !isManualEquipmentSpec(s) && s.kind === 'bess');
+    if (pcsList.length !== 1) {
+      return 'Auto Align needs exactly one PCS (and 0, 2, or 3 batteries).';
+    }
+    if (members.length !== 1 + battList.length) {
+      return 'Auto Align only supports PCS and battery containers for now.';
+    }
+    const roads = get().design?.roads ?? [];
+    const config = getEffectiveConfiguration(get().configId, get().containersPerPcs);
+    const pcs = pcsList[0];
+    const result = computeManualBlockAutoAlign(
+      {
+        id: pcs.id, x: pcs.x, y: pcs.y,
+        rotationDeg: pcs.rotationDeg,
+        lengthFt: pcs.lengthFt, widthFt: pcs.widthFt,
+      },
+      battList.map(b => ({
+        id: b.id, x: b.x, y: b.y,
+        rotationDeg: b.rotationDeg,
+        lengthFt: b.lengthFt, widthFt: b.widthFt,
+      })),
+      config,
+      roads,
+      { pcsClearance: CLEARANCES.pcsStandard },
+    );
+    if ('error' in result) return result.error;
+    const byId = new Map(result.updates.map(u => [u.id, u]));
+    let changed = false;
+    const next = (prev.placedEquipment ?? []).map(s => {
+      const u = byId.get(s.id);
+      if (!u || isManualEquipmentSpec(s)) return s;
+      const rot = u.rotationDeg;
+      const same =
+        s.x === u.x && s.y === u.y &&
+        (s.rotationDeg ?? 0) === (rot ?? 0) &&
+        s.lengthFt === u.lengthFt && s.widthFt === u.widthFt;
+      if (same) return s;
+      changed = true;
+      const out: TracedEquipmentSpec = {
+        ...s,
+        x: u.x,
+        y: u.y,
+        lengthFt: u.lengthFt,
+        widthFt: u.widthFt,
+      };
+      if (rot === undefined || rot === 0) delete out.rotationDeg;
+      else out.rotationDeg = rot;
+      return out;
+    });
+    if (!changed) return null;
+    const before = snapOf(get(),
+      battList.length
+        ? `Auto-aligned PCS + ${battList.length} batt`
+        : 'Auto-aligned PCS to road');
     set({ layoutEdits: { ...prev, placedEquipment: next } });
     get().regenerate({ sync: true });
     get().pushHistory(before);
@@ -10273,6 +10409,8 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     ++regenToken;
     cancelChannel('generate');
     bumpSatelliteEpoch();
+    tracedHealResultCache.clear();
+    tracedHealLogSeen.clear();
     // Delete the stored reference-drawing geometry too, or a later session
     // restore would resurrect the cleared site's drawing under a new site.
     // The epoch bump drops any in-flight load; the delete itself is FIFO

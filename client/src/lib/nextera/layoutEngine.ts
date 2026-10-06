@@ -805,7 +805,7 @@ export function validateRowShift(
 
 // Gap between adjacent block rows in road layouts: the drive aisle plus the
 // required equipment-to-road-edge clearance on BOTH sides (reference
-// standard: 24' road, 8'-0 3/4" to equipment). Also satisfies the 10 ft
+// standard: 24' road, 10' to equipment). Also satisfies the 10 ft
 // container front-to-front clearance by a wide margin.
 export const ROW_AISLE_GAP_FT = CLEARANCES.roadWidth + 2 * CLEARANCES.equipmentToRoadEdge;
 
@@ -2472,7 +2472,7 @@ function buildLayout(
   const gapX = mirrored
     ? pairGap
     : CLEARANCES.frontToFront;     // between blocks side-to-side
-  // Between block rows: 24 ft drive aisle + 8'-0 3/4" equipment-to-road-edge
+  // Between block rows: 24 ft drive aisle + 10 ft equipment-to-road-edge
   // clearance on each side, or just the front-to-front clearance in compact mode.
   const gapY = compact
     ? CLEARANCES.frontToFront
@@ -4914,6 +4914,175 @@ export function composeManualPcsBatteries(
   };
 }
 
+/** Axis-aligned half-extents for an equipment rect at plan rotation (radians). */
+function autoAlignEquipHalves(length: number, width: number, rotationRad: number): { hx: number; hy: number } {
+  const swapped = Math.abs(Math.sin(rotationRad)) > 0.5;
+  return swapped ? { hx: width / 2, hy: length / 2 } : { hx: length / 2, hy: width / 2 };
+}
+
+/** Signed outside distance from a point to a road rect, plus outward unit normal. */
+function autoAlignRoadGap(
+  px: number, py: number, road: RoadSegment
+): { d: number; nx: number; ny: number } {
+  const ah = aisleHalves(road);
+  const dx = px - road.x, dy = py - road.y;
+  if (Math.abs(dx) <= ah.hx + 1e-9 && Math.abs(dy) <= ah.hy + 1e-9) {
+    const toW = ah.hx + dx, toE = ah.hx - dx, toS = ah.hy + dy, toN = ah.hy - dy;
+    const m = Math.min(toW, toE, toS, toN);
+    if (m === toW) return { d: -toW, nx: -1, ny: 0 };
+    if (m === toE) return { d: -toE, nx: 1, ny: 0 };
+    if (m === toS) return { d: -toS, nx: 0, ny: -1 };
+    return { d: -toN, nx: 0, ny: 1 };
+  }
+  const cx = Math.max(-ah.hx, Math.min(ah.hx, dx));
+  const cy = Math.max(-ah.hy, Math.min(ah.hy, dy));
+  const vx = dx - cx, vy = dy - cy;
+  const d = Math.hypot(vx, vy);
+  if (d < 1e-9) return { d: 0, nx: 1, ny: 0 };
+  return { d, nx: vx / d, ny: vy / d };
+}
+
+export type ManualBlockAutoAlignPose = {
+  id: string;
+  x: number;
+  y: number;
+  rotationDeg?: number;
+  lengthFt: number;
+  widthFt: number;
+};
+
+/**
+ * Recompose a manual PCS (+ 2/3 BESS) to Auto Scan block gaps and snap the
+ * PCS outer face to `equipmentToRoadEdge` from the nearest road. Pure helper
+ * for Manual Placement Auto Align — does not mutate inputs.
+ */
+export function computeManualBlockAutoAlign(
+  pcsSpec: ManualBlockAutoAlignPose,
+  batterySpecs: ManualBlockAutoAlignPose[],
+  config: BessConfiguration,
+  roads: readonly RoadSegment[],
+  opts?: { pcsClearance?: number; roadClearance?: number },
+): { error: string } | { updates: ManualBlockAutoAlignPose[] } {
+  const nBatt = batterySpecs.length;
+  if (nBatt !== 0 && nBatt !== 2 && nBatt !== 3) {
+    return { error: 'Auto Align needs one PCS and 0, 2, or 3 batteries.' };
+  }
+  if (!roads.length) {
+    return { error: 'No roads to align to — place roads first.' };
+  }
+  const pcsClearance = opts?.pcsClearance ?? CLEARANCES.pcsStandard;
+  const roadClearance = opts?.roadClearance ?? CLEARANCES.equipmentToRoadEdge;
+
+  let pcs: ManualBlockAutoAlignPose = { ...pcsSpec };
+  let batteries: ManualBlockAutoAlignPose[] = batterySpecs.map(b => ({ ...b }));
+
+  if (nBatt === 2 || nBatt === 3) {
+    let composed: ReturnType<typeof composeManualPcsBatteries>;
+    try {
+      composed = composeManualPcsBatteries(
+        { x: pcsSpec.x, y: pcsSpec.y, rotationDeg: pcsSpec.rotationDeg ?? 0 },
+        nBatt,
+        config,
+        pcsClearance,
+      );
+    } catch {
+      return { error: 'Could not recompose PCS with batteries.' };
+    }
+    const rotDeg = (e: PlacedEquipment) => {
+      const d = (((e.rotation * 180) / Math.PI) % 360 + 360) % 360;
+      const r = Math.round(d);
+      return r === 0 ? undefined : r;
+    };
+    pcs = {
+      id: pcsSpec.id,
+      x: composed.pcs.x,
+      y: composed.pcs.y,
+      rotationDeg: rotDeg(composed.pcs),
+      lengthFt: composed.pcs.length,
+      widthFt: composed.pcs.width,
+    };
+    const unused = [...composed.batteries];
+    batteries = batterySpecs.map(old => {
+      let bestI = 0, bestD = Infinity;
+      for (let i = 0; i < unused.length; i++) {
+        const d = Math.hypot(unused[i].x - old.x, unused[i].y - old.y);
+        if (d < bestD) { bestD = d; bestI = i; }
+      }
+      const e = unused.splice(bestI, 1)[0];
+      return {
+        id: old.id,
+        x: e.x,
+        y: e.y,
+        rotationDeg: rotDeg(e),
+        lengthFt: e.length,
+        widthFt: e.width,
+      };
+    });
+  }
+
+  // Outer direction: away from batteries (PCS road/outer face). PCS-only:
+  // from nearest road center toward the PCS. Snap to the nearest cardinal
+  // axis — yards are orthogonal, and a slight battery-centroid skew must not
+  // tilt the face normal.
+  let ux: number, uy: number;
+  if (batteries.length) {
+    const mx = batteries.reduce((s, b) => s + b.x, 0) / batteries.length;
+    const my = batteries.reduce((s, b) => s + b.y, 0) / batteries.length;
+    ux = pcs.x - mx;
+    uy = pcs.y - my;
+    const L = Math.hypot(ux, uy);
+    if (L < 1e-6) return { error: 'PCS and batteries are coincident — cannot determine outer face.' };
+    ux /= L; uy /= L;
+  } else {
+    let best: RoadSegment | null = null, bestD = Infinity;
+    for (const r of roads) {
+      const d = Math.hypot(pcs.x - r.x, pcs.y - r.y);
+      if (d < bestD) { bestD = d; best = r; }
+    }
+    if (!best) return { error: 'No roads to align to — place roads first.' };
+    ux = pcs.x - best.x;
+    uy = pcs.y - best.y;
+    const L = Math.hypot(ux, uy);
+    if (L < 1e-6) { ux = 0; uy = 1; }
+    else { ux /= L; uy /= L; }
+  }
+  if (Math.abs(ux) >= Math.abs(uy)) {
+    ux = ux < 0 ? -1 : 1;
+    uy = 0;
+  } else {
+    uy = uy < 0 ? -1 : 1;
+    ux = 0;
+  }
+
+  const rotRad = ((pcs.rotationDeg ?? 0) * Math.PI) / 180;
+  const h = autoAlignEquipHalves(pcs.lengthFt, pcs.widthFt, rotRad);
+  const halfU = Math.abs(ux) * h.hx + Math.abs(uy) * h.hy;
+  const faceX = pcs.x + ux * halfU;
+  const faceY = pcs.y + uy * halfU;
+
+  let pick: { d: number; nx: number; ny: number; score: number } | null = null;
+  for (const road of roads) {
+    const g = autoAlignRoadGap(faceX, faceY, road);
+    // Prefer roads whose outward normal agrees with the block outer face.
+    const align = g.nx * ux + g.ny * uy;
+    const score = Math.abs(g.d) - Math.max(0, align) * 1e6;
+    if (!pick || score < pick.score) pick = { ...g, score };
+  }
+  if (!pick) return { error: 'No roads to align to — place roads first.' };
+
+  const adj = roadClearance - pick.d;
+  const dx = pick.nx * adj;
+  const dy = pick.ny * adj;
+  if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) {
+    return { updates: [pcs, ...batteries] };
+  }
+
+  const shift = (p: ManualBlockAutoAlignPose): ManualBlockAutoAlignPose => ({
+    ...p, x: p.x + dx, y: p.y + dy,
+  });
+  return { updates: [shift(pcs), ...batteries.map(shift)] };
+}
+
 // ---- interactive placement: snapping + orientation-correct footprints -----
 // Snap increments offered while a placement preview is live. 0 = no snap
 // (free positioning). The drafter's choice only affects where the CANDIDATE
@@ -6489,6 +6658,45 @@ export function drawnRoadLegalRegion(
   return region;
 }
 
+// Traced (KMZ) roads may run past the fence / area boundary. Validate them
+// against equipment pads only — a huge AABB stands in for "the plane" so
+// fence-setback footage is never counted as overlap.
+export function drawnRoadPadOnlyLegalRegion(
+  fence: Pt[],
+  equipment: PlacedEquipment[],
+  padClearance: number = CLEARANCES.equipmentToRoadEdge
+): PCRing[][] {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const grow = (x: number, y: number) => {
+    if (x < minX) minX = x; if (y < minY) minY = y;
+    if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+  };
+  for (const p of fence) grow(p.x, p.y);
+  for (const e of equipment) {
+    const h = equipHalves(e);
+    grow(e.x - h.hx, e.y - h.hy);
+    grow(e.x + h.hx, e.y + h.hy);
+  }
+  if (!Number.isFinite(minX)) return [];
+  const M = 50000;
+  const outer: PCRing = [
+    [minX - M, minY - M], [maxX + M, minY - M],
+    [maxX + M, maxY + M], [minX - M, maxY + M],
+  ];
+  let region: PCRing[][] = [[outer]];
+  const clr = padClearance;
+  const pads: PCRing[][] = equipment.map(e => {
+    const h = equipHalves(e);
+    return [rectRing(e.x, e.y, h.hx + clr - 0.05, h.hy + clr - 0.05)];
+  });
+  try {
+    if (pads.length) region = polygonClipping.difference(region as any, ...pads as any) as PCRing[][];
+  } catch {
+    return [];
+  }
+  return region;
+}
+
 // Threshold below which a drawn road adds no meaningful new surface (sqft).
 // Shared by the engine's nothing-to-add gate and the draw-tool preview so
 // both make the same call.
@@ -8029,6 +8237,9 @@ export function buildRoads(
     const innerRing: PCRing = innerEdge.map(p => [p.x, p.y]);
     const clr = CLEARANCES.equipmentToRoadEdge;
     const carvePieces: PCRing[][] = [];
+    // Non-verbatim traced strips: reference-wins — keep pavement outside the
+    // fence (no interior clip); still cut against equipment pads below.
+    const tracedCarvePieces: PCRing[][] = [];
     // Verbatim traced outline pieces (closed road networks / flare aprons):
     // carved against the tight 3 ft fence gap instead of the deep clearance
     // ring, which would eat the drawn ring road's inner band.
@@ -8218,6 +8429,11 @@ export function buildRoads(
     const drawnPadClr = compact ? 0 : CLEARANCES.equipmentToRoadEdge;
     const roadLegal = customRoads.length
       ? drawnRoadLegalRegion(fence, equipment, bandInset, drawnPadClr) : [];
+    // Traced roads: pad-only legal region (fence setback is not overlap).
+    const roadLegalTraced = customRoads.length
+      ? drawnRoadPadOnlyLegalRegion(fence, equipment, drawnPadClr) : [];
+    let tracedOverlapFt = 0;
+    let tracedOverlapRoads = 0;
     for (const road of customRoads) {
       const pts = road.pts;
       if (!pts || pts.length < 2) continue;
@@ -8242,14 +8458,17 @@ export function buildRoads(
       // Pass the per-road width so the validation strip matches the carve strip
       // exactly — a 36 ft road tested against a 24 ft strip could pass the
       // 98% clear threshold then get its outer 6 ft clipped during carving.
-      const ev = evaluateDrawnRoad(pts, fence, equipment, roadLegal, undefined, rw);
+      const legal = road.traced ? roadLegalTraced : roadLegal;
+      const ev = evaluateDrawnRoad(pts, fence, equipment, legal, undefined, rw);
       if (ev.stripArea > 0 && ev.frac < 0.98) {
         const blockedFt = Math.round(ev.blockedArea / rw);
         const totalFt = Math.round(ev.stripArea / rw);
         if (road.traced) {
-          // Reference-wins: a traced road keeps its drivable surface and the
-          // blockage is only reported, never a rejection.
-          roadWarnings.push(`Traced road ${road.id} placed with warning: ~${blockedFt} ft of the ${totalFt} ft reference route is blocked by equipment or the fence road setback — the clear part of the drawn road was kept.`);
+          // Reference-wins: keep surface; aggregate pad overlap into one short warning.
+          if (blockedFt > 0) {
+            tracedOverlapFt += blockedFt;
+            tracedOverlapRoads++;
+          }
         } else {
           roadWarnings.push(compact
             ? `Drawn road ${road.id} rejected: ~${blockedFt} ft of the ${totalFt} ft route crosses equipment pads or the fence road setback — in a compact layout, route through the open aisles between the packed rows.`
@@ -8314,21 +8533,43 @@ export function buildRoads(
         const unioned: PCRing[][] = polys.length === 1
           ? polys[0]
           : polygonClipping.union(polys[0] as any, ...(polys.slice(1) as any[])) as PCRing[][];
-        for (const poly of unioned) (verbatimRoad ? surfaceCarvePieces : carvePieces).push(poly as PCRing[]);
+        for (const poly of unioned) {
+          if (verbatimRoad) surfaceCarvePieces.push(poly as PCRing[]);
+          else if (road.traced) tracedCarvePieces.push(poly as PCRing[]);
+          else carvePieces.push(poly as PCRing[]);
+        }
       } catch {
         // Boolean failure: fall back to the per-ring approach
-        for (const ring of renderPieces) (verbatimRoad ? surfaceCarvePieces : carvePieces).push([ring]);
+        for (const ring of renderPieces) {
+          if (verbatimRoad) surfaceCarvePieces.push([ring]);
+          else if (road.traced) tracedCarvePieces.push([ring]);
+          else carvePieces.push([ring]);
+        }
       }
+    }
+    if (tracedOverlapRoads > 0) {
+      roadWarnings.push(
+        `Road overlap: ~${tracedOverlapFt} ft blocked on ${tracedOverlapRoads} road(s).`);
     }
 
     let carvedIslands = islandPolys;
-    if (carvePieces.length || surfaceCarvePieces.length) {
+    if (carvePieces.length || tracedCarvePieces.length || surfaceCarvePieces.length) {
       try {
-        // Keep the carve inside the yard interior and off every equipment pad
-        // (slightly under the road-edge clearance so shared edges stay clean).
+        // Drafter / auto carves stay inside the yard interior. Traced strips
+        // keep their full drawn extent (including outside the fence).
         let carve = (carvePieces.length
           ? polygonClipping.intersection(carvePieces as any, [[innerRing]] as any)
           : []) as PCRing[][];
+        if (tracedCarvePieces.length) {
+          // Fold one at a time — same warn-only policy as compact traced folds.
+          for (const tp of tracedCarvePieces) {
+            try {
+              carve = carve.length
+                ? polygonClipping.union(carve as any, [tp] as any) as PCRing[][]
+                : [tp];
+            } catch { /* skip one bad piece */ }
+          }
+        }
         const pads: PCRing[][] = equipment.map(e => {
           const h = equipHalves(e);
           return [rectRing(e.x, e.y, h.hx + clr - 0.05, h.hy + clr - 0.05)];
@@ -8470,6 +8711,10 @@ export function buildRoads(
   // strips are simply extra loops (largest ring serves as `outer`).
   if (compact && customRoads.length) {
     const roadLegal = drawnRoadLegalRegion(fence, equipment, bandInset, 0);
+    // Traced roads: pad-only legal region (fence setback is not overlap).
+    const roadLegalTraced = drawnRoadPadOnlyLegalRegion(fence, equipment, 0);
+    let tracedOverlapFt = 0;
+    let tracedOverlapRoads = 0;
     const stripPolys: PCRing[][] = [];
     // Traced (KMZ) strips are reference-wins geometry: their surface is kept
     // exactly where drawn, INCLUDING outside the fence (gate entry aprons),
@@ -8532,12 +8777,16 @@ export function buildRoads(
           : `Drawn road ${road.id} rejected: too short to form a road strip.`);
         continue;
       }
-      const ev = evaluateDrawnRoad(pts, fence, equipment, roadLegal, undefined, rw);
+      const legal = road.traced ? roadLegalTraced : roadLegal;
+      const ev = evaluateDrawnRoad(pts, fence, equipment, legal, undefined, rw);
       if (ev.stripArea > 0 && ev.frac < 0.98) {
         const blockedFt = Math.round(ev.blockedArea / rw);
         const totalFt = Math.round(ev.stripArea / rw);
         if (road.traced) {
-          roadWarnings.push(`Traced road ${road.id} placed with warning: ~${blockedFt} ft of the ${totalFt} ft reference route is blocked by equipment or the fence road setback — the clear part of the drawn road was kept.`);
+          if (blockedFt > 0) {
+            tracedOverlapFt += blockedFt;
+            tracedOverlapRoads++;
+          }
         } else {
           roadWarnings.push(
             `Drawn road ${road.id} rejected: ~${blockedFt} ft of the ${totalFt} ft route crosses equipment pads or the fence road setback — in a compact layout, route through the open aisles between the packed rows.`
@@ -8643,6 +8892,10 @@ export function buildRoads(
       else if (verbatimRoad) tracedSurfacePolys.push(...target);
       else tracedPolys.push(...target);
     }
+    if (tracedOverlapRoads > 0) {
+      roadWarnings.push(
+        `Road overlap: ~${tracedOverlapFt} ft blocked on ${tracedOverlapRoads} road(s).`);
+    }
     if (stripPolys.length || tracedPolys.length || tracedSurfacePolys.length || tracedEntrancePolys.length || tracedApronPolys.length) {
       try {
         // Drafter-drawn surface stays inside the fence band; traced strips
@@ -8686,15 +8939,10 @@ export function buildRoads(
             }
           };
           for (const tp of tracedPolys) {
-            // A piece whose clip fails keeps its full extent (warn-only
-            // policy — never silently drop drawn pavement).
-            let clipped: PCRing[][] = [tp];
-            if (entranceRule) {
-              try {
-                clipped = polygonClipping.intersection([tp] as any, yardRegion as any) as PCRing[][];
-              } catch { clipped = [tp]; }
-            }
-            clipped.forEach(foldIn);
+            // Reference-wins: ordinary traced strips keep their full drawn
+            // extent — including pavement outside the fence — the same way
+            // entrance roads already can. Do not clip to the fence interior.
+            foldIn(tp);
           }
           for (const tp of tracedSurfacePolys) {
             // Verbatim surfaces clip to the 3 ft fence gap REGARDLESS of

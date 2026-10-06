@@ -686,7 +686,7 @@ export function buildComplianceReport(
   {
     // Key note 5: 3' min from equipment to road edge (interior aisles)
     if (!design.aisles.length) {
-      add('kn5-road-edge', CAT_SHEET10, 'Key note 5', `8'-0 3/4" min equipment distance to road edge`,
+      add('kn5-road-edge', CAT_SHEET10, 'Key note 5', `10'-0" min equipment distance to road edge`,
         'PASS', `>= ${CLEARANCES.equipmentToRoadEdge} ft`, compact ? 'interior roads omitted (compact layout)' : 'no interior aisles');
     } else {
       let min = Infinity; let minId = '';
@@ -699,7 +699,7 @@ export function buildComplianceReport(
           if (gap < min) { min = gap; minId = e.id; }
         }
       }
-      add('kn5-road-edge', CAT_SHEET10, 'Key note 5', `8'-0 3/4" min equipment distance to road edge`,
+      add('kn5-road-edge', CAT_SHEET10, 'Key note 5', `10'-0" min equipment distance to road edge`,
         min >= CLEARANCES.equipmentToRoadEdge - TOL ? 'PASS' : 'FAIL',
         `>= ${CLEARANCES.equipmentToRoadEdge} ft`, `min gap ${ft(min)}`,
         min >= CLEARANCES.equipmentToRoadEdge - TOL ? [] : [minId]);

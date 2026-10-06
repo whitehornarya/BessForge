@@ -139,7 +139,7 @@ export default function SheetAnnotations2D() {
         <div>1. 58' inner turning radius for all drive paths inside the BESS yard.</div>
         <div>2. {CLEARANCES.roadWidth}' wide drive paths throughout the BESS yard.</div>
         <div>3. 20' outer turning radius for all drive paths inside the BESS yard.</div>
-        <div>4. 8'-0 3/4" min distance to drive path edge for equipment.</div>
+        <div>4. 10'-0" min distance to drive path edge for equipment.</div>
         <div>5. Battery containers 100'-0" min from project boundary per NFPA 855 ("remote location"); other equipment may be within 100'-0".</div>
         <div>6. PCS clearance: 14'-0" for ambient &gt;40°C; 10'-0" for &lt;40°C.</div>
         {feeders.length > 0 && (
