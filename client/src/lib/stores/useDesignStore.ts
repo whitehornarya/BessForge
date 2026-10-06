@@ -4117,9 +4117,9 @@ interface DesignState {
     opts?: { equipment?: boolean; roads?: boolean; keepTracePlan?: boolean; replaceCategory?: boolean }
   ) => Promise<boolean>;
   /** Stepped Auto Scan: commit traced roads only; keep plan for equipment. */
-  placeTraceRoads: () => Promise<boolean>;
+  placeTraceRoads: (onProgress?: (frac: number, label: string) => void) => Promise<boolean>;
   /** Stepped Auto Scan: commit traced equipment only; keep plan for roads. */
-  placeTraceEquipment: () => Promise<boolean>;
+  placeTraceEquipment: (onProgress?: (frac: number, label: string) => void) => Promise<boolean>;
   /** Site-wide: route DC/LVAC/fiber (sets autoCablesPlaced). */
   placePcsCables: () => string | null;
   /** Site-wide: route MV feeders (sets autoFeedersPlaced). Needs substation/takeoff. */
@@ -7611,17 +7611,19 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     try {
       if (!opts?.keepTracePlan) set({ tracePlan: null });
       const capturedActive = get().activeAreaId;
-      const phases = buildTraceCommitPhases(
-        set, get, adds.equipAdds, adds.roadAdds, 'Auto-filled design from reference drawing',
-        { replaceCategory: opts?.replaceCategory === true });
-      if (!phases) return false;
       const raf: (cb: () => void) => void =
         typeof requestAnimationFrame === 'function'
           ? cb => requestAnimationFrame(() => cb())
           : cb => setTimeout(cb, 0); // node/test environments
       const paint = () => new Promise<void>(r => raf(() => raf(r)));
+      // Paint first: buildTraceCommitPhases does sync bucketing/gate work that
+      // can freeze a large drawing before any overlay update would show.
       onProgress(0.05, 'Reading the reference plan');
       await paint();
+      const phases = buildTraceCommitPhases(
+        set, get, adds.equipAdds, adds.roadAdds, 'Auto-filled design from reference drawing',
+        { replaceCategory: opts?.replaceCategory === true });
+      if (!phases) return false;
       for (const p of phases) {
         onProgress(p.frac, p.label);
         await paint();
@@ -7641,16 +7643,16 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     }
   },
 
-  placeTraceRoads: async (): Promise<boolean> => {
+  placeTraceRoads: async (onProgress?: (frac: number, label: string) => void): Promise<boolean> => {
     const ok = await get().applyReferenceTraceWithProgress(
-      () => {},
+      onProgress ?? (() => {}),
       { equipment: false, roads: true, keepTracePlan: true, replaceCategory: true });
     return ok;
   },
 
-  placeTraceEquipment: async (): Promise<boolean> => {
+  placeTraceEquipment: async (onProgress?: (frac: number, label: string) => void): Promise<boolean> => {
     const ok = await get().applyReferenceTraceWithProgress(
-      () => {},
+      onProgress ?? (() => {}),
       { equipment: true, roads: false, keepTracePlan: true, replaceCategory: true });
     return ok;
   },

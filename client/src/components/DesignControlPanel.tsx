@@ -295,11 +295,17 @@ function ReferenceAutoFill() {
     );
   }
 
-  const runStep = async (label: string, fn: () => Promise<boolean> | boolean | string | null) => {
+  const runStep = async (
+    label: string,
+    fn: (onProgress: (frac: number, stepLabel: string) => void) => Promise<boolean> | boolean | string | null,
+  ) => {
     setBusyStep(label);
-    setBusyOverlay({ label, frac: 0.15 });
+    setBusyOverlay({ label: 'Starting…', frac: 0 });
+    const onProgress = (frac: number, stepLabel: string) => {
+      setBusyOverlay({ label: stepLabel || label, frac });
+    };
     try {
-      const result = await fn();
+      const result = await fn(onProgress);
       if (typeof result === 'string') {
         toast.error(result);
         return;
@@ -408,7 +414,7 @@ function ReferenceAutoFill() {
         <button
           type="button"
           disabled={!!busyStep || !tracePlan || roadCount === 0}
-          onClick={() => void runStep('Placing roads…', () => placeTraceRoads())}
+          onClick={() => void runStep('Placing roads…', onProgress => placeTraceRoads(onProgress))}
           className="text-[11px] py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 text-white"
           title={!tracePlan ? 'Scan the drawing first' : roadCount === 0 ? 'No roads in the scan' : 'Place roads from the drawing'}
         >
@@ -422,7 +428,7 @@ function ReferenceAutoFill() {
         <button
           type="button"
           disabled={!!busyStep || !tracePlan || equipCount === 0}
-          onClick={() => void runStep('Placing equipment…', () => placeTraceEquipment())}
+          onClick={() => void runStep('Placing equipment…', onProgress => placeTraceEquipment(onProgress))}
           className="text-[11px] py-1.5 rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 text-white"
           title={!tracePlan ? 'Scan the drawing first' : equipCount === 0 ? 'No equipment in the scan' : 'Place equipment from the drawing'}
         >
