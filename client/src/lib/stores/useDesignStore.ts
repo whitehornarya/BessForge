@@ -18,7 +18,7 @@ export type ManualRotateSession = {
   /** Live delta from start poses (degrees, CCW). */
   deltaDeg: number;
 };
-import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, wantAutoFeeders, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, composeManualPcsBatteries, computeManualBlockAutoAlign, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
+import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, wantAutoFeeders, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, composeManualPcsBatteries, computeManualBlockAutoAlign, collectAutoAlignRoadSegments, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
 
 // Re-export the traced-road fingerprint helpers at their historical home:
 // the tombstone flow was built here, and external callers (tests) import
@@ -8300,7 +8300,10 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     if (members.length !== 1 + battList.length) {
       return 'Auto Align only supports PCS and battery containers for now.';
     }
-    const roads = get().design?.roads ?? [];
+    const roads = collectAutoAlignRoadSegments(
+      get().design,
+      get().layoutEdits.customRoads ?? [],
+    );
     const config = getEffectiveConfiguration(get().configId, get().containersPerPcs);
     const pcs = pcsList[0];
     const result = computeManualBlockAutoAlign(

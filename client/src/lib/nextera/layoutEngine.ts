@@ -805,7 +805,7 @@ export function validateRowShift(
 
 // Gap between adjacent block rows in road layouts: the drive aisle plus the
 // required equipment-to-road-edge clearance on BOTH sides (reference
-// standard: 24' road, 10' to equipment). Also satisfies the 10 ft
+// standard: 24' road, 8'-0 3/4" to equipment). Also satisfies the 10 ft
 // container front-to-front clearance by a wide margin.
 export const ROW_AISLE_GAP_FT = CLEARANCES.roadWidth + 2 * CLEARANCES.equipmentToRoadEdge;
 
@@ -2472,7 +2472,7 @@ function buildLayout(
   const gapX = mirrored
     ? pairGap
     : CLEARANCES.frontToFront;     // between blocks side-to-side
-  // Between block rows: 24 ft drive aisle + 10 ft equipment-to-road-edge
+  // Between block rows: 24 ft drive aisle + 8'-0 3/4" equipment-to-road-edge
   // clearance on each side, or just the front-to-front clearance in compact mode.
   const gapY = compact
     ? CLEARANCES.frontToFront
@@ -4920,26 +4920,83 @@ function autoAlignEquipHalves(length: number, width: number, rotationRad: number
   return swapped ? { hx: width / 2, hy: length / 2 } : { hx: length / 2, hy: width / 2 };
 }
 
+type AutoAlignCustomRoad = {
+  id: string;
+  pts: Pt[];
+  width?: number;
+};
+
+/**
+ * Road strips Auto Align can snap against: interior aisles, gate entrance
+ * rects, and each leg of drafter/traced customRoads (manual yards often have
+ * design.roads === [] while pavement lives only in customRoads / roadNetwork).
+ */
+export function collectAutoAlignRoadSegments(
+  design: { roads?: RoadSegment[]; aisles?: RoadSegment[] } | null | undefined,
+  customRoads: readonly AutoAlignCustomRoad[] = [],
+): RoadSegment[] {
+  const out: RoadSegment[] = [
+    ...(design?.aisles ?? []),
+    ...(design?.roads ?? []),
+  ];
+  for (const r of customRoads) {
+    const pts = r.pts ?? [];
+    if (pts.length < 2) continue;
+    const w = (r.width && Number.isFinite(r.width))
+      ? Math.max(12, Math.min(60, r.width))
+      : CLEARANCES.roadWidth;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) continue;
+      out.push({
+        x: (a.x + b.x) / 2,
+        y: (a.y + b.y) / 2,
+        length: len,
+        width: w,
+        rotation: Math.atan2(dy, dx),
+        id: `${r.id}-leg-${i}`,
+      });
+    }
+  }
+  return out;
+}
+
 /** Signed outside distance from a point to a road rect, plus outward unit normal. */
 function autoAlignRoadGap(
   px: number, py: number, road: RoadSegment
 ): { d: number; nx: number; ny: number } {
-  const ah = aisleHalves(road);
+  // Work in the road's local frame so customRoads legs at arbitrary heading
+  // (not only 0/90) measure correctly against the strip AABB.
+  const c = Math.cos(-road.rotation), s = Math.sin(-road.rotation);
   const dx = px - road.x, dy = py - road.y;
-  if (Math.abs(dx) <= ah.hx + 1e-9 && Math.abs(dy) <= ah.hy + 1e-9) {
-    const toW = ah.hx + dx, toE = ah.hx - dx, toS = ah.hy + dy, toN = ah.hy - dy;
+  const lx = dx * c - dy * s;
+  const ly = dx * s + dy * c;
+  const hl = road.length / 2, hw = road.width / 2;
+  let localNx: number, localNy: number, d: number;
+  if (Math.abs(lx) <= hl + 1e-9 && Math.abs(ly) <= hw + 1e-9) {
+    const toW = hl + lx, toE = hl - lx, toS = hw + ly, toN = hw - ly;
     const m = Math.min(toW, toE, toS, toN);
-    if (m === toW) return { d: -toW, nx: -1, ny: 0 };
-    if (m === toE) return { d: -toE, nx: 1, ny: 0 };
-    if (m === toS) return { d: -toS, nx: 0, ny: -1 };
-    return { d: -toN, nx: 0, ny: 1 };
+    if (m === toW) { d = -toW; localNx = -1; localNy = 0; }
+    else if (m === toE) { d = -toE; localNx = 1; localNy = 0; }
+    else if (m === toS) { d = -toS; localNx = 0; localNy = -1; }
+    else { d = -toN; localNx = 0; localNy = 1; }
+  } else {
+    const cx = Math.max(-hl, Math.min(hl, lx));
+    const cy = Math.max(-hw, Math.min(hw, ly));
+    const vx = lx - cx, vy = ly - cy;
+    d = Math.hypot(vx, vy);
+    if (d < 1e-9) { localNx = 1; localNy = 0; d = 0; }
+    else { localNx = vx / d; localNy = vy / d; }
   }
-  const cx = Math.max(-ah.hx, Math.min(ah.hx, dx));
-  const cy = Math.max(-ah.hy, Math.min(ah.hy, dy));
-  const vx = dx - cx, vy = dy - cy;
-  const d = Math.hypot(vx, vy);
-  if (d < 1e-9) return { d: 0, nx: 1, ny: 0 };
-  return { d, nx: vx / d, ny: vy / d };
+  // Rotate local normal back to world.
+  const cos = Math.cos(road.rotation), sin = Math.sin(road.rotation);
+  return {
+    d,
+    nx: localNx * cos - localNy * sin,
+    ny: localNx * sin + localNy * cos,
+  };
 }
 
 export type ManualBlockAutoAlignPose = {

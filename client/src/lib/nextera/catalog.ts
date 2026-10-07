@@ -378,7 +378,7 @@ export const CLEARANCES = {
                           // Changing this reshapes roads on all existing projects — do not alter without
                           // a deliberate user decision (see nextera-90pct-gap-register.md).
   roadOuterRadius: 20,    // "20' Outer Turning Radius for all roads inside the BESS yard" (key note 4)
-  equipmentToRoadEdge: 10, // min distance from equipment face to road edge
+  equipmentToRoadEdge: 8.0625, // 8'-0 3/4" min distance to road edge for equipment (reference standard)
   bessToLotLine: 100,     // "BESS have to be 100'-0" min from lot line per NFPA 855" (key note 6)
 };
 

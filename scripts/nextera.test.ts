@@ -1881,7 +1881,7 @@ async function main() {
   check('roadWidth = 24 ft (key note 3)', CLEARANCES.roadWidth === 24);
   check('inner turning radius = 58 ft (key note 2)', CLEARANCES.roadInnerRadius === 58);
   check('outer turning radius = 20 ft (key note 4)', CLEARANCES.roadOuterRadius === 20);
-  check('equipment-to-road-edge = 10 ft (key note 5)', CLEARANCES.equipmentToRoadEdge === 10);
+  check('equipment-to-road-edge = 8.0625 ft (key note 5)', CLEARANCES.equipmentToRoadEdge === 8.0625);
   check('BESS-to-lot-line = 100 ft (key note 6, NFPA 855)', CLEARANCES.bessToLotLine === 100);
 
   // Fillet math sanity on a 400x400 square: arcs tangent + path continuous
@@ -7647,7 +7647,7 @@ async function main() {
       d.equipment.filter(e => e.kind === 'inverter').map(e => `${e.x.toFixed(2)},${e.y.toFixed(2)}`).sort().join('|');
 
     // ---- accepted move: drag aisle 1 north by 2 ft -----------------------
-    // (Southward slack is 0 with the 10 ft road-edge clearance — rows
+    // (Southward slack is 0 with the 8.0625 ft road-edge clearance — rows
     // already sit exactly at the clearance line — so the accepted direction
     // is north; the southward rejection tests cover the 0-slack limit.)
     const dy = 2;
