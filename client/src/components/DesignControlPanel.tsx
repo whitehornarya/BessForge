@@ -4033,7 +4033,7 @@ export default function DesignControlPanel() {
                                 if (why) toast.error(why);
                               }}
                               className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
-                              title="Recompose PCS+batteries to Auto Scan gaps and snap the PCS outer face to the road-edge clearance (8'-0 3/4\")"
+                              title="Auto Align one or more PCS groups: recompose to Auto Scan gaps and snap each PCS outer face to the road-edge clearance"
                             >
                               Auto Align
                             </button>
@@ -4137,7 +4137,7 @@ export default function DesignControlPanel() {
                                 if (why) toast.error(why);
                               }}
                               className="flex-1 px-2 py-1.5 text-xs font-medium rounded border border-slate-600 bg-slate-900/60 text-slate-200 hover:bg-slate-700"
-                              title="Recompose PCS+batteries to Auto Scan gaps and snap the PCS outer face to the road-edge clearance (8'-0 3/4\")"
+                              title="Auto Align one or more PCS groups: recompose to Auto Scan gaps and snap each PCS outer face to the road-edge clearance"
                             >
                               Auto Align
                             </button>

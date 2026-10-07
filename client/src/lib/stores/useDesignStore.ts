@@ -18,7 +18,7 @@ export type ManualRotateSession = {
   /** Live delta from start poses (degrees, CCW). */
   deltaDeg: number;
 };
-import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, wantAutoFeeders, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, composeManualPcsBatteries, computeManualBlockAutoAlign, collectAutoAlignRoadSegments, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
+import { generateSiteDesign, RoadMode, RingMode, LayoutConstraints, ArrangementStrategy, GateEdge, GATE_ENTRANCE_ROAD_ID, SURFACING_DEPTH_IN_DEFAULT, fencePolygonFor, fencePolygonForLayout, isTracedBessYard, wantAutoFeeders, computeRowAlignOffsets, computeIslandAlignOffset, computeIslandMirrorOffset, computeCompactShifts, computePlacedIslandCompactDelta, validateRowShift, RowAlignMode, DEFAULT_ISLAND_AUG_UNITS, MAX_ISLAND_AUG_UNITS, ISLAND_PCS_PER_SIDE, PerimeterBandMode, FencePlacementMode, normalizeQuarterTurns, snapPlacementCenter, placedIslandPairs, PLACEMENT_SNAP_DEFAULT_FT, isManualEquipmentType, isManualEquipmentId, manualEquipmentAngle, isManualEquipmentSpec, MANUAL_EQUIPMENT_CATALOG, movePlacedSpec, rotatePlacedSpec, duplicatePlacedSpec, setPlacedSpecAngle, placedSpecAngle, rotatePtAbout, tracedRoadFingerprint, tracedRoadFingerprintMatch, equipmentForRouting, composeManualPcsBatteries, computeManualBlockAutoAlign, collectAutoAlignRoadSegments, partitionManualPcsGroups, type PlacedIslandKind, type PlacedIslandSpec, type PlacedEquipmentSpec, type ManualEquipmentSpec, type TracedEquipmentSpec, type ManualEquipmentType } from '../nextera/layoutEngine';
 
 // Re-export the traced-road fingerprint helpers at their historical home:
 // the tombstone flow was built here, and external callers (tests) import
@@ -8290,39 +8290,44 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     const idSet = new Set(ids);
     const members = (prev.placedEquipment ?? []).filter(s => idSet.has(s.id));
     if (!members.length) return 'Nothing selected.';
-    const pcsList = members.filter((s): s is TracedEquipmentSpec =>
-      !isManualEquipmentSpec(s) && s.kind === 'inverter');
-    const battList = members.filter((s): s is TracedEquipmentSpec =>
-      !isManualEquipmentSpec(s) && s.kind === 'bess');
-    if (pcsList.length !== 1) {
-      return 'Auto Align needs exactly one PCS (and 0, 2, or 3 batteries).';
-    }
-    if (members.length !== 1 + battList.length) {
+    if (members.some(s => isManualEquipmentSpec(s) || (s.kind !== 'inverter' && s.kind !== 'bess'))) {
       return 'Auto Align only supports PCS and battery containers for now.';
     }
+    const pcsBatt = members.filter((s): s is TracedEquipmentSpec =>
+      !isManualEquipmentSpec(s) && (s.kind === 'inverter' || s.kind === 'bess'));
+    const partitioned = partitionManualPcsGroups(
+      pcsBatt.map(s => ({
+        id: s.id,
+        kind: s.kind as 'inverter' | 'bess',
+        x: s.x, y: s.y,
+        rotationDeg: s.rotationDeg,
+        lengthFt: s.lengthFt, widthFt: s.widthFt,
+      })),
+      // When one active group is selected, only that group; otherwise all
+      // named groups so multi-select across several PCS blocks partitions cleanly.
+      active
+        ? [active]
+        : (prev.manualGroups ?? []),
+    );
+    if ('error' in partitioned) return partitioned.error;
     const roads = collectAutoAlignRoadSegments(
       get().design,
       get().layoutEdits.customRoads ?? [],
     );
     const config = getEffectiveConfiguration(get().configId, get().containersPerPcs);
-    const pcs = pcsList[0];
-    const result = computeManualBlockAutoAlign(
-      {
-        id: pcs.id, x: pcs.x, y: pcs.y,
-        rotationDeg: pcs.rotationDeg,
-        lengthFt: pcs.lengthFt, widthFt: pcs.widthFt,
-      },
-      battList.map(b => ({
-        id: b.id, x: b.x, y: b.y,
-        rotationDeg: b.rotationDeg,
-        lengthFt: b.lengthFt, widthFt: b.widthFt,
-      })),
-      config,
-      roads,
-      { pcsClearance: CLEARANCES.pcsStandard },
-    );
-    if ('error' in result) return result.error;
-    const byId = new Map(result.updates.map(u => [u.id, u]));
+    const merged: { id: string; x: number; y: number; rotationDeg?: number; lengthFt: number; widthFt: number }[] = [];
+    for (const g of partitioned.groups) {
+      const result = computeManualBlockAutoAlign(
+        g.pcs,
+        g.batteries,
+        config,
+        roads,
+        { pcsClearance: CLEARANCES.pcsStandard },
+      );
+      if ('error' in result) return result.error;
+      merged.push(...result.updates);
+    }
+    const byId = new Map(merged.map(u => [u.id, u]));
     let changed = false;
     const next = (prev.placedEquipment ?? []).map(s => {
       const u = byId.get(s.id);
@@ -8346,10 +8351,13 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       return out;
     });
     if (!changed) return null;
+    const n = partitioned.groups.length;
     const before = snapOf(get(),
-      battList.length
-        ? `Auto-aligned PCS + ${battList.length} batt`
-        : 'Auto-aligned PCS to road');
+      n === 1
+        ? (partitioned.groups[0].batteries.length
+          ? `Auto-aligned PCS + ${partitioned.groups[0].batteries.length} batt`
+          : 'Auto-aligned PCS to road')
+        : `Auto-aligned ${n} PCS groups`);
     set({ layoutEdits: { ...prev, placedEquipment: next } });
     get().regenerate({ sync: true });
     get().pushHistory(before);

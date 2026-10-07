@@ -30,20 +30,20 @@ Downstream (via the constant):
 
 ### Supported selection
 
-- Exactly **1 PCS** + **2 or 3 BESS** → full recompose + road snap
-- Exactly **1 PCS** alone → road snap only
-- Anything else → toast error
+- One or more PCS groups in the selection / active group(s)
+- Each group: **1 PCS** + **0, 2, or 3 BESS** (named `manualGroups` preferred; otherwise batteries cluster to the nearest PCS)
+- Non-PCS/BESS in the selection → toast error
 
 ### Algorithm
 
 1. Resolve member ids like `alignManualSelection`.
-2. Classify inverter vs bess.
-3. Recompose (2–3 batteries) with `composeManualPcsBatteries` + `pcsClearance = CLEARANCES.pcsStandard`.
-4. Road snap from aisles + gate entrance (`design.roads`) + each leg of `layoutEdits.customRoads` via `collectAutoAlignRoadSegments`. `design.roads` alone is gate-only and is often empty on Manual Placement yards.
-5. Write `placedEquipment` (preserve peq ids; rematch batteries by nearest old pose).
-6. `regenerate` + `pushHistory`.
+2. Partition into PCS groups (`partitionManualPcsGroups`).
+3. For each group: recompose with `composeManualPcsBatteries` + `pcsClearance = CLEARANCES.pcsStandard`, then road-snap via `computeManualBlockAutoAlign`.
+4. Road targets from aisles + gate entrance + `customRoads` legs (`collectAutoAlignRoadSegments`).
+5. Merge all pose updates into one `placedEquipment` write.
+6. `regenerate` + `pushHistory` (`Auto-aligned N PCS groups`).
 
-Helper in `layoutEngine.ts`; UI button **Auto Align** in `DesignControlPanel.tsx` next to Align X/Y.
+Helpers in `layoutEngine.ts`; UI button **Auto Align** in `DesignControlPanel.tsx` next to Align X/Y.
 
 ## Equipment spacing (reference)
 
@@ -58,10 +58,11 @@ Helper in `layoutEngine.ts`; UI button **Auto Align** in `DesignControlPanel.tsx
 ### Later (not Auto Align this pass)
 
 - Fence / lot / NFPA setbacks
-- Aux / panels / laydown / multi-PCS
+- Aux / panels / laydown
 
 ## Verify
 
 - Auto Scan: equipment faces sit **8.0625 ft** from aisle edges; row pitch **40.125 ft**
 - Sheet/compliance key note 5 reads **8′-0¾″**
-- Auto Align: PCS↔batt **10 ft**; PCS outer face **~8.0625 ft** from nearest aisle/custom strip
+- Auto Align: one or more PCS groups; PCS↔batt **10 ft**; PCS outer face **~8.0625 ft** from nearest aisle/custom strip
+- Multi-select two PCS+3 groups → both align; bad battery counts → clear error

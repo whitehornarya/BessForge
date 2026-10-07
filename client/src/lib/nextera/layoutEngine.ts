@@ -5008,6 +5008,95 @@ export type ManualBlockAutoAlignPose = {
   widthFt: number;
 };
 
+export type ManualPcsAlignMember = ManualBlockAutoAlignPose & {
+  kind: 'inverter' | 'bess';
+};
+
+export type ManualPcsAlignGroup = {
+  pcs: ManualBlockAutoAlignPose;
+  batteries: ManualBlockAutoAlignPose[];
+};
+
+/**
+ * Split a selection into PCS+BESS blocks for Auto Align. Prefers existing
+ * manualGroups that intersect the selection; leftover PCS/BESS are clustered
+ * by nearest PCS. Each group must be 1 PCS + 0, 2, or 3 batteries.
+ */
+export function partitionManualPcsGroups(
+  members: readonly ManualPcsAlignMember[],
+  manualGroups: readonly { id: string; memberIds: string[] }[] = [],
+): { error: string } | { groups: ManualPcsAlignGroup[] } {
+  if (!members.length) return { error: 'Nothing selected.' };
+  const byId = new Map(members.map(m => [m.id, m]));
+  const claimed = new Set<string>();
+  const groups: ManualPcsAlignGroup[] = [];
+
+  const asPose = (m: ManualPcsAlignMember): ManualBlockAutoAlignPose => ({
+    id: m.id, x: m.x, y: m.y,
+    rotationDeg: m.rotationDeg,
+    lengthFt: m.lengthFt, widthFt: m.widthFt,
+  });
+
+  const validateCluster = (
+    pcs: ManualPcsAlignMember,
+    batts: ManualPcsAlignMember[],
+    label: string,
+  ): string | null => {
+    const n = batts.length;
+    if (n !== 0 && n !== 2 && n !== 3) {
+      return `${label} has ${n} batter${n === 1 ? 'y' : 'ies'} — need 0, 2, or 3.`;
+    }
+    return null;
+  };
+
+  for (const g of manualGroups) {
+    const hit = g.memberIds
+      .map(id => byId.get(id))
+      .filter((m): m is ManualPcsAlignMember => !!m);
+    if (!hit.length) continue;
+    const pcs = hit.filter(m => m.kind === 'inverter');
+    const batts = hit.filter(m => m.kind === 'bess');
+    if (pcs.length + batts.length !== hit.length) {
+      return { error: `Group ${g.id} includes equipment Auto Align cannot handle.` };
+    }
+    if (pcs.length !== 1) {
+      return { error: `Group ${g.id} must contain exactly one PCS.` };
+    }
+    const why = validateCluster(pcs[0], batts, `PCS ${pcs[0].id}`);
+    if (why) return { error: why };
+    for (const m of hit) claimed.add(m.id);
+    groups.push({ pcs: asPose(pcs[0]), batteries: batts.map(asPose) });
+  }
+
+  const leftoverPcs = members.filter(m => m.kind === 'inverter' && !claimed.has(m.id));
+  const leftoverBatts = members.filter(m => m.kind === 'bess' && !claimed.has(m.id));
+  if (!leftoverPcs.length && leftoverBatts.length) {
+    return { error: 'Batteries selected without a PCS — add the PCS to the selection.' };
+  }
+
+  const buckets = new Map<string, ManualPcsAlignMember[]>();
+  for (const p of leftoverPcs) buckets.set(p.id, []);
+  for (const b of leftoverBatts) {
+    let bestId: string | null = null, bestD = Infinity;
+    for (const p of leftoverPcs) {
+      const d = Math.hypot(b.x - p.x, b.y - p.y);
+      if (d < bestD) { bestD = d; bestId = p.id; }
+    }
+    if (!bestId) return { error: 'Batteries selected without a PCS — add the PCS to the selection.' };
+    buckets.get(bestId)!.push(b);
+  }
+
+  for (const p of leftoverPcs) {
+    const batts = buckets.get(p.id) ?? [];
+    const why = validateCluster(p, batts, `PCS ${p.id}`);
+    if (why) return { error: why };
+    groups.push({ pcs: asPose(p), batteries: batts.map(asPose) });
+  }
+
+  if (!groups.length) return { error: 'Auto Align needs at least one PCS.' };
+  return { groups };
+}
+
 /**
  * Recompose a manual PCS (+ 2/3 BESS) to Auto Scan block gaps and snap the
  * PCS outer face to `equipmentToRoadEdge` from the nearest road. Pure helper
